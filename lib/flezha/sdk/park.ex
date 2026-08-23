@@ -22,11 +22,28 @@ defmodule Flezha.SDK.Park do
     }
   end
 
+  @doc """
+  The on-wire identity of the Entity a park belongs to — the triple the
+  controller keys its DLQ row by (`operative_class`, `procedure_id`,
+  `entity_key`). A pre-dispatch park (entry parse, partition mis-route) has no
+  Entity yet and parks under an empty key.
+  """
+  @spec identity(binary(), binary(), binary() | nil) :: binary()
+  def identity(operative_id, procedure_id, entity_key) do
+    Wire.encode_entity_id(operative_id, procedure_id, entity_key || "")
+  end
+
   @spec recoverable_payload(term()) :: binary() | nil
   def recoverable_payload(value) when is_binary(value), do: value
   def recoverable_payload(_value), do: nil
 
-  @doc "Assemble the `park_payload` frame: a zero 16-byte header + the postcard body."
-  @spec frame(map()) :: binary()
-  def frame(body), do: <<0::128>> <> Wire.encode_park_body(body)
+  @doc """
+  The `park_payload` frame: the Entity identity, a seq and a zero header over
+  the postcard body. A park carries no record header, so the 16 bytes are
+  zero — the same shape the runner core sends.
+  """
+  @spec frame(binary(), non_neg_integer(), map()) :: binary()
+  def frame(identity, seq, body) do
+    Wire.encode_frame(identity, seq, <<0::128>>, Wire.encode_park_body(body))
+  end
 end

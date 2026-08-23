@@ -1,67 +1,469 @@
-defmodule ElixirRunner.EchoProc do
+# Twins of the rust_runner e2e fixtures (test/apps/rust_runner/src/main.rs)
+# under the same factory ids, procedure names, channel names and output bytes.
+# Elixir SDK v1 deviations, each noted on its fixture: no keyed channels
+# (`keyed`/`emit_keyed` → the same bytes go out unkeyed), no Change journaling
+# (state is a plain term), no serializer-panic isolation.
+
+# -- compare_filter ---------------------------------------------------------
+
+defmodule ElixirRunner.CompareFilterProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
-  def name, do: "echo"
+  def name, do: "compare_filter_procedure"
+  def init_state(_), do: %{comparable: "default", inverted: false}
+
+  def run(input, %{comparable: comparable} = s, ctx) do
+    if input == comparable, do: Flezha.SDK.Ctx.emit(ctx, input)
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.CompareFilterOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "compare_filter"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.CompareFilterProc)
+    |> named("sink")
+    |> sink("compare_filter_sink")
+  end
+end
+
+# -- static_entity / sugar_static_entity / mixed_operative ------------------
+
+defmodule ElixirRunner.StaticEntryProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "static_entry_procedure"
+  def init_state(_), do: %{seen: []}
+  def entity_keys, do: ["a", "b", "c", "d"]
+  def entities_for("a" <> _), do: ["a"]
+  def entities_for("b" <> _), do: ["b"]
+  def entities_for("c" <> _), do: ["c"]
+  def entities_for(_), do: ["d"]
+
+  def run(input, s, ctx) do
+    Flezha.SDK.Ctx.emit(ctx, input)
+    {:ok, %{s | seen: [input | s.seen]}}
+  end
+end
+
+defmodule ElixirRunner.StaticDownstreamProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "static_downstream_procedure"
   def init_state(_), do: nil
   def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
 end
 
-defmodule ElixirRunner.EchoOp do
+defmodule ElixirRunner.StaticEntityOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "elixir_e2e_echo"
+  def factory_id, do: "static_entity"
 
   def channels(c) do
     import Flezha.SDK.Channels
-    c |> input("in") |> into(ElixirRunner.EchoProc) |> named("echo") |> sink("elixir_echo_out")
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.StaticEntryProc)
+    |> named("hop")
+    |> into(ElixirRunner.StaticDownstreamProc)
+    |> named("kafka")
+    |> sink("test_kafka")
   end
 end
 
-defmodule ElixirRunner.PoisonProc do
+defmodule ElixirRunner.MacroStaticEntryProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
-  def name, do: "poison"
+  def name, do: "macro_static_entry_procedure"
+  defdelegate init_state(key), to: ElixirRunner.StaticEntryProc
+  defdelegate entity_keys, to: ElixirRunner.StaticEntryProc
+  defdelegate entities_for(input), to: ElixirRunner.StaticEntryProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticEntryProc
+end
+
+defmodule ElixirRunner.MacroStaticDownstreamProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "macro_static_downstream_procedure"
+  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamProc
+end
+
+defmodule ElixirRunner.SugarStaticEntityOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "sugar_static_entity"
+
+  # The Rust `operative!` pipeline leaves the hop unnamed and names the plugin
+  # channel after the plugin.
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.MacroStaticEntryProc)
+    |> into(ElixirRunner.MacroStaticDownstreamProc)
+    |> named("test_kafka")
+    |> sink("test_kafka")
+  end
+end
+
+defmodule ElixirRunner.MixedMacroEntryProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "mixed_macro_entry_procedure"
   def init_state(_), do: nil
-  def run(_input, _s, _ctx), do: {:error, {:non_retryable, "poison"}}
+  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
 end
 
-defmodule ElixirRunner.PoisonOp do
+defmodule ElixirRunner.MixedHandDownstreamProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "mixed_hand_downstream"
+  def init_state(_), do: nil
+  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
+end
+
+defmodule ElixirRunner.MixedOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "elixir_e2e_poison"
+  def factory_id, do: "mixed_operative"
 
   def channels(c) do
     import Flezha.SDK.Channels
-    c |> input("in") |> into(ElixirRunner.PoisonProc) |> named("poison") |> sink("elixir_poison_out")
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.MixedMacroEntryProc)
+    |> named("hop")
+    |> into(ElixirRunner.MixedHandDownstreamProc)
+    |> named("kafka")
+    |> sink("test_kafka")
   end
 end
 
-defmodule ElixirRunner.KeyedProc do
+# -- sugar_do_nothing / sugar_store_input -----------------------------------
+
+defmodule ElixirRunner.SugarDoNothingProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
-  def name, do: "keyed"
-  def init_state(_), do: 0
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s + 1})
+  def name, do: "sugar_do_nothing"
+  def init_state(_), do: nil
+  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
 end
 
-defmodule ElixirRunner.KeyedOp do
+defmodule ElixirRunner.SugarDoNothingOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "elixir_e2e_keyed"
+  def factory_id, do: "sugar_do_nothing"
 
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.SugarDoNothingProc)
+    |> named("sugar_do_nothing_echo")
+    |> sink("sugar_do_nothing_echo")
+  end
+end
+
+defmodule ElixirRunner.SugarStoreInputProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "sugar_store_input"
+  def init_state(_), do: %{text_inputs: []}
+
+  def run(input, s, ctx) do
+    Flezha.SDK.Ctx.emit(ctx, input)
+    {:ok, %{s | text_inputs: [input | s.text_inputs]}}
+  end
+end
+
+defmodule ElixirRunner.SugarStoreInputOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "sugar_store_input"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.SugarStoreInputProc)
+    |> named("sugar_store_sink")
+    |> sink("sugar_store_sink")
+  end
+end
+
+# -- hybrid_channel ---------------------------------------------------------
+
+defmodule ElixirRunner.HybridProducerProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "hybrid_producer_procedure"
+  def init_state(_), do: nil
+
+  def run(input, s, ctx) do
+    n =
+      case Integer.parse(input) do
+        {n, ""} when n >= 0 and n <= 0xFFFFFFFF -> n
+        _ -> 0
+      end
+
+    Flezha.SDK.Ctx.emit(ctx, n)
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.HybridConsumerProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "hybrid_consumer_procedure"
+  def init_state(_), do: nil
+
+  def run(input, s, _ctx) do
+    IO.puts("hybrid_consumer_procedure: received #{input}")
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.HybridChannelOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "hybrid_channel"
+
+  # The sunk handle fans out to the consumer as well. Unlike Rust, the SDK does
+  # not isolate a serializer raise: the sentinel takes the Operative down
+  # instead of being logged by the producer.
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.HybridProducerProc)
+    |> named("hybrid_indicator")
+    |> sink_with("hybrid_indicators", &__MODULE__.serialize/1)
+    |> into(ElixirRunner.HybridConsumerProc)
+  end
+
+  def serialize(0xDEADBEEF),
+    do: raise("hybrid_indicators: serializer rejected sentinel 0xDEADBEEF")
+
+  def serialize(v), do: <<v::unsigned-big-32>>
+end
+
+# -- poison_probe / wedge_probe ---------------------------------------------
+
+defmodule ElixirRunner.PoisonProbeProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  @antidote {__MODULE__, :antidote}
+  def name, do: "poison_probe_procedure"
+  def init_state(_), do: nil
+
+  def run(input, s, ctx) do
+    if input == "antidote", do: :persistent_term.put(@antidote, true)
+
+    if input == "poison" and not :persistent_term.get(@antidote, false) do
+      {:error, "poison payload"}
+    else
+      Flezha.SDK.Ctx.emit(ctx, "ok:" <> input)
+      {:ok, s}
+    end
+  end
+end
+
+defmodule ElixirRunner.PoisonProbeOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "poison_probe"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> retry_backoff_ms(25)
+    |> into(ElixirRunner.PoisonProbeProc)
+    |> named("out")
+    |> sink("probe_sink")
+  end
+end
+
+defmodule ElixirRunner.WedgeProbeProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "wedge_probe_procedure"
+  def init_state(_), do: nil
+  def run("wedge", _s, _ctx), do: Process.sleep(:infinity)
+  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, "ok:" <> input); {:ok, s})
+end
+
+defmodule ElixirRunner.WedgeProbeOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "wedge_probe"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.WedgeProbeProc)
+    |> named("out")
+    |> sink("wedge_sink")
+  end
+end
+
+# -- bounded_mailbox_{block,drop_newest,drop_oldest} ------------------------
+
+defmodule ElixirRunner.BlockTestProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "block_test_procedure"
+  def init_state(_), do: %{processed: 0}
+  def mailbox_capacity, do: 4
+
+  def run(input, s, ctx) do
+    Flezha.SDK.Ctx.emit(ctx, input)
+    {:ok, %{s | processed: s.processed + 1}}
+  end
+end
+
+defmodule ElixirRunner.DropNewestTestProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "drop_newest_test_procedure"
+  defdelegate init_state(key), to: ElixirRunner.BlockTestProc
+  defdelegate mailbox_capacity, to: ElixirRunner.BlockTestProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.BlockTestProc
+end
+
+defmodule ElixirRunner.DropOldestTestProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "drop_oldest_test_procedure"
+  defdelegate init_state(key), to: ElixirRunner.BlockTestProc
+  defdelegate mailbox_capacity, to: ElixirRunner.BlockTestProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.BlockTestProc
+end
+
+defmodule ElixirRunner.BoundedMailboxBlockOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "bounded_mailbox_block"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("block_input")
+    |> on_full(:block)
+    |> into(ElixirRunner.BlockTestProc)
+    |> named("block_echo")
+    |> sink("bounded_mailbox_echo")
+  end
+end
+
+defmodule ElixirRunner.BoundedMailboxDropNewestOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "bounded_mailbox_drop_newest"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("drop_newest_input")
+    |> on_full(:drop_newest)
+    |> into(ElixirRunner.DropNewestTestProc)
+    |> named("drop_newest_echo")
+    |> sink("bounded_mailbox_echo")
+  end
+end
+
+defmodule ElixirRunner.BoundedMailboxDropOldestOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "bounded_mailbox_drop_oldest"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("drop_oldest_input")
+    |> on_full(:drop_oldest)
+    |> into(ElixirRunner.DropOldestTestProc)
+    |> named("drop_oldest_echo")
+    |> sink("bounded_mailbox_echo")
+  end
+end
+
+# -- partition_relay --------------------------------------------------------
+
+defmodule ElixirRunner.PartitionRelayProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "partition_relay_procedure"
+  def init_state(_), do: %{seen: []}
+
+  # Rust emits keyed on the same prefix; v1 has no `emit_keyed`, same bytes unkeyed.
+  def run(input, s, ctx) do
+    Flezha.SDK.Ctx.emit(ctx, input)
+    {:ok, %{s | seen: [input | s.seen]}}
+  end
+end
+
+defmodule ElixirRunner.PartitionRelayOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "partition_relay"
+
+  # Rust names the plugin channel `input` (a forwarded frame keeps its producing
+  # channel's name, and that selects the receiving class's entry) and declares
+  # the sink `keyed()`, so the entry here is `in` and cannot collide with it.
+  # v1 has neither keyed channels nor a channel name distinct from the plugin:
+  # `named/2` names the procedure node and an output frame carries the PLUGIN
+  # name, so a forwarded frame reads `relay_out`, not `input`.
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
     |> input("in")
     |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
-    |> into(ElixirRunner.KeyedProc)
-    |> named("keyed")
-    |> sink("elixir_keyed_out")
+    |> into(ElixirRunner.PartitionRelayProc)
+    |> named("input")
+    |> sink("relay_out")
   end
 end
 
 defmodule ElixirRunner.Factories do
   @moduledoc "The e2e factory operatives this standalone runner advertises."
-  def all, do: [ElixirRunner.EchoOp, ElixirRunner.PoisonOp, ElixirRunner.KeyedOp]
+
+  def all do
+    [
+      ElixirRunner.CompareFilterOp,
+      ElixirRunner.StaticEntityOp,
+      ElixirRunner.SugarStaticEntityOp,
+      ElixirRunner.MixedOp,
+      ElixirRunner.SugarDoNothingOp,
+      ElixirRunner.SugarStoreInputOp,
+      ElixirRunner.HybridChannelOp,
+      ElixirRunner.PoisonProbeOp,
+      ElixirRunner.WedgeProbeOp,
+      ElixirRunner.BoundedMailboxBlockOp,
+      ElixirRunner.BoundedMailboxDropNewestOp,
+      ElixirRunner.BoundedMailboxDropOldestOp,
+      ElixirRunner.PartitionRelayOp
+    ]
+  end
 end

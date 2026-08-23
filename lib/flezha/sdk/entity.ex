@@ -23,6 +23,7 @@ defmodule Flezha.SDK.Entity do
       :operative_id,
       :node_ref,
       :node_name,
+      :input_channel,
       :module,
       :entity_key,
       :capacity,
@@ -66,6 +67,7 @@ defmodule Flezha.SDK.Entity do
       operative_id: Keyword.fetch!(opts, :operative_id),
       node_ref: Keyword.fetch!(opts, :node_ref),
       node_name: Keyword.get(opts, :node_name),
+      input_channel: Keyword.get(opts, :input_channel),
       module: module,
       entity_key: entity_key,
       capacity: Keyword.fetch!(opts, :capacity),
@@ -236,8 +238,15 @@ defmodule Flezha.SDK.Entity do
     seq = s.park_seq
     park_id = "#{label(s)}##{seq}"
 
-    body = Park.body(park_id, s.node_name || s.operative_id, error, attempts, value)
-    Flezha.SDK.Operative.park(s.operative, self(), body)
+    channel = s.input_channel || s.node_name || s.operative_id
+    body = Park.body(park_id, channel, error, attempts, value)
+
+    Flezha.SDK.Operative.park(
+      s.operative,
+      self(),
+      Park.identity(s.operative_id, s.module.name(), s.entity_key),
+      body
+    )
 
     :telemetry.execute([:flezha, :sdk, :parked], %{count: 1}, %{operative_id: s.operative_id})
 

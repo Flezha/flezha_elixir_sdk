@@ -62,7 +62,8 @@ defmodule Flezha.SDK.RunnerServer do
   def whereis, do: Process.whereis(@name)
 
   @doc "Route a park request from an operative; the runner owns the ack loop."
-  def park(server, entity_pid, body), do: GenServer.cast(server, {:park, entity_pid, body})
+  def park(server, entity_pid, identity, body),
+    do: GenServer.cast(server, {:park, entity_pid, identity, body})
 
   @doc "Post-start declared-set mutations (ships UpdateFactories)."
   def define(server, module, topology), do: GenServer.call(server, {:define, module, topology})
@@ -201,8 +202,8 @@ defmodule Flezha.SDK.RunnerServer do
       nil ->
         {:noreply, s}
 
-      %{body: body, resends: n} = park ->
-        send_park_frame(s, body)
+      %{identity: identity, body: body, resends: n} = park ->
+        send_park_frame(s, identity, body)
 
         if rem(n + 1, @park_warn_every) == 0,
           do: Logger.warning("[Flezha.SDK] park #{park_id} unacked after #{n + 1} resends")
@@ -226,11 +227,11 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
-  def handle_cast({:park, entity_pid, body}, %State{} = s) do
-    send_park_frame(s, body)
+  def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
+    send_park_frame(s, identity, body)
     ref = Process.send_after(self(), {:park_resend, body.park_id}, @park_resend_ms)
 
-    park = %{entity: entity_pid, body: body, resends: 0, timer: ref}
+    park = %{entity: entity_pid, identity: identity, body: body, resends: 0, timer: ref}
     {:noreply, %{s | parks: Map.put(s.parks, body.park_id, park)}}
   end
 
@@ -411,11 +412,12 @@ defmodule Flezha.SDK.RunnerServer do
 
   # --- parking ---
 
-  defp send_park_frame(%State{secondaries: []}, _body), do: :ok
+  defp send_park_frame(%State{secondaries: []}, _identity, _body), do: :ok
 
-  defp send_park_frame(%State{secondaries: secondaries}, body) do
+  defp send_park_frame(%State{secondaries: secondaries}, identity, body) do
     handle = Enum.at(secondaries, rem(:erlang.phash2(body.park_id), length(secondaries)))
-    Flezha.Transport.Stream.send_frame(handle, "park_payload", Park.frame(body), %{})
+    frame = Park.frame(identity, 0, body)
+    Flezha.Transport.Stream.send_frame(handle, "park_payload", frame, %{})
   end
 
   defp release_park(%State{} = s, park_id) do

@@ -1,0 +1,67 @@
+{
+  "runtime": "elixir",
+  "command": {
+    "test": "sh -c 'cd {app_dir} && FLEZHA_SOCKET_FILES_PATH={socket_dir_rel} FLEZHA_CA_CERT_PATH={ca_cert} FLEZHA_QUIC_CLIENT_CERT={client_cert} FLEZHA_QUIC_CLIENT_KEY={client_key} MIX_ENV=dev exec mix run --no-halt --no-deps-check -- {namespace}'",
+    "bench": "sh -c 'cd {app_dir} && FLEZHA_SOCKET_FILES_PATH={socket_dir_rel} FLEZHA_CA_CERT_PATH={ca_cert} FLEZHA_QUIC_CLIENT_CERT={client_cert} FLEZHA_QUIC_CLIENT_KEY={client_key} MIX_ENV=prod exec mix run --no-halt --no-deps-check -- {namespace}'"
+  },
+  "artifacts": {
+    "test": [
+      "_build/dev/lib/elixir_runner/ebin"
+    ],
+    "bench": [
+      "_build/prod/lib/elixir_runner/ebin",
+      "_build/dev/lib/elixir_runner/ebin"
+    ]
+  },
+  "build": {
+    "test": "cd test/apps/elixir_runner && MIX_ENV=dev mix compile",
+    "bench": "cd test/apps/elixir_runner && MIX_ENV=prod mix compile"
+  },
+  "connect_timeout_ms": 120000,
+  "transports": [
+    "uds",
+    "quic"
+  ],
+  "deferred": [
+    "state_persistence",
+    "effectively_once",
+    "entity_timers",
+    "correction_window",
+    "keyed_channels",
+    "workflow",
+    "dynamic_entity",
+    "entry_idle",
+    "pool_wedge"
+  ],
+  "fixtures": {
+    "runner_lifecycle": [
+      "do_nothing",
+      "compare_filter",
+      "bench_echo"
+    ],
+    "graph_builder": [
+      "sugar_do_nothing",
+      "sugar_store_input",
+      "sugar_static_entity",
+      "static_entity",
+      "mixed_operative",
+      "hybrid_channel",
+      "entity_stress",
+      "bench_keyed_nopersist"
+    ],
+    "liveness": [
+      "wedge_probe"
+    ],
+    "retry_ladder": [
+      "poison_probe",
+      "bounded_mailbox_block",
+      "bounded_mailbox_drop_newest",
+      "bounded_mailbox_drop_oldest"
+    ],
+    "partitioned": [
+      "partition_relay",
+      "dynamic_entity"
+    ]
+  },
+  "docs": "docs/sdk/elixir_sdk.md"
+}

@@ -45,7 +45,8 @@ defmodule Flezha.SDK.Operative do
     do: GenServer.cast(pid, {:emitted, node_ref, entity_key, values})
 
   @doc "Forward an exhausted-ladder park to the runner (which owns the ack)."
-  def park(pid, entity_pid, body), do: GenServer.cast(pid, {:park, entity_pid, body})
+  def park(pid, entity_pid, identity, body),
+    do: GenServer.cast(pid, {:park, entity_pid, identity, body})
 
   def stop(pid), do: GenServer.stop(pid, :normal)
 
@@ -107,8 +108,8 @@ defmodule Flezha.SDK.Operative do
   end
 
   @impl true
-  def handle_cast({:park, entity_pid, body}, %State{} = s) do
-    Flezha.SDK.RunnerServer.park(s.runner, entity_pid, body)
+  def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
+    Flezha.SDK.RunnerServer.park(s.runner, entity_pid, identity, body)
     {:noreply, s}
   end
 
@@ -197,6 +198,9 @@ defmodule Flezha.SDK.Operative do
       operative_id: s.operative_id,
       node_ref: node_ref,
       node_name: topo.node_name[node_ref],
+      # The channel this Entity consumes from — what a park reports, matching
+      # the reference SDK. v1 has no merge, so one source per node.
+      input_channel: inbound_channel(topo, node_ref),
       module: module,
       entity_key: key,
       capacity: Procedure.mailbox_capacity(module),
@@ -209,18 +213,39 @@ defmodule Flezha.SDK.Operative do
 
   # --- parking (entry-parse + partition mis-route) ---
 
+  # The channel a node consumes from — an entry channel by its own name, an
+  # inter-procedure edge by the producing node's output name. A static
+  # topology fact: v1 has no merge, so a node has one source.
+  defp inbound_channel(topo, node_ref) do
+    Enum.find_value(topo.routes, fn {source, routes} ->
+      if Enum.any?(routes, &(&1.to == {:node, node_ref})) do
+        case source do
+          {:entry, channel} -> channel
+          {:node, producer} -> topo.node_name[producer] || inspect(producer)
+        end
+      end
+    end)
+  end
+
   defp park_entry(%State{} = s, channel, message, reason),
-    do: park(s, channel, "entry parse failed: #{inspect(reason)}", message)
+    do: park_pre_dispatch(s, channel, "entry parse failed: #{inspect(reason)}", message)
 
   defp park_misroute(%State{} = s, node_ref, value, reason),
-    do: park(s, node_ref_label(s, node_ref), reason, value)
+    do: park_pre_dispatch(s, node_ref_label(s, node_ref), reason, value)
 
   # A pre-dispatch park (entry-parse or partition mis-route), forwarded to the
   # runner which owns the ack loop. The park_id uses a fresh unique integer since
   # no Entity seq exists yet.
-  defp park(%State{} = s, label, error, payload) do
+  defp park_pre_dispatch(%State{} = s, label, error, payload) do
     park_id = "#{s.operative_id}/#{label}##{System.unique_integer([:positive, :monotonic])}"
-    Flezha.SDK.RunnerServer.park(s.runner, self(), Park.body(park_id, label, error, 1, payload))
+
+    Flezha.SDK.RunnerServer.park(
+      s.runner,
+      self(),
+      Park.identity(s.operative_id, label, ""),
+      Park.body(park_id, label, error, 1, payload)
+    )
+
     s
   end
 
