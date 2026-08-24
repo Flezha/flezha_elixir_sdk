@@ -31,7 +31,8 @@
     "workflow",
     "dynamic_entity",
     "entry_idle",
-    "pool_wedge"
+    "pool_wedge",
+    "schema_evolution"
   ],
   "fixtures": {
     "runner_lifecycle": [
