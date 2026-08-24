@@ -348,7 +348,12 @@ defmodule ElixirRunner.WedgeProbeProc do
     end
   end
 
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, "ok:" <> input); {:ok, s})
+  def run(input, s, ctx),
+    do:
+      (
+        Flezha.SDK.Ctx.emit(ctx, "ok:" <> input)
+        {:ok, s}
+      )
 end
 
 defmodule ElixirRunner.WedgeProbeOp do
