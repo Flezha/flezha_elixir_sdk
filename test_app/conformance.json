@@ -31,7 +31,6 @@
     "workflow",
     "dynamic_entity",
     "entry_idle",
-    "pool_wedge",
     "schema_evolution"
   ],
   "fixtures": {
@@ -62,6 +61,9 @@
     "partitioned": [
       "partition_relay",
       "dynamic_entity"
+    ],
+    "pool_wedge": [
+      "wedge_probe"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"

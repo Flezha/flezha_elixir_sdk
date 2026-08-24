@@ -31,6 +31,11 @@ defmodule Flezha.SDK.RunnerServer do
   @park_resend_ms 2_000
   @park_warn_every 5
   @reconnect_cap_ms 30_000
+  # Exit status of a terminally-disconnected runner. Any non-zero value makes
+  # the orchestrator restart the process; a distinct one lets an operator tell
+  # "the controller proved me wedged" apart from a crash. Matches
+  # `flz_core::shutdown::TERMINAL_EXIT_CODE`.
+  @terminal_exit_status 70
 
   defmodule State do
     @moduledoc false
@@ -171,9 +176,15 @@ defmodule Flezha.SDK.RunnerServer do
   # --- liveness timers ---
 
   def handle_info(:data_heartbeat, %State{} = s) do
+    # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
+    # invisible to `dispatches` while the rest of the runner keeps completing.
+    {inflight, oldest_ms} = Counters.handout_liveness(s.counters)
+
     meta = %{
       "dispatches" => Integer.to_string(Counters.dispatches(s.counters)),
-      "blocked_parks" => Integer.to_string(Counters.blocked_parks(s.counters))
+      "blocked_parks" => Integer.to_string(Counters.blocked_parks(s.counters)),
+      "inflight" => Integer.to_string(inflight),
+      "inflight_oldest_ms" => Integer.to_string(oldest_ms)
     }
 
     Enum.each(s.secondaries, fn h ->
@@ -279,6 +290,34 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch({:workflow_stop, %{operative_id: oid}}, ref, s) do
     Logger.warning("[Flezha.SDK] WorkflowStop for #{oid} — this runner advertises no workflow")
     reply_ok(s, ref)
+  end
+
+  # A terminal disconnect is the last rung of the controller's convergence
+  # ladder: eviction moves a wedged runner's operatives but leaves the process
+  # connected and placeable, so it takes work and wedges again. Only the process
+  # going away clears it, and only the orchestrator brings it back — for a
+  # FAILURE, never for a clean stop, hence the non-zero status. The ack goes out
+  # first: the controller must see it before the runtime starts stopping.
+  defp dispatch({:runner_disconnect, %{terminal: true} = cmd}, ref, s) do
+    reply(s, ref, "success")
+
+    Logger.error(
+      "[Flezha.SDK] controller ordered a terminal disconnect " <>
+        "(reason=#{inspect(Map.get(cmd, :reason, ""))})"
+    )
+
+    if s.transport == :native do
+      # In-node mode: this SDK shares the controller's VM, so halting it would
+      # take the controller down with it. Stop the runner and leave the node's
+      # lifecycle to whoever owns the controller.
+      Logger.error("[Flezha.SDK] in-node runner: stopping the runner instead of the VM")
+    else
+      # `System.stop/1` runs the application shutdown — this server, its
+      # Operatives and their Entities — and then ends the VM with the status.
+      System.stop(@terminal_exit_status)
+    end
+
+    {:stop, :normal, %{s | disconnecting?: true}}
   end
 
   defp dispatch({:runner_disconnect, _}, ref, s) do

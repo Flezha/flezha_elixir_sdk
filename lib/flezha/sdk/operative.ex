@@ -12,8 +12,9 @@ defmodule Flezha.SDK.Operative do
   """
 
   use GenServer
+  require Logger
 
-  alias Flezha.SDK.{Entity, Procedure, KeyGroup, Channels, Park}
+  alias Flezha.SDK.{Counters, Entity, Procedure, KeyGroup, Channels, Park}
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
@@ -114,10 +115,28 @@ defmodule Flezha.SDK.Operative do
   end
 
   @impl true
-  def handle_info({:EXIT, pid, _reason}, %State{} = s) do
-    # An Entity died — forget it; it is recreated on the next input.
-    entities = for {k, v} <- s.entities, v != pid, into: %{}, do: {k, v}
-    {:noreply, %{s | entities: entities}}
+  def handle_info({:EXIT, pid, reason}, %State{} = s) do
+    # An Entity died — forget it; it is recreated on that key's next input. A
+    # crash must not take the Operative down with it, and must not leave the
+    # key unroutable; the log is what makes a key crashing on every input
+    # visible instead of looking like silent inactivity.
+    dead = for {ref, ^pid} <- s.entities, do: ref
+
+    s =
+      Enum.reduce(dead, s, fn {node_ref, key}, acc ->
+        if reason not in [:normal, :shutdown] do
+          Logger.warning(
+            "[Flezha.SDK] entity crashed: operative=#{acc.operative_id} " <>
+              "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
+          )
+        end
+
+        # The Entity's `after` cannot run for an untrappable kill, so its
+        # in-flight slot is released here or it would report a stall forever.
+        forget_entity(acc, node_ref, key)
+      end)
+
+    {:noreply, s}
   end
 
   def handle_info({:secondaries, secondaries}, %State{} = s),
@@ -167,16 +186,28 @@ defmodule Flezha.SDK.Operative do
     end
   end
 
-  defp enqueue(%State{} = s, node_ref, key, value) do
+  # A `:block` enqueue is a `GenServer.call`, so an Entity that died between the
+  # last input and this one takes the CALLER down — this Operative — unless the
+  # exit is caught. The `:EXIT` clause cannot be relied on to have run first:
+  # the input and the exit signal are two messages racing for the same mailbox.
+  # Catching it here is what makes "the key is routable again on its next
+  # input" true by construction rather than by ordering luck; the retry starts
+  # a fresh Entity, which is what the `:EXIT` clause would have arranged.
+  defp enqueue(%State{} = s, node_ref, key, value, retry? \\ true) do
     {pid, s} = ensure_entity(s, node_ref, key)
     policy = knob(s.topology, node_ref, :on_full, :block)
 
-    case policy do
-      :block -> Entity.enqueue_block(pid, value)
-      other -> Entity.enqueue_drop(pid, value, other)
-    end
+    try do
+      case policy do
+        :block -> Entity.enqueue_block(pid, value)
+        other -> Entity.enqueue_drop(pid, value, other)
+      end
 
-    s
+      s
+    catch
+      :exit, _reason when retry? ->
+        enqueue(forget_entity(s, node_ref, key), node_ref, key, value, false)
+    end
   end
 
   defp ensure_entity(%State{} = s, node_ref, key) do
@@ -188,6 +219,13 @@ defmodule Flezha.SDK.Operative do
       pid ->
         {pid, s}
     end
+  end
+
+  # Drop a dead Entity and release its in-flight slot. Idempotent with the
+  # `:EXIT` clause, which does the same for the exit signal that follows.
+  defp forget_entity(%State{} = s, node_ref, key) do
+    Counters.dispatch_finished(s.counters, Entity.identity(s.operative_id, node_ref, key))
+    %{s | entities: Map.delete(s.entities, {node_ref, key})}
   end
 
   defp start_entity(%State{topology: topo} = s, node_ref, key) do

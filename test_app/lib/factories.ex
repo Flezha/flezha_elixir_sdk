@@ -58,7 +58,13 @@ defmodule ElixirRunner.StaticDownstreamProc do
   @behaviour Flezha.SDK.Procedure
   def name, do: "static_downstream_procedure"
   def init_state(_), do: nil
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
+
+  def run(input, s, ctx),
+    do:
+      (
+        Flezha.SDK.Ctx.emit(ctx, input)
+        {:ok, s}
+      )
 end
 
 defmodule ElixirRunner.StaticEntityOp do
@@ -121,7 +127,13 @@ defmodule ElixirRunner.MixedMacroEntryProc do
   @behaviour Flezha.SDK.Procedure
   def name, do: "mixed_macro_entry_procedure"
   def init_state(_), do: nil
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
+
+  def run(input, s, ctx),
+    do:
+      (
+        Flezha.SDK.Ctx.emit(ctx, input)
+        {:ok, s}
+      )
 end
 
 defmodule ElixirRunner.MixedHandDownstreamProc do
@@ -129,7 +141,13 @@ defmodule ElixirRunner.MixedHandDownstreamProc do
   @behaviour Flezha.SDK.Procedure
   def name, do: "mixed_hand_downstream"
   def init_state(_), do: nil
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
+
+  def run(input, s, ctx),
+    do:
+      (
+        Flezha.SDK.Ctx.emit(ctx, input)
+        {:ok, s}
+      )
 end
 
 defmodule ElixirRunner.MixedOp do
@@ -157,7 +175,13 @@ defmodule ElixirRunner.SugarDoNothingProc do
   @behaviour Flezha.SDK.Procedure
   def name, do: "sugar_do_nothing"
   def init_state(_), do: nil
-  def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, input); {:ok, s})
+
+  def run(input, s, ctx),
+    do:
+      (
+        Flezha.SDK.Ctx.emit(ctx, input)
+        {:ok, s}
+      )
 end
 
 defmodule ElixirRunner.SugarDoNothingOp do
@@ -302,9 +326,28 @@ end
 defmodule ElixirRunner.WedgeProbeProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+  @aborted {__MODULE__, :aborted}
+
   def name, do: "wedge_probe_procedure"
   def init_state(_), do: nil
+
+  # Blocks the dispatch forever: the runner stays connected and heartbeating
+  # while its dispatch counter freezes — the `runner_pool_wedged` signature.
   def run("wedge", _s, _ctx), do: Process.sleep(:infinity)
+
+  # Ends the activation as violently as this host allows, WITHOUT emitting,
+  # once per runner. On the BEAM that is a real worker death — the one host
+  # where user code can take its Entity process down untrappably.
+  def run("abort", s, ctx) do
+    if :persistent_term.get(@aborted, false) do
+      Flezha.SDK.Ctx.emit(ctx, "ok:abort")
+      {:ok, s}
+    else
+      :persistent_term.put(@aborted, true)
+      Process.exit(self(), :kill)
+    end
+  end
+
   def run(input, s, ctx), do: (Flezha.SDK.Ctx.emit(ctx, "ok:" <> input); {:ok, s})
 end
 

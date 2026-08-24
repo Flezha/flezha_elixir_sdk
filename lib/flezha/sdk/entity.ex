@@ -55,6 +55,15 @@ defmodule Flezha.SDK.Entity do
   @doc "Release a held (parked) Entity after its `ParkPayloadAck`."
   def release_park(pid, park_id), do: send(pid, {:park_released, park_id})
 
+  @doc """
+  An Entity's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
+  same value to release the slot of an Entity that died mid-dispatch — the one
+  unwind an `after` inside the Entity cannot reach.
+  """
+  @spec identity(binary(), term(), term()) :: term()
+  def identity(operative_id, node_ref, entity_key),
+    do: {operative_id, node_ref, entity_key}
+
   # --- server ---
 
   @impl true
@@ -169,15 +178,26 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
+  # `after` is the contract, not politeness: the in-flight report is what makes
+  # ONE wedged Entity visible to the controller, so a dispatch that unwinds
+  # (raise, throw, exit) must release its slot on the way out or the runner
+  # would report a stall that healed long ago.
   defp dispatch(%State{} = s, value) do
-    case run_ladder(s, value, 1) do
-      {:ok, new_proc_state, emits} ->
-        Counters.inc_dispatches(s.counters)
-        flush_emits(s, emits)
-        %{s | proc_state: new_proc_state}
+    identity = identity(s.operative_id, s.node_ref, s.entity_key)
+    Counters.dispatch_started(s.counters, identity)
 
-      {:park, error, attempts} ->
-        park(s, value, error, attempts)
+    try do
+      case run_ladder(s, value, 1) do
+        {:ok, new_proc_state, emits} ->
+          Counters.inc_dispatches(s.counters)
+          flush_emits(s, emits)
+          %{s | proc_state: new_proc_state}
+
+        {:park, error, attempts} ->
+          park(s, value, error, attempts)
+      end
+    after
+      Counters.dispatch_finished(s.counters, identity)
     end
   end
 
