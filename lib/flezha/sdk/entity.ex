@@ -110,11 +110,11 @@ defmodule Flezha.SDK.Entity do
 
       policy == :drop_oldest ->
         {{:value, _dropped}, q} = :queue.out(s.queue)
-        drop_telemetry(s, :drop_oldest)
+        record_drop(s, :drop_oldest)
         {:noreply, kick(enqueue(%{s | queue: q, size: s.size - 1}, value))}
 
       true ->
-        drop_telemetry(s, :drop_newest)
+        record_drop(s, :drop_newest)
         {:noreply, s}
     end
   end
@@ -280,7 +280,12 @@ defmodule Flezha.SDK.Entity do
       do: Flezha.SDK.Operative.emitted(s.operative, s.node_ref, s.entity_key, values)
   end
 
-  defp drop_telemetry(%State{} = s, policy) do
+  # Two readers, one event: telemetry is the in-node handle, the counter is what
+  # leaves the runner on the heartbeat — a drop nobody can see from outside the
+  # process is the defect this closes.
+  defp record_drop(%State{} = s, policy) do
+    Counters.inc_drops(s.counters, policy)
+
     :telemetry.execute([:flezha, :sdk, :mailbox], %{count: 1}, %{
       operative_id: s.operative_id,
       policy: policy

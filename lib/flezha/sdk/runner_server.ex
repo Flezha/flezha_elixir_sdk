@@ -183,6 +183,8 @@ defmodule Flezha.SDK.RunnerServer do
     meta = %{
       "dispatches" => Integer.to_string(Counters.dispatches(s.counters)),
       "blocked_parks" => Integer.to_string(Counters.blocked_parks(s.counters)),
+      "drops_newest" => Integer.to_string(Counters.drops_newest(s.counters)),
+      "drops_oldest" => Integer.to_string(Counters.drops_oldest(s.counters)),
       "inflight" => Integer.to_string(inflight),
       "inflight_oldest_ms" => Integer.to_string(oldest_ms)
     }

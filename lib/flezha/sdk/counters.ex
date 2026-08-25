@@ -4,7 +4,10 @@ defmodule Flezha.SDK.Counters do
   the heartbeat can report them without a message round trip. `dispatches` is
   bumped only on a COMPLETED dispatch — the key the controller's
   `runner_pool_wedged` verdict requires (a frozen value with the runner alive is
-  what makes a wedged Entity population visible). `blocked_parks` counts episodes.
+  what makes a wedged Entity population visible). `blocked_parks` counts blocked
+  enqueues, and `drops_newest`/`drops_oldest` count what a shedding policy threw
+  away — the same three keys every other SDK's heartbeat carries, so an operator
+  reads one vocabulary whichever runtime the operative runs on.
 
   Handout liveness — how many dispatches are underway and how long the oldest has
   been — is the same self-report every other SDK carries, and it is what makes ONE
@@ -21,9 +24,11 @@ defmodule Flezha.SDK.Counters do
 
   @dispatches 1
   @blocked_parks 2
+  @drops_newest 3
+  @drops_oldest 4
   # Start-time slots follow the counters; adding a counter moves the base with
   # it rather than leaving a second place to remember how many there are.
-  @slot_base @blocked_parks
+  @slot_base @drops_oldest
   @slots 64
   @size @slot_base + @slots
 
@@ -45,6 +50,16 @@ defmodule Flezha.SDK.Counters do
 
   @spec blocked_parks(t()) :: non_neg_integer()
   def blocked_parks(ref), do: :atomics.get(ref, @blocked_parks)
+
+  @spec inc_drops(t(), :drop_newest | :drop_oldest) :: :ok
+  def inc_drops(ref, :drop_newest), do: :atomics.add(ref, @drops_newest, 1)
+  def inc_drops(ref, :drop_oldest), do: :atomics.add(ref, @drops_oldest, 1)
+
+  @spec drops_newest(t()) :: non_neg_integer()
+  def drops_newest(ref), do: :atomics.get(ref, @drops_newest)
+
+  @spec drops_oldest(t()) :: non_neg_integer()
+  def drops_oldest(ref), do: :atomics.get(ref, @drops_oldest)
 
   @doc """
   Record that `identity` started a dispatch. A slot already held (by this Entity
