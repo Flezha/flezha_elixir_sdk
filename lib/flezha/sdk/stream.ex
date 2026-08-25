@@ -27,7 +27,7 @@ defmodule Flezha.SDK.Stream do
           keyed: boolean(),
           terminal: boolean(),
           chain_id: reference() | nil,
-          on_full: :block | :drop_newest | :drop_oldest | nil,
+          on_full: :drop_nothing | :drop_newest | :drop_oldest | nil,
           retry_max: pos_integer() | nil,
           retry_backoff_ms: non_neg_integer() | nil
         }

@@ -372,12 +372,12 @@ defmodule ElixirRunner.WedgeProbeOp do
   end
 end
 
-# -- bounded_mailbox_{block,drop_newest,drop_oldest} ------------------------
+# -- bounded_mailbox_{drop_nothing,drop_newest,drop_oldest} ------------------------
 
-defmodule ElixirRunner.BlockTestProc do
+defmodule ElixirRunner.DropNothingTestProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
-  def name, do: "block_test_procedure"
+  def name, do: "drop_nothing_test_procedure"
   def init_state(_), do: %{processed: 0}
   def mailbox_capacity, do: 4
 
@@ -391,33 +391,33 @@ defmodule ElixirRunner.DropNewestTestProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
   def name, do: "drop_newest_test_procedure"
-  defdelegate init_state(key), to: ElixirRunner.BlockTestProc
-  defdelegate mailbox_capacity, to: ElixirRunner.BlockTestProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.BlockTestProc
+  defdelegate init_state(key), to: ElixirRunner.DropNothingTestProc
+  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestProc
 end
 
 defmodule ElixirRunner.DropOldestTestProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
   def name, do: "drop_oldest_test_procedure"
-  defdelegate init_state(key), to: ElixirRunner.BlockTestProc
-  defdelegate mailbox_capacity, to: ElixirRunner.BlockTestProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.BlockTestProc
+  defdelegate init_state(key), to: ElixirRunner.DropNothingTestProc
+  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestProc
 end
 
-defmodule ElixirRunner.BoundedMailboxBlockOp do
+defmodule ElixirRunner.BoundedMailboxDropNothingOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "bounded_mailbox_block"
+  def factory_id, do: "bounded_mailbox_drop_nothing"
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> input("block_input")
-    |> on_full(:block)
-    |> into(ElixirRunner.BlockTestProc)
-    |> named("block_echo")
+    |> input("drop_nothing_input")
+    |> on_full(:drop_nothing)
+    |> into(ElixirRunner.DropNothingTestProc)
+    |> named("drop_nothing_echo")
     |> sink("bounded_mailbox_echo")
   end
 end
@@ -508,7 +508,7 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.HybridChannelOp,
       ElixirRunner.PoisonProbeOp,
       ElixirRunner.WedgeProbeOp,
-      ElixirRunner.BoundedMailboxBlockOp,
+      ElixirRunner.BoundedMailboxDropNothingOp,
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,
       ElixirRunner.PartitionRelayOp

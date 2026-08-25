@@ -2,10 +2,10 @@ defmodule Flezha.SDK.Entity do
   @moduledoc """
   One process per Entity: a bounded input queue, the retry-then-park dispatch
   ladder, and per-Entity ordering (arrival order out of the queue). Inputs under
-  `:block` arrive as a `GenServer.call` the Entity answers only when there is
-  room — never dropped, never refused (the caller, the Operative router, waits,
-  which is the documented co-tenancy cost); `:drop_newest`/`:drop_oldest` arrive
-  as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
+  `:drop_nothing` arrive as a `GenServer.call` the Entity answers only when
+  there is room — never dropped, never refused (the caller, the Operative
+  router, waits, which is the documented co-tenancy cost);
+  `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
   the input and HOLDS the Entity until the controller's `ParkPayloadAck`.
   """
 
@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Entity do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Enqueue under `:block` — the caller waits until there is room."
+  @doc "Enqueue under `:drop_nothing` — the caller waits until there is room."
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
 
   @doc "Enqueue under a drop policy — non-blocking."

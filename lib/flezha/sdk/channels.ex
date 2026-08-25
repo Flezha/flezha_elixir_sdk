@@ -151,7 +151,7 @@ defmodule Flezha.SDK.Channels do
 
   # --- per-edge knobs (ride the handle; applied to the target node at into) ---
 
-  def on_full(%Stream{} = s, policy) when policy in [:block, :drop_newest, :drop_oldest],
+  def on_full(%Stream{} = s, policy) when policy in [:drop_nothing, :drop_newest, :drop_oldest],
     do: %{s | on_full: policy}
 
   def retry_max(%Stream{} = s, 0), do: refuse(s, {:RetryMaxZero, describe(s.source)})

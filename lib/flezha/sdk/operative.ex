@@ -186,20 +186,20 @@ defmodule Flezha.SDK.Operative do
     end
   end
 
-  # A `:block` enqueue is a `GenServer.call`, so an Entity that died between the
-  # last input and this one takes the CALLER down — this Operative — unless the
-  # exit is caught. The `:EXIT` clause cannot be relied on to have run first:
+  # A `:drop_nothing` enqueue is a `GenServer.call`, so an Entity that died between
+  # the last input and this one takes the CALLER down — this Operative — unless
+  # the exit is caught. The `:EXIT` clause cannot be relied on to have run first:
   # the input and the exit signal are two messages racing for the same mailbox.
   # Catching it here is what makes "the key is routable again on its next
   # input" true by construction rather than by ordering luck; the retry starts
   # a fresh Entity, which is what the `:EXIT` clause would have arranged.
   defp enqueue(%State{} = s, node_ref, key, value, retry? \\ true) do
     {pid, s} = ensure_entity(s, node_ref, key)
-    policy = knob(s.topology, node_ref, :on_full, :block)
+    policy = knob(s.topology, node_ref, :on_full, :drop_nothing)
 
     try do
       case policy do
-        :block -> Entity.enqueue_block(pid, value)
+        :drop_nothing -> Entity.enqueue_block(pid, value)
         other -> Entity.enqueue_drop(pid, value, other)
       end
 
@@ -242,7 +242,7 @@ defmodule Flezha.SDK.Operative do
       module: module,
       entity_key: key,
       capacity: Procedure.mailbox_capacity(module),
-      policy: knob(topo, node_ref, :on_full, :block),
+      policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
       retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, @default_retry_backoff_ms),
       counters: s.counters
