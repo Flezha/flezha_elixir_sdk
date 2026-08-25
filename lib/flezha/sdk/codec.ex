@@ -8,6 +8,19 @@ defmodule Flezha.SDK.Codec do
   later hex extraction swaps only this module's internals.
   """
 
+  # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
+  # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
+  # the factory-advertisement seam, and a factory whose two halves disagreed
+  # would be placeable on one path and not the other. The SDK persists no
+  # Entity state in v1 and so stamps no record headers, but it advertises
+  # factory ids the Rust and Java test apps also advertise — the controller's
+  # placement guard is what keeps those ids from crossing runtimes.
+  @sdk_lang 3
+
+  @doc "The SDK's allocated language byte, carried on every factory it advertises."
+  @spec sdk_lang() :: pos_integer()
+  def sdk_lang, do: @sdk_lang
+
   @doc "Decode an inbound control message into a `CommandRequest`."
   @spec decode_command(binary()) :: {:ok, struct()} | {:error, term()}
   def decode_command(bin) when is_binary(bin) do
@@ -55,7 +68,7 @@ defmodule Flezha.SDK.Codec do
   def update_factories_command(factories) do
     decls =
       Enum.map(factories, fn {id, desc} ->
-        %RunnerCommands.FactoryDecl{id: id, description: desc || ""}
+        %RunnerCommands.FactoryDecl{id: id, description: desc || "", sdk_lang: @sdk_lang}
       end)
 
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}

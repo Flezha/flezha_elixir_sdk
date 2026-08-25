@@ -505,7 +505,9 @@ defmodule Flezha.SDK.RunnerServer do
       "namespace" => namespace,
       "factory_ids" => Enum.map(factories, &elem(&1, 0)),
       "factories" =>
-        Enum.map(factories, fn {id, desc} -> %{"id" => id, "description" => desc} end),
+        Enum.map(factories, fn {id, desc} ->
+          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang()}
+        end),
       "stable_id" => stable_id
     }
   end

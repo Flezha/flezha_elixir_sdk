@@ -1,5 +1,6 @@
 {
   "runtime": "elixir",
+  "sdk_lang": 3,
   "command": {
     "test": "sh -c 'cd {app_dir} && FLEZHA_SOCKET_FILES_PATH={socket_dir_rel} FLEZHA_CA_CERT_PATH={ca_cert} FLEZHA_QUIC_CLIENT_CERT={client_cert} FLEZHA_QUIC_CLIENT_KEY={client_key} MIX_ENV=dev exec mix run --no-halt --no-deps-check -- {namespace}'",
     "bench": "sh -c 'cd {app_dir} && FLEZHA_SOCKET_FILES_PATH={socket_dir_rel} FLEZHA_CA_CERT_PATH={ca_cert} FLEZHA_QUIC_CLIENT_CERT={client_cert} FLEZHA_QUIC_CLIENT_KEY={client_key} MIX_ENV=prod exec mix run --no-halt --no-deps-check -- {namespace}'"
