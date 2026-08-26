@@ -19,6 +19,12 @@ defmodule Flezha.SDK.Counters do
   identities hashing to one slot means one of them runs unrecorded — the report
   under-states, which is the safe direction for a signal a rebind hangs off.
 
+  Deferred-push liveness (`pending_pushes` / `pending_push_oldest_ms`) rides a
+  second block of the same table, for the same reason and read the same way: a
+  push this SDK accepted but has not yet queued is invisible to `dispatches`
+  and to the handout report, and without it backpressure that withholds work
+  looks exactly like a runner doing nothing.
+
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
 
@@ -28,9 +34,9 @@ defmodule Flezha.SDK.Counters do
   @drops_oldest 4
   # Start-time slots follow the counters; adding a counter moves the base with
   # it rather than leaving a second place to remember how many there are.
-  @slot_base @drops_oldest
   @slots 64
-  @size @slot_base + @slots
+  @blocks [dispatch: @drops_oldest, deferred: @drops_oldest + @slots]
+  @size @drops_oldest + 2 * @slots
 
   @type t :: :atomics.atomics_ref()
   @typedoc "An Entity's identity, as the slot table hashes it."
@@ -61,19 +67,31 @@ defmodule Flezha.SDK.Counters do
   @spec drops_oldest(t()) :: non_neg_integer()
   def drops_oldest(ref), do: :atomics.get(ref, @drops_oldest)
 
+  @typedoc "Which block of start-time slots — one Entity may hold one of each."
+  @type block :: :dispatch | :deferred
+
   @doc """
   Record that `identity` started a dispatch. A slot already held (by this Entity
   re-entering, or by a colliding identity) leaves the dispatch unrecorded.
   """
   @spec dispatch_started(t(), identity()) :: :ok
-  def dispatch_started(ref, identity) do
-    _ = :atomics.compare_exchange(ref, slot(identity), 0, now_ms())
-    :ok
-  end
+  def dispatch_started(ref, identity), do: mark_started(ref, :dispatch, identity)
 
   @doc "Release `identity`'s slot — its dispatch ended, or the Entity died."
   @spec dispatch_finished(t(), identity()) :: :ok
-  def dispatch_finished(ref, identity), do: :atomics.put(ref, slot(identity), 0)
+  def dispatch_finished(ref, identity), do: mark_finished(ref, :dispatch, identity)
+
+  @doc """
+  Record that `identity` is holding at least one push it has not queued yet.
+  Idempotent while it holds: the age reported is the OLDEST push's, so a later
+  one must not reset the clock.
+  """
+  @spec deferred_started(t(), identity()) :: :ok
+  def deferred_started(ref, identity), do: mark_started(ref, :deferred, identity)
+
+  @doc "Release `identity`'s deferral slot — every held push has been queued."
+  @spec deferred_finished(t(), identity()) :: :ok
+  def deferred_finished(ref, identity), do: mark_finished(ref, :deferred, identity)
 
   @doc """
   Handout liveness: `{dispatches underway, age in ms of the oldest}`, `{0, 0}`
@@ -81,18 +99,37 @@ defmodule Flezha.SDK.Counters do
   let the count come from before a dispatch ended and the age from after.
   """
   @spec handout_liveness(t()) :: {non_neg_integer(), non_neg_integer()}
-  def handout_liveness(ref) do
+  def handout_liveness(ref), do: liveness(ref, :dispatch)
+
+  @doc """
+  Deferred-push liveness: `{Entities holding an unqueued push, age in ms of the
+  oldest}`. The same shape as `handout_liveness/1` because it answers the same
+  question about the other half of the picture.
+  """
+  @spec pending_push_liveness(t()) :: {non_neg_integer(), non_neg_integer()}
+  def pending_push_liveness(ref), do: liveness(ref, :deferred)
+
+  defp mark_started(ref, block, identity) do
+    _ = :atomics.compare_exchange(ref, slot(block, identity), 0, now_ms())
+    :ok
+  end
+
+  defp mark_finished(ref, block, identity), do: :atomics.put(ref, slot(block, identity), 0)
+
+  defp liveness(ref, block) do
     now = now_ms()
+    base = Keyword.fetch!(@blocks, block)
 
     Enum.reduce(1..@slots, {0, 0}, fn i, {count, oldest} = idle ->
-      case :atomics.get(ref, @slot_base + i) do
+      case :atomics.get(ref, base + i) do
         0 -> idle
         started -> {count + 1, max(oldest, max(now - started, 0))}
       end
     end)
   end
 
-  defp slot(identity), do: @slot_base + 1 + :erlang.phash2(identity, @slots)
+  defp slot(block, identity),
+    do: Keyword.fetch!(@blocks, block) + 1 + :erlang.phash2(identity, @slots)
 
   # Wall-clock ms: unsigned atomics cannot hold a monotonic reading, and `0` is
   # the free marker, which a wall-clock millisecond never is.

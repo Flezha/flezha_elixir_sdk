@@ -179,6 +179,10 @@ defmodule Flezha.SDK.RunnerServer do
     # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
     # invisible to `dispatches` while the rest of the runner keeps completing.
     {inflight, oldest_ms} = Counters.handout_liveness(s.counters)
+    # Backpressure that withholds work rather than shedding it: an Entity
+    # holding a push it has not queued yet holds no handout either, so
+    # `inflight` cannot see it.
+    {pending, pending_oldest_ms} = Counters.pending_push_liveness(s.counters)
 
     meta = %{
       "dispatches" => Integer.to_string(Counters.dispatches(s.counters)),
@@ -186,7 +190,9 @@ defmodule Flezha.SDK.RunnerServer do
       "drops_newest" => Integer.to_string(Counters.drops_newest(s.counters)),
       "drops_oldest" => Integer.to_string(Counters.drops_oldest(s.counters)),
       "inflight" => Integer.to_string(inflight),
-      "inflight_oldest_ms" => Integer.to_string(oldest_ms)
+      "inflight_oldest_ms" => Integer.to_string(oldest_ms),
+      "pending_pushes" => Integer.to_string(pending),
+      "pending_push_oldest_ms" => Integer.to_string(pending_oldest_ms)
     }
 
     Enum.each(s.secondaries, fn h ->

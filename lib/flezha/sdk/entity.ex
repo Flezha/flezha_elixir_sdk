@@ -98,6 +98,10 @@ defmodule Flezha.SDK.Entity do
     else
       # No room — defer the reply until a dispatch frees a slot (block policy).
       Counters.inc_blocked_parks(s.counters)
+      # An accepted-but-unqueued push is invisible to `dispatches` and to the
+      # handout report, so it carries its own: the age reported is the oldest
+      # one's, which is why marking is idempotent while any is held.
+      Counters.deferred_started(s.counters, identity(s.operative_id, s.node_ref, s.entity_key))
       {:noreply, %{s | waiters: :queue.in({from, value}, s.waiters)}}
     end
   end
@@ -167,15 +171,23 @@ defmodule Flezha.SDK.Entity do
     if s.size < s.capacity do
       case :queue.out(s.waiters) do
         {:empty, _} ->
-          s
+          note_no_deferral(s)
 
         {{:value, {from, value}}, waiters} ->
           GenServer.reply(from, :ok)
-          %{s | waiters: waiters} |> enqueue(value)
+          s = %{s | waiters: waiters} |> enqueue(value)
+          if :queue.is_empty(waiters), do: note_no_deferral(s), else: s
       end
     else
       s
     end
+  end
+
+  # Release this Entity's deferred-push slot: nothing is held any more.
+  # Idempotent, so the drain need not know whether one was ever taken.
+  defp note_no_deferral(%State{} = s) do
+    Counters.deferred_finished(s.counters, identity(s.operative_id, s.node_ref, s.entity_key))
+    s
   end
 
   # `after` is the contract, not politeness: the in-flight report is what makes
