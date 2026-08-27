@@ -23,6 +23,12 @@
     "uds",
     "quic"
   ],
+  "dispatch": {
+    "model": "process-per-entity",
+    "detail": "One BEAM process per Entity, scheduled by the VM; there is no worker pool to size.",
+    "env": {}
+  },
+  "toolchain": "elixir --version",
   "deferred": [
     "state_persistence",
     "effectively_once",
