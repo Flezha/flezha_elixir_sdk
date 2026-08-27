@@ -38,9 +38,18 @@ defmodule ElixirRunner.Application do
 
   defp stdin_loop do
     case IO.read(:stdio, :line) do
-      :eof -> System.halt(0)
-      {:error, _} -> System.halt(0)
-      _line -> stdin_loop()
+      :eof ->
+        System.halt(0)
+
+      # A read error is NOT end-of-file: it means the group leader has gone
+      # because the VM is already shutting down. Halting here races that
+      # shutdown and swallows whatever the runner was about to report — a
+      # failed boot then looks exactly like a clean exit.
+      {:error, _} ->
+        :ok
+
+      _line ->
+        stdin_loop()
     end
   end
 end

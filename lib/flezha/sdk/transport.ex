@@ -4,15 +4,14 @@ defmodule Flezha.SDK.Transport do
   by mode, with everything above it shared. `:native` opens `Local.Stream` pairs
   and reaches the in-node controller through `Flezha.Transport.Server`; `:socket`
   dials the binary protocol over UDS/QUIC via the `flz_nif` client entry points.
-  The connection parameters (socket base, QUIC address, CA cert) come from the
-  same env the Rust client reads.
+  The connection parameters come from `flz_transport` through
+  `Native.resolve_connect/1` — the same ladder and the same candidate list a
+  Rust, Java or Node runner resolves, asked for rather than re-derived here.
   """
 
   alias Flezha.Transport.Local
   alias Flezha.Transport.Native
 
-  @default_socket_base "app_data/sockets"
-  @default_quic_address "127.0.0.1:4433"
   @default_ca_cert "app_data/certs/ca.pem"
 
   @doc """
@@ -34,19 +33,32 @@ defmodule Flezha.SDK.Transport do
   end
 
   def connect(:uds, payload, owner) do
-    with {:ok, handle} <- Native.client_connect_uds(control_socket_path(), owner) do
+    with {:ok, path} <- control_socket_path(),
+         {:ok, handle} <- Native.client_connect_uds(path, owner) do
       send_handshake(handle, payload)
       {:ok, handle, nil}
     end
   end
 
   def connect(:quic, payload, owner) do
-    with {:ok, conn} <- Native.client_connect_quic(quic_address(), ca_cert_path()),
+    # Every entry is dialled in turn; the NIF re-resolves the one it is given on
+    # this attempt, so a controller that moved behind its name is followed.
+    with {:ok, entries} <- quic_addresses(),
+         {:ok, conn} <- dial_quic(entries, ca_cert_path()),
          {:ok, handle} <- Native.client_open_stream(conn, 0, 0, owner) do
       send_handshake(handle, payload)
       {:ok, handle, conn}
     end
   end
+
+  @doc """
+  Why a connect failed, in one line — the shared probe's words for `:uds`, the
+  candidate list for `:quic`. Emitted once, before the SDK gives up or starts
+  retrying, so an Elixir runner reports what a Rust one reports.
+  """
+  @spec diagnosis(:native | :uds | :quic) :: String.t()
+  def diagnosis(:native), do: "in-node transport; no socket is involved"
+  def diagnosis(mode), do: Native.connect_diagnosis(mode)
 
   @doc """
   Establish `count` primary+secondary data stream pairs. Returns
@@ -72,9 +84,11 @@ defmodule Flezha.SDK.Transport do
   end
 
   def connect_sockets(:uds, runner_id, count, owner, _conn) do
-    dial_pairs(count, fn type ->
-      Native.client_connect_uds(stream_socket_path(runner_id, type), owner)
-    end)
+    with {:ok, base} <- socket_base() do
+      dial_pairs(count, fn type ->
+        Native.client_connect_uds(stream_socket_path(base, runner_id, type), owner)
+      end)
+    end
   end
 
   def connect_sockets(:quic, _runner_id, count, owner, conn) do
@@ -110,16 +124,36 @@ defmodule Flezha.SDK.Transport do
     Flezha.Transport.Stream.send_frame(handle, "connect_control_channel", json, %{})
   end
 
-  defp socket_base do
-    (System.get_env("FLEZHA_SOCKET_FILES_PATH") || @default_socket_base)
-    |> String.replace_trailing("/", "")
+  # Each entry in turn; the accumulator carries the last failure so a list that
+  # resolves nowhere reports the address it last dialled.
+  defp dial_quic(entries, ca_cert) do
+    Enum.reduce_while(entries, {:error, "no QUIC endpoint configured"}, fn entry, _last ->
+      case Native.client_connect_quic(entry, ca_cert) do
+        {:ok, conn} -> {:halt, {:ok, conn}}
+        {:error, reason} -> {:cont, {:error, "#{entry}: #{reason}"}}
+      end
+    end)
   end
 
-  defp control_socket_path, do: socket_base() <> "/runner_control_channel.sock"
+  # The ladder and the candidate list, resolved by `flz_transport` — never
+  # re-derived here, so the SDK and a Rust runner in the same environment
+  # cannot disagree about where the controller is.
+  defp resolve_connect, do: Native.resolve_connect("runner")
 
-  defp stream_socket_path(runner_id, type),
-    do: socket_base() <> "/#{type}_stream_#{runner_id}.sock"
+  defp socket_base do
+    with {:ok, dir, _quic} <- resolve_connect(), do: {:ok, dir}
+  end
 
-  defp quic_address, do: System.get_env("FLEZHA_QUIC_ADDRESS") || @default_quic_address
+  defp quic_addresses do
+    with {:ok, _dir, entries} <- resolve_connect(), do: {:ok, entries}
+  end
+
+  defp control_socket_path do
+    with {:ok, base} <- socket_base(), do: {:ok, base <> "/runner_control_channel.sock"}
+  end
+
+  defp stream_socket_path(base, runner_id, type),
+    do: base <> "/#{type}_stream_#{runner_id}.sock"
+
   defp ca_cert_path, do: System.get_env("FLEZHA_CA_CERT_PATH") || @default_ca_cert
 end

@@ -107,6 +107,19 @@ defmodule Flezha.SDK.RunnerServer do
         {:ok, state}
 
       {:error, reason} ->
+        # The one diagnosis, before this runner gives up: which of the four
+        # situations the socket directory is in and what fixes it — the same
+        # text a Rust runner logs and `flz runner check` prints.
+        Logger.error(
+          "[Flezha.SDK] cannot reach a controller: #{inspect(reason)}. " <>
+            Transport.diagnosis(state.transport)
+        )
+
+        # The VM is about to come down with this process, and Logger is async:
+        # without the flush the one line that explains the failure is dropped
+        # on the way out, which is exactly the silence this diagnosis replaces.
+        Logger.flush()
+
         {:stop, {:connect_failed, reason}}
     end
   end
