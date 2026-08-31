@@ -317,8 +317,24 @@ defmodule Flezha.SDK.Operative do
 
   defp emit_output(%State{secondaries: secondaries, operative_id: oid}, meta, bytes) do
     handle = Enum.at(secondaries, rem(:erlang.phash2(oid), length(secondaries)))
-    Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta)
-    :ok
+
+    case Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta) do
+      :ok ->
+        :ok
+
+      # Discarding this answer is how a send-side loss becomes invisible. A
+      # client stream signals congestion by withholding its write's reply, so
+      # the buffer never turns a frame away here; what does reach this arm is a
+      # transport that is gone, and the frame with it. The runner's close
+      # detection reconnects — this is what says a frame did not make it.
+      {:error, reason} ->
+        Logger.warning(
+          "[operative] output frame undelivered operative=#{oid} " <>
+            "channel=#{inspect(meta["channel"])} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
   end
 
   defp knob(topo, node_ref, key, default),
