@@ -21,7 +21,7 @@ defmodule Flezha.SDK.RunnerServer do
     KeyGroup,
     Transport,
     DataStream,
-    Backoff,
+    Jitter,
     Park
   }
 
@@ -506,7 +506,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp reconnect_backoff(n) do
-    Backoff.jitter(min(100 * Bitwise.bsl(1, min(n, 8)), @reconnect_cap_ms))
+    Jitter.jitter(min(100 * Bitwise.bsl(1, min(n, 8)), @reconnect_cap_ms))
   end
 
   # --- connect + helpers ---
@@ -559,7 +559,7 @@ defmodule Flezha.SDK.RunnerServer do
   defp schedule_heartbeat do
     base = String.to_integer(System.get_env("FLEZHA_DATA_HEARTBEAT_MS") || "#{@hb_default_ms}")
     # Jitter into [base/2, base] (the cross-SDK heartbeat contract).
-    Process.send_after(self(), :data_heartbeat, Backoff.jitter_within(base))
+    Process.send_after(self(), :data_heartbeat, Jitter.jitter_within(base))
   end
 
   defp schedule_keepalive,

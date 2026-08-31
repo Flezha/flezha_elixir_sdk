@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Ctx, Counters, Park, Backoff}
+  alias Flezha.SDK.{Ctx, Counters, Park, Jitter}
 
   @retry_backoff_cap_ms 5_000
 
@@ -263,7 +263,7 @@ defmodule Flezha.SDK.Entity do
   # exp = base * 2^(attempt-1), capped at 5s, jittered uniform in [exp/2, exp*1.5).
   defp backoff(base_ms, attempt) do
     exp = min(base_ms * Bitwise.bsl(1, min(attempt - 1, 16)), @retry_backoff_cap_ms)
-    min(Backoff.jitter(exp), @retry_backoff_cap_ms)
+    min(Jitter.jitter(exp), @retry_backoff_cap_ms)
   end
 
   defp park(%State{} = s, value, error, attempts) do

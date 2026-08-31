@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Backoff do
+defmodule Flezha.SDK.Jitter do
   @moduledoc """
   Shared backoff jitter for the SDK's retry ladder, reconnect loop, and heartbeat
   timer, so the jitter shape lives in one place.
