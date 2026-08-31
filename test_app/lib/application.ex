@@ -9,6 +9,8 @@ defmodule ElixirRunner.Application do
   use Application
   require Logger
 
+  alias Mix.Tasks.Bench.ElixirFactories
+
   def start(_type, _args) do
     spawn_stdin_eof_watcher()
 
@@ -19,7 +21,7 @@ defmodule ElixirRunner.Application do
       end
 
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
-    streams = Mix.Tasks.Bench.ElixirFactories.all() ++ ElixirRunner.Factories.all()
+    streams = ElixirFactories.all() ++ ElixirRunner.Factories.all()
 
     Logger.info("[elixir_runner] namespace=#{namespace} transport=#{transport}")
 

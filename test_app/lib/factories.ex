@@ -9,11 +9,14 @@
 defmodule ElixirRunner.CompareFilterProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "compare_filter_procedure"
   def init_state(_), do: %{comparable: "default", inverted: false}
 
   def run(input, %{comparable: comparable} = s, ctx) do
-    if input == comparable, do: Flezha.SDK.Ctx.emit(ctx, input)
+    if input == comparable, do: Ctx.emit(ctx, input)
     {:ok, s}
   end
 end
@@ -39,6 +42,9 @@ end
 defmodule ElixirRunner.StaticEntryProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "static_entry_procedure"
   def init_state(_), do: %{seen: []}
   def entity_keys, do: ["a", "b", "c", "d"]
@@ -48,7 +54,7 @@ defmodule ElixirRunner.StaticEntryProc do
   def entities_for(_), do: ["d"]
 
   def run(input, s, ctx) do
-    Flezha.SDK.Ctx.emit(ctx, input)
+    Ctx.emit(ctx, input)
     {:ok, %{s | seen: [input | s.seen]}}
   end
 end
@@ -56,13 +62,16 @@ end
 defmodule ElixirRunner.StaticDownstreamProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "static_downstream_procedure"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
     do:
       (
-        Flezha.SDK.Ctx.emit(ctx, input)
+        Ctx.emit(ctx, input)
         {:ok, s}
       )
 end
@@ -125,13 +134,16 @@ end
 defmodule ElixirRunner.MixedMacroEntryProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "mixed_macro_entry_procedure"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
     do:
       (
-        Flezha.SDK.Ctx.emit(ctx, input)
+        Ctx.emit(ctx, input)
         {:ok, s}
       )
 end
@@ -139,13 +151,16 @@ end
 defmodule ElixirRunner.MixedHandDownstreamProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "mixed_hand_downstream"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
     do:
       (
-        Flezha.SDK.Ctx.emit(ctx, input)
+        Ctx.emit(ctx, input)
         {:ok, s}
       )
 end
@@ -173,13 +188,16 @@ end
 defmodule ElixirRunner.SugarDoNothingProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "sugar_do_nothing"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
     do:
       (
-        Flezha.SDK.Ctx.emit(ctx, input)
+        Ctx.emit(ctx, input)
         {:ok, s}
       )
 end
@@ -203,11 +221,14 @@ end
 defmodule ElixirRunner.SugarStoreInputProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "sugar_store_input"
   def init_state(_), do: %{text_inputs: []}
 
   def run(input, s, ctx) do
-    Flezha.SDK.Ctx.emit(ctx, input)
+    Ctx.emit(ctx, input)
     {:ok, %{s | text_inputs: [input | s.text_inputs]}}
   end
 end
@@ -233,6 +254,9 @@ end
 defmodule ElixirRunner.HybridProducerProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "hybrid_producer_procedure"
   def init_state(_), do: nil
 
@@ -243,7 +267,7 @@ defmodule ElixirRunner.HybridProducerProc do
         _ -> 0
       end
 
-    Flezha.SDK.Ctx.emit(ctx, n)
+    Ctx.emit(ctx, n)
     {:ok, s}
   end
 end
@@ -290,6 +314,9 @@ end
 defmodule ElixirRunner.PoisonProbeProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   @antidote {__MODULE__, :antidote}
   def name, do: "poison_probe_procedure"
   def init_state(_), do: nil
@@ -300,7 +327,7 @@ defmodule ElixirRunner.PoisonProbeProc do
     if input == "poison" and not :persistent_term.get(@antidote, false) do
       {:error, "poison payload"}
     else
-      Flezha.SDK.Ctx.emit(ctx, "ok:" <> input)
+      Ctx.emit(ctx, "ok:" <> input)
       {:ok, s}
     end
   end
@@ -326,6 +353,9 @@ end
 defmodule ElixirRunner.WedgeProbeProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   @aborted {__MODULE__, :aborted}
 
   def name, do: "wedge_probe_procedure"
@@ -340,7 +370,7 @@ defmodule ElixirRunner.WedgeProbeProc do
   # where user code can take its Entity process down untrappably.
   def run("abort", s, ctx) do
     if :persistent_term.get(@aborted, false) do
-      Flezha.SDK.Ctx.emit(ctx, "ok:abort")
+      Ctx.emit(ctx, "ok:abort")
       {:ok, s}
     else
       :persistent_term.put(@aborted, true)
@@ -351,7 +381,7 @@ defmodule ElixirRunner.WedgeProbeProc do
   def run(input, s, ctx),
     do:
       (
-        Flezha.SDK.Ctx.emit(ctx, "ok:" <> input)
+        Ctx.emit(ctx, "ok:" <> input)
         {:ok, s}
       )
 end
@@ -377,12 +407,15 @@ end
 defmodule ElixirRunner.DropNothingTestProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "drop_nothing_test_procedure"
   def init_state(_), do: %{processed: 0}
   def mailbox_capacity, do: 4
 
   def run(input, s, ctx) do
-    Flezha.SDK.Ctx.emit(ctx, input)
+    Ctx.emit(ctx, input)
     {:ok, %{s | processed: s.processed + 1}}
   end
 end
@@ -461,12 +494,15 @@ end
 defmodule ElixirRunner.PartitionRelayProc do
   @moduledoc false
   @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
   def name, do: "partition_relay_procedure"
   def init_state(_), do: %{seen: []}
 
   # Rust emits keyed on the same prefix; v1 has no `emit_keyed`, same bytes unkeyed.
   def run(input, s, ctx) do
-    Flezha.SDK.Ctx.emit(ctx, input)
+    Ctx.emit(ctx, input)
     {:ok, %{s | seen: [input | s.seen]}}
   end
 end

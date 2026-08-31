@@ -11,6 +11,7 @@ defmodule Flezha.SDK.Transport do
 
   alias Flezha.Transport.Local
   alias Flezha.Transport.Native
+  alias Flezha.Transport.Server, as: TransportServer
 
   @default_ca_cert "app_data/certs/ca.pem"
 
@@ -26,7 +27,7 @@ defmodule Flezha.SDK.Transport do
     :ok = Flezha.Transport.Stream.controlling_process(sdk, owner)
     :ok = Flezha.Transport.Stream.set_active(sdk)
 
-    case Flezha.Transport.Server.connect(payload, controller) do
+    case TransportServer.connect(payload, controller) do
       {:ok, _runner_id} -> {:ok, sdk, nil}
       {:error, reason} -> {:error, reason}
     end
@@ -71,10 +72,10 @@ defmodule Flezha.SDK.Transport do
     result =
       Enum.reduce(0..(count - 1), {[], []}, fn _key, {prims, secs} ->
         {sdk_p, ctrl_p} = Local.Stream.open()
-        {:ok, :primary, _} = Flezha.Transport.Server.bind_data_stream(runner_id, 1, ctrl_p)
+        {:ok, :primary, _} = TransportServer.bind_data_stream(runner_id, 1, ctrl_p)
 
         {sdk_s, ctrl_s} = Local.Stream.open()
-        {:ok, :secondary, _} = Flezha.Transport.Server.bind_data_stream(runner_id, 2, ctrl_s)
+        {:ok, :secondary, _} = TransportServer.bind_data_stream(runner_id, 2, ctrl_s)
 
         {[sdk_p | prims], [sdk_s | secs]}
       end)

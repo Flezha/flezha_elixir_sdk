@@ -25,6 +25,9 @@ defmodule Flezha.SDK.RunnerServer do
     Park
   }
 
+  alias Flezha.SDK.Entity
+  alias Flezha.Transport.Server, as: TransportServer
+
   @name __MODULE__
   @hb_default_ms 10_000
   @control_keepalive_ms 15_000
@@ -85,7 +88,7 @@ defmodule Flezha.SDK.RunnerServer do
     topologies = Keyword.fetch!(opts, :topologies)
     factories = Keyword.fetch!(opts, :factories)
 
-    if transport == :native, do: Flezha.Transport.Server.ensure_started(:native)
+    if transport == :native, do: TransportServer.ensure_started(:native)
 
     stable_id = PersistentId.stable_id(namespace, Enum.map(factories, &elem(&1, 0)))
 
@@ -487,7 +490,7 @@ defmodule Flezha.SDK.RunnerServer do
 
       {%{entity: entity, timer: timer}, parks} ->
         if timer, do: Process.cancel_timer(timer)
-        if Process.alive?(entity), do: Flezha.SDK.Entity.release_park(entity, park_id)
+        if Process.alive?(entity), do: Entity.release_park(entity, park_id)
         %{s | parks: parks}
     end
   end

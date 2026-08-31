@@ -13,6 +13,7 @@ defmodule Flezha.SDK.Entity do
   require Logger
 
   alias Flezha.SDK.{Ctx, Counters, Park, Jitter}
+  alias Flezha.SDK.Operative
 
   @retry_backoff_cap_ms 5_000
 
@@ -273,7 +274,7 @@ defmodule Flezha.SDK.Entity do
     channel = s.input_channel || s.node_name || s.operative_id
     body = Park.body(park_id, channel, error, attempts, value)
 
-    Flezha.SDK.Operative.park(
+    Operative.park(
       s.operative,
       self(),
       Park.identity(s.operative_id, s.module.name(), s.entity_key),
@@ -289,7 +290,7 @@ defmodule Flezha.SDK.Entity do
     values = Enum.map(emits, fn {value, _meta} -> value end)
 
     if values != [],
-      do: Flezha.SDK.Operative.emitted(s.operative, s.node_ref, s.entity_key, values)
+      do: Operative.emitted(s.operative, s.node_ref, s.entity_key, values)
   end
 
   # Two readers, one event: telemetry is the in-node handle, the counter is what

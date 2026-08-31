@@ -15,6 +15,7 @@ defmodule Flezha.SDK.Operative do
   require Logger
 
   alias Flezha.SDK.{Counters, Entity, Procedure, KeyGroup, Channels, Park}
+  alias Flezha.SDK.RunnerServer
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
@@ -110,7 +111,7 @@ defmodule Flezha.SDK.Operative do
 
   @impl true
   def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
-    Flezha.SDK.RunnerServer.park(s.runner, entity_pid, identity, body)
+    RunnerServer.park(s.runner, entity_pid, identity, body)
     {:noreply, s}
   end
 
@@ -277,7 +278,7 @@ defmodule Flezha.SDK.Operative do
   defp park_pre_dispatch(%State{} = s, label, error, payload) do
     park_id = "#{s.operative_id}/#{label}##{System.unique_integer([:positive, :monotonic])}"
 
-    Flezha.SDK.RunnerServer.park(
+    RunnerServer.park(
       s.runner,
       self(),
       Park.identity(s.operative_id, label, ""),
