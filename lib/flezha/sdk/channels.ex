@@ -132,14 +132,12 @@ defmodule Flezha.SDK.Channels do
 
   def named(%Stream{source: {:node, node_ref}, builder: ref} = s, name) when is_binary(name) do
     update(ref, fn acc ->
-      cond do
-        Map.get(acc.node_names, name) not in [nil, node_ref] ->
-          add_issue(acc, {:NodeIdentityCollision, name})
-
-        true ->
-          acc
-          |> put_in([:node_names, name], node_ref)
-          |> put_in([:nodes, node_ref, :name], name)
+      if Map.get(acc.node_names, name) in [nil, node_ref] do
+        acc
+        |> put_in([:node_names, name], node_ref)
+        |> put_in([:nodes, node_ref, :name], name)
+      else
+        add_issue(acc, {:NodeIdentityCollision, name})
       end
     end)
 
@@ -162,9 +160,8 @@ defmodule Flezha.SDK.Channels do
 
   # --- default codecs ---
 
-  @doc false
-  def default_parse(bytes) when is_binary(bytes), do: {:ok, bytes}
-  def default_parse(other), do: {:ok, other}
+  defp default_parse(bytes) when is_binary(bytes), do: {:ok, bytes}
+  defp default_parse(other), do: {:ok, other}
 
   @doc false
   def default_serialize(v) when is_binary(v), do: v

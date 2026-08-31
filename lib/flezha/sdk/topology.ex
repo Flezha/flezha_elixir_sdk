@@ -211,13 +211,11 @@ defmodule Flezha.SDK.Topology do
   end
 
   defp cyclic?(node, adj, visiting, _done) do
-    cond do
-      MapSet.member?(visiting, node) ->
-        true
-
-      true ->
-        visiting = MapSet.put(visiting, node)
-        Enum.any?(Map.get(adj, node, []), &cyclic?(&1, adj, visiting, MapSet.new()))
+    if MapSet.member?(visiting, node) do
+      true
+    else
+      visiting = MapSet.put(visiting, node)
+      Enum.any?(Map.get(adj, node, []), &cyclic?(&1, adj, visiting, MapSet.new()))
     end
   end
 

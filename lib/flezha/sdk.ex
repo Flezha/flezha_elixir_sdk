@@ -11,7 +11,7 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{Topology, RunnerServer}
+  alias Flezha.SDK.{RunnerServer, Topology}
 
   @enforce_keys [:namespace]
   defstruct namespace: nil, transport: :native, streams: [], server: nil

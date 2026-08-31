@@ -16,16 +16,16 @@ defmodule Flezha.SDK.RunnerServer do
   alias Flezha.SDK.{
     Codec,
     Counters,
-    PersistentId,
-    Operative,
-    KeyGroup,
-    Transport,
     DataStream,
+    Entity,
     Jitter,
-    Park
+    KeyGroup,
+    Operative,
+    Park,
+    PersistentId,
+    Transport
   }
 
-  alias Flezha.SDK.Entity
   alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
@@ -68,10 +68,6 @@ defmodule Flezha.SDK.RunnerServer do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: @name)
 
   def whereis, do: Process.whereis(@name)
-
-  @doc "Route a park request from an operative; the runner owns the ack loop."
-  def park(server, entity_pid, identity, body),
-    do: GenServer.cast(server, {:park, entity_pid, identity, body})
 
   @doc "Post-start declared-set mutations (ships UpdateFactories)."
   def define(server, module, topology), do: GenServer.call(server, {:define, module, topology})

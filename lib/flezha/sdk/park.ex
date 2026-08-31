@@ -5,7 +5,12 @@ defmodule Flezha.SDK.Park do
   an entry-parse failure, a partition mis-route — routes its body through here so
   the shape stays in one place. Payload bytes are recoverable for binary inputs
   only (Rust parity); other terms park without bytes. This module also owns the
-  postcard-encoding seam (`Flezha.State.Wire`) for the `park_payload` frame.
+  postcard-encoding seam (`Flezha.State.Wire`) for the `park_payload` frame, and
+  `ship/4`, the one hop a park takes towards the runner that owns its ack.
+
+  `ship/4`'s `{:park, …}` is answered by `Flezha.SDK.Operative.handle_cast/2`
+  when the destination is an operative, and by
+  `Flezha.SDK.RunnerServer.handle_cast/2` when it is the runner.
   """
 
   alias Flezha.State.Wire
@@ -34,8 +39,8 @@ defmodule Flezha.SDK.Park do
   end
 
   @spec recoverable_payload(term()) :: binary() | nil
-  def recoverable_payload(value) when is_binary(value), do: value
-  def recoverable_payload(_value), do: nil
+  defp recoverable_payload(value) when is_binary(value), do: value
+  defp recoverable_payload(_value), do: nil
 
   @doc """
   The `park_payload` frame: the Entity identity, a seq and a zero header over
@@ -46,4 +51,12 @@ defmodule Flezha.SDK.Park do
   def frame(identity, seq, body) do
     Wire.encode_frame(identity, seq, <<0::128>>, Wire.encode_park_body(body))
   end
+
+  @doc """
+  Hand a park to `to` — an Entity's operative, or an operative's runner. One hop
+  per level; the runner owns the ack loop.
+  """
+  @spec ship(GenServer.server(), pid(), binary(), map()) :: :ok
+  def ship(to, entity_pid, identity, body),
+    do: GenServer.cast(to, {:park, entity_pid, identity, body})
 end

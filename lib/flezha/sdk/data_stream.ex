@@ -9,7 +9,7 @@ defmodule Flezha.SDK.DataStream do
 
   use GenServer
 
-  alias Flezha.SDK.Operative
+  alias Flezha.SDK.Operative.Inbox
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -30,7 +30,7 @@ defmodule Flezha.SDK.DataStream do
   def handle_info({:flz_data, _id, operative_id, message, metadata}, state) do
     case :ets.lookup(state.registry, operative_id) do
       [{^operative_id, op_pid}] ->
-        Operative.input(op_pid, metadata["channel"], message, metadata)
+        Inbox.input(op_pid, metadata["channel"], message, metadata)
 
       [] ->
         :ok

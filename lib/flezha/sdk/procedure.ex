@@ -44,15 +44,13 @@ defmodule Flezha.SDK.Procedure do
 
   @doc "Per-Entity mailbox capacity. Overridden callback wins; else the env; else 1024."
   def mailbox_capacity(module) do
-    cond do
-      exports?(module, :mailbox_capacity, 0) ->
-        validate_capacity!(module.mailbox_capacity(), module)
-
-      true ->
-        case System.get_env(@env_mailbox_capacity) do
-          nil -> @default_mailbox_capacity
-          val -> validate_capacity!(parse_capacity(val), module)
-        end
+    if exports?(module, :mailbox_capacity, 0) do
+      validate_capacity!(module.mailbox_capacity(), module)
+    else
+      case System.get_env(@env_mailbox_capacity) do
+        nil -> @default_mailbox_capacity
+        val -> validate_capacity!(parse_capacity(val), module)
+      end
     end
   end
 

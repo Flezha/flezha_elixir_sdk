@@ -14,8 +14,7 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Entity, Procedure, KeyGroup, Channels, Park}
-  alias Flezha.SDK.RunnerServer
+  alias Flezha.SDK.{Channels, Counters, Entity, KeyGroup, Park, Procedure}
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
@@ -37,18 +36,6 @@ defmodule Flezha.SDK.Operative do
   # --- API ---
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
-
-  @doc "Route a raw input frame arriving on an entry channel."
-  def input(pid, channel, message, metadata),
-    do: GenServer.cast(pid, {:input, channel, message, metadata})
-
-  @doc "An Entity finished a dispatch and emitted values on its node's outputs."
-  def emitted(pid, node_ref, entity_key, values),
-    do: GenServer.cast(pid, {:emitted, node_ref, entity_key, values})
-
-  @doc "Forward an exhausted-ladder park to the runner (which owns the ack)."
-  def park(pid, entity_pid, identity, body),
-    do: GenServer.cast(pid, {:park, entity_pid, identity, body})
 
   def stop(pid), do: GenServer.stop(pid, :normal)
 
@@ -111,7 +98,7 @@ defmodule Flezha.SDK.Operative do
 
   @impl true
   def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
-    RunnerServer.park(s.runner, entity_pid, identity, body)
+    Park.ship(s.runner, entity_pid, identity, body)
     {:noreply, s}
   end
 
@@ -278,7 +265,7 @@ defmodule Flezha.SDK.Operative do
   defp park_pre_dispatch(%State{} = s, label, error, payload) do
     park_id = "#{s.operative_id}/#{label}##{System.unique_integer([:positive, :monotonic])}"
 
-    RunnerServer.park(
+    Park.ship(
       s.runner,
       self(),
       Park.identity(s.operative_id, label, ""),
@@ -305,10 +292,9 @@ defmodule Flezha.SDK.Operative do
 
   # An unknown/absent channel falls back to the first declared entry.
   defp resolve_channel(topo, channel) do
-    cond do
-      is_binary(channel) and Map.has_key?(topo.entries, channel) -> channel
-      true -> topo.entries |> Map.keys() |> List.first()
-    end
+    if is_binary(channel) and Map.has_key?(topo.entries, channel),
+      do: channel,
+      else: topo.entries |> Map.keys() |> List.first()
   end
 
   # Sink outputs ride a secondary stream directly (no router hop). The controller
