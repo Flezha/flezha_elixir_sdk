@@ -28,7 +28,15 @@ defmodule Flezha.SDK.Entity.Records do
     case Record.fold(s.module, s.entity_key, header, snapshot, log, hint) do
       {:ok, restored, terminal, migrated} ->
         timers = %{s.timers | pending: restored.timers, high_water: restored.high_water}
-        tier = %{s.tier | staged: Interval.clear(s.tier.staged), floor: restored.floor}
+        # The slice goes with the interval: a restore re-seats the Entity on a
+        # past in which no buffered member was seen, and the controller
+        # re-forwards the slice from the rewound watermark.
+        tier = %{
+          s.tier
+          | staged: Interval.clear(s.tier.staged),
+            floor: restored.floor,
+            slice: []
+        }
 
         s = %{
           s
@@ -159,6 +167,24 @@ defmodule Flezha.SDK.Entity.Records do
 
         s
     end
+  end
+
+  @doc """
+  Ask the controller to correct behind `target_event_time`: one fire-and-forget
+  frame on the Entity's own state stream. The controller coalesces duplicates
+  and re-raises a lost one when the input is re-delivered, so there is no ack
+  and nothing here to keep.
+  """
+  @spec request_correction(State.t(), non_neg_integer()) :: :ok
+  def request_correction(%State{} = s, target_event_time) do
+    send_record(
+      s,
+      0,
+      "correction_request",
+      Record.correction_frame(s.identity, target_event_time)
+    )
+
+    :ok
   end
 
   defp ship_effect(%State{persistent?: false} = s, _record, _dlq, _hold_ref),

@@ -34,8 +34,9 @@ defmodule Flezha.SDK.Entity.State do
     # One field again, for the same reason: whether the class declares the
     # effectively-once tier, its checkpoint policy, the node's sink routes the
     # Entity captures its outputs through, whether it has an inter-procedure
-    # edge, the open interval, the consumed floor, the armed deadline and the
-    # records owed to an edge report.
+    # edge, the open interval, the consumed floor, the armed deadline, the
+    # records owed to an edge report, the declared correction policy and the
+    # replay slice buffered until its end marker.
     tier: %{
       on?: false,
       checkpoint: nil,
@@ -44,7 +45,9 @@ defmodule Flezha.SDK.Entity.State do
       staged: %Flezha.SDK.Entity.Interval{},
       floor: -1,
       deadline: nil,
-      owed: :queue.new()
+      owed: :queue.new(),
+      correction: nil,
+      slice: []
     },
     changeful?: false,
     persistent?: false,

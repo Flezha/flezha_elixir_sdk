@@ -118,6 +118,22 @@ defmodule Flezha.SDK.Record do
     Wire.encode_frame(identity, seq, header(body, schema_version, @format_id_effect_record), body)
   end
 
+  @doc """
+  The wire frame of a `correction_request`. Not a record: it spends no seq and
+  carries no record header, so the 16 header bytes are zero and the seq is —
+  the same envelope a `park_payload` takes. Its body is the late input's event
+  time alone; the identity rides the envelope.
+  """
+  @spec correction_frame(binary(), non_neg_integer()) :: binary()
+  def correction_frame(identity, target_event_time),
+    do:
+      Wire.encode_frame(
+        identity,
+        0,
+        <<0::128>>,
+        Wire.encode_correction_request(target_event_time)
+      )
+
   @doc "The wire frame of a timer-ops record at `seq`: the shared postcard body under `format_id` 3."
   @spec timer_ops_frame(binary(), non_neg_integer(), [Timers.op()], pos_integer()) :: binary()
   def timer_ops_frame(identity, seq, ops, schema_version) do

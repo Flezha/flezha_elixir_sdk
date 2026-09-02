@@ -11,6 +11,9 @@
 # operative started under v1 and restarted under v2 restores from the very WAL
 # v1 wrote. `session_timeout` is the worked timer shape: durable, so the e2e's
 # re-seat half folds its pending timer back out of the change log.
+# `checkpoint_store` / `checkpoint_batched_store` are the tier's two
+# checkpoint postures over one procedure; `tier_store` and `bench_checkpoint`
+# come from the bench factories the application registers beside these.
 
 # -- store_input ------------------------------------------------------------
 
@@ -366,6 +369,77 @@ defmodule ElixirRunner.SessionTimeoutOp do
   end
 end
 
+# -- checkpoint_store / checkpoint_batched_store ------------------------------
+
+# The same keyed upsert as `tier_store`, acknowledging only at an explicit
+# checkpoint: a `commit:` input closes the interval and records nothing, every
+# other input folds into it. `checkpoint_batched_store` adds
+# `outputs_at_checkpoint`, so the interval's outputs are held with its changes
+# and ship inside its closing record; `checkpoint_every` is deliberately absent
+# from both, so the e2e drives every close itself.
+defmodule ElixirRunner.CheckpointStoreProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.Bench.TierStoreProc
+  alias Flezha.SDK.Ctx
+
+  def name, do: "checkpoint_store_procedure"
+  defdelegate init_state(key), to: TierStoreProc
+  defdelegate apply_change(state, change), to: TierStoreProc
+  def state_from_json(json), do: json
+
+  def run(input, s, ctx) do
+    case TierStoreProc.split(input) do
+      {"commit", _} ->
+        Ctx.checkpoint(ctx)
+        {:ok, s}
+
+      {key, value} ->
+        TierStoreProc.upsert(key, value, s, ctx)
+    end
+  end
+end
+
+defmodule ElixirRunner.CheckpointStoreOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "checkpoint_store"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> effectively_once()
+    |> checkpoint_ack()
+    |> input("input")
+    |> into(ElixirRunner.CheckpointStoreProc)
+    |> named("sink")
+    |> keyed()
+    |> sink("tier_sink")
+  end
+end
+
+defmodule ElixirRunner.CheckpointBatchedOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "checkpoint_batched_store"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> effectively_once()
+    |> checkpoint_ack()
+    |> outputs_at_checkpoint(1_500)
+    |> input("input")
+    |> into(ElixirRunner.CheckpointStoreProc)
+    |> named("sink")
+    |> keyed()
+    |> sink("tier_sink")
+  end
+end
+
 defmodule ElixirRunner.Numbers do
   @moduledoc false
 
@@ -375,6 +449,66 @@ defmodule ElixirRunner.Numbers do
       {n, ""} -> n
       _ -> 0
     end
+  end
+end
+
+# -- candle (stream-late-input-correction) ------------------------------------
+#
+# A trade stream keyed by an EVENT time carried in the input itself
+# ("<event_time>:<price>"), with a declared correction window. State records the
+# event times in the order they were folded, which is the whole point: a late
+# trade must end up folded in event-time order, not arrival order, and the only
+# way to prove that is to look at the order.
+#
+# Send 100, 300, then the late 200. Without correction the fold order is
+# [100, 300, 200] and the candle is permanently wrong. With it, the engine
+# rewinds behind 200, replays the retained input log sorted by event time, and
+# the fold order becomes [100, 200, 300].
+defmodule ElixirRunner.CandleProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "candle_procedure"
+  def clock, do: :event_time
+
+  # : Event times in fold order. The assertion surface.
+  def init_state(_), do: %{folded: []}
+  def apply_change(s, {:fold, at}), do: %{s | folded: s.folded ++ [at]}
+  def state_from_json(%{"folded" => folded}), do: %{folded: folded}
+
+  def event_time_of(input),
+    do: input |> String.split(":", parts: 2) |> hd() |> ElixirRunner.Numbers.int()
+
+  def run(input, s, ctx) do
+    # `Ctx.now/1` IS the extracted event time under an event-time clock.
+    at = Ctx.now(ctx)
+    s = Ctx.apply(ctx, s, {:fold, at})
+    # One row per candle bucket, so a corrected replay overwrites by key rather
+    # than appending a second row.
+    bucket = div(at, 1_000)
+    Ctx.emit_keyed(ctx, "candle/#{bucket}", "#{bucket}=#{input}")
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.CandleOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "candle"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> effectively_once()
+    |> correction_window(600_000)
+    |> input("input")
+    |> into(ElixirRunner.CandleProc)
+    |> named("sink")
+    |> keyed()
+    |> sink("tier_sink")
   end
 end
 
@@ -390,7 +524,10 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.ResumeProbeOp,
       ElixirRunner.SchemaEvolutionV1Op,
       ElixirRunner.SchemaEvolutionV2Op,
-      ElixirRunner.SessionTimeoutOp
+      ElixirRunner.SessionTimeoutOp,
+      ElixirRunner.CheckpointStoreOp,
+      ElixirRunner.CheckpointBatchedOp,
+      ElixirRunner.CandleOp
     ]
   end
 end

@@ -31,7 +31,7 @@ defmodule Flezha.SDK.Operative do
   @default_retry_backoff_ms 50
   # What an entry input carries into routing: no metadata, no key, no Entity,
   # and the durable offset the controller stamped under the tier.
-  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil}
+  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
   # How long a sweep waits on one Entity's idle probe before moving on.
   @idle_probe_ms 50
   # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
@@ -198,7 +198,16 @@ defmodule Flezha.SDK.Operative do
     end)
   end
 
+  # The end of a replayed slice: a payload-less broadcast closing every Entity's
+  # slice at once, because an input reaches ONE Entity by key and a marker
+  # riding one would strand the slice every other Entity buffered. It names no
+  # channel, so it is answered before any is resolved.
   @impl true
+  def handle_cast({:input, _channel, _message, %{"flz.replay_end" => _}}, %State{} = s) do
+    for {_node_ref, keyed} <- s.entities, {_key, pid} <- keyed, do: send(pid, :end_replay_slice)
+    {:noreply, s}
+  end
+
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     channel = resolve_channel(s.topology, channel)
     # The frame counts before it can be declined: the stamp precedes the parse.
@@ -206,7 +215,8 @@ defmodule Flezha.SDK.Operative do
 
     case parse(s.topology, channel, message) do
       {:ok, value} ->
-        emit = %{@entry_emit | offset: consumed_offset(s.topology, metadata)}
+        {offset, replay} = frame_facts(s.topology, metadata)
+        emit = %{@entry_emit | offset: offset, replay: replay}
         {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
         {:noreply, s}
 
@@ -389,25 +399,32 @@ defmodule Flezha.SDK.Operative do
          ordinal
        ) do
     key = if key_by, do: key_by.(value), else: nil
-    {deliver_to_node(s, node_ref, value, key, emit.offset), ordinal}
+    {deliver_to_node(s, node_ref, value, key, emit), ordinal}
   end
 
-  # What the controller stamped on a forwarded input of a tier class; nothing
-  # off the tier, where no metadata is read at all.
-  defp consumed_offset(%{effectively_once?: true}, metadata) when is_map(metadata) do
-    case Integer.parse(Map.get(metadata, "flz.offset", "")) do
-      {offset, _rest} -> offset
-      :error -> nil
-    end
+  # What the controller stamped on a forwarded input of a tier class: the
+  # durable offset, and whether the frame is a member of a replayed slice.
+  # Nothing off the tier, where no metadata is read at all.
+  defp frame_facts(%{effectively_once?: true}, metadata) when is_map(metadata) do
+    offset =
+      case Integer.parse(Map.get(metadata, "flz.offset", "")) do
+        {offset, _rest} -> offset
+        :error -> nil
+      end
+
+    {offset, if(Map.has_key?(metadata, "flz.replay"), do: :member)}
   end
 
-  defp consumed_offset(_topo, _metadata), do: nil
+  defp frame_facts(_topo, _metadata), do: {nil, nil}
 
-  # The queue item: under the tier the offset rides the input, so the Entity
-  # can skip a re-forward it already made durable. Off the tier the queue is
-  # the raw value it has always been.
-  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, offset) do
-    item = if topo.effectively_once?, do: %Entity.Input{value: value, offset: offset}, else: value
+  # The queue item: under the tier the offset and the replay mark ride the
+  # input, so the Entity can skip a re-forward it already made durable and hold
+  # a slice member back. Off the tier the queue is the raw value it always was.
+  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, emit) do
+    item =
+      if topo.effectively_once?,
+        do: %Entity.Input{value: value, offset: emit.offset, replay: Map.get(emit, :replay)},
+        else: value
 
     case Map.fetch!(topo.node_mode, node_ref) do
       :single ->
@@ -524,7 +541,8 @@ defmodule Flezha.SDK.Operative do
       on?: topo.effectively_once?,
       checkpoint: topo.checkpoint,
       sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
-      edges?: Enum.any?(routes, &match?(%{to: {:node, _}}, &1))
+      edges?: Enum.any?(routes, &match?(%{to: {:node, _}}, &1)),
+      correction: topo.correction
     }
   end
 

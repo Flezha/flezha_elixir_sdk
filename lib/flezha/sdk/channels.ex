@@ -5,8 +5,8 @@ defmodule Flezha.SDK.Channels do
   (`into`/`into_named`/`sink`/`sink_with`/`sealed`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
   identity on the sink the handle reaches) and the class-level tier
-  declarations (`effectively_once` and the three checkpoint options, which take
-  and answer the token itself). Handles carry their pending
+  declarations (`effectively_once`, the three checkpoint options and the two
+  correction options, which take and answer the token itself). Handles carry their pending
   transform chain functionally; consumers write to a build accumulator kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
   builder's `pending`). Fan-out is handle reuse. Refusals accumulate — nothing
@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Channels do
       sinks: [],
       knobs: %{},
       chains: %{},
-      tier: %{effectively_once: false, checkpoint: nil},
+      tier: %{effectively_once: false, checkpoint: nil, correction: nil},
       issues: []
     })
 
@@ -75,6 +75,30 @@ defmodule Flezha.SDK.Channels do
       put_in(
         acc.tier.checkpoint,
         amend.(acc.tier.checkpoint || %{every: nil, outputs: :as_produced, max_delay_ms: nil})
+      )
+    end)
+
+    c
+  end
+
+  @doc "Declare a late-input correction window in milliseconds; requires `effectively_once/1`."
+  def correction_window(%__MODULE__{} = c, ms) when is_integer(ms) and ms >= 0,
+    do: correction_policy(c, &%{&1 | window_ms: ms})
+
+  @doc "Fate of an input later than the window: `:process_as_arrival` (the default) or `:drop`."
+  def beyond_window_policy(%__MODULE__{} = c, policy)
+      when policy in [:process_as_arrival, :drop],
+      do: correction_policy(c, &%{&1 | beyond_window: policy})
+
+  # Both correction options amend the one policy, so they compose in either
+  # order and neither clears the other. A policy declared alone therefore
+  # leaves the window at zero, which is refused: a fate for a window nobody
+  # declared is an authoring error, not a default.
+  defp correction_policy(%__MODULE__{ref: ref} = c, amend) do
+    update(ref, fn acc ->
+      put_in(
+        acc.tier.correction,
+        amend.(acc.tier.correction || %{window_ms: 0, beyond_window: :process_as_arrival})
       )
     end)
 

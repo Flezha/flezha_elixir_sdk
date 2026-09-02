@@ -472,8 +472,10 @@ defmodule Flezha.SDK.RunnerServer do
 
   # What the class declares to the controller: partitionability only when
   # refusable, the compaction threshold only when it differs from the default,
-  # the tier and its granularity when declared. The cadence, the outputs
-  # posture and the delay stay SDK-side, as they do in every other SDK.
+  # the tier and its granularity when declared, and both correction keys
+  # whenever a window is — an undeclared beyond-window fate reaches the
+  # controller as the default rather than as an absence, as it does in every
+  # other SDK. The cadence, the outputs posture and the delay stay SDK-side.
   @doc false
   def declarations(topo) do
     keyed = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}
@@ -489,7 +491,17 @@ defmodule Flezha.SDK.RunnerServer do
         do: Map.put(compacted, "effectively_once", "true"),
         else: compacted
 
-    if topo.checkpoint, do: Map.put(tiered, "ack_granularity", "checkpoint"), else: tiered
+    acked = if topo.checkpoint, do: Map.put(tiered, "ack_granularity", "checkpoint"), else: tiered
+
+    corrected(acked, topo.correction)
+  end
+
+  defp corrected(declarations, nil), do: declarations
+
+  defp corrected(declarations, %{window_ms: window_ms, beyond_window: beyond_window}) do
+    declarations
+    |> Map.put("correction_window_ms", Integer.to_string(window_ms))
+    |> Map.put("beyond_window_policy", Atom.to_string(beyond_window))
   end
 
   defp seed_init_values(op_pid, add) do

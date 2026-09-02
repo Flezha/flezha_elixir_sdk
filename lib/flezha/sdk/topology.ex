@@ -29,7 +29,8 @@ defmodule Flezha.SDK.Topology do
             persistence_enabled?: true,
             compact_after_bytes: nil,
             effectively_once?: false,
-            checkpoint: nil
+            checkpoint: nil,
+            correction: nil
 
   @type t :: %__MODULE__{}
 
@@ -71,7 +72,8 @@ defmodule Flezha.SDK.Topology do
          persistence_enabled?: StreamOperative.persistence_enabled?(module),
          compact_after_bytes: compact_after_bytes(acc),
          effectively_once?: acc.tier.effectively_once,
-         checkpoint: acc.tier.checkpoint
+         checkpoint: acc.tier.checkpoint,
+         correction: acc.tier.correction
        }}
     else
       {:error, {:invalid_topology, Enum.reverse(issues)}}
@@ -162,6 +164,7 @@ defmodule Flezha.SDK.Topology do
     issues = check_cycles(acc, routes, issues)
 
     issues = check_tier(op_module, acc, issues)
+    issues = check_correction(op_module, acc, issues)
 
     check_changeful_identity(acc, issues)
   end
@@ -185,6 +188,41 @@ defmodule Flezha.SDK.Topology do
     is = if policy != nil and not on?, do: [{:CheckpointAckWithoutTier, name} | is], else: is
     is = if policy[:every] == 0, do: [{:CheckpointEveryZero, name} | is], else: is
     if policy[:max_delay_ms] == 0, do: [{:CheckpointMaxDelayZero, name} | is], else: is
+  end
+
+  # What a correction window refuses, the reference's names
+  # (`sdk/rust/src/channel/builder/issue.rs` `CorrectionWithoutTier` /
+  # `CorrectionWithoutEventTime` / `CorrectionWindowZero`, plus the core's
+  # "at least one event_time-clocked procedure" at `register.rs`). A shedding
+  # policy needs no clause of its own: a window requires the tier, and
+  # `shedding_edges/3` already refuses every shedding edge under it.
+  defp check_correction(_op_module, %{tier: %{correction: nil}}, issues), do: issues
+
+  defp check_correction(op_module, acc, issues) do
+    %{effectively_once: on?, correction: %{window_ms: window_ms}} = acc.tier
+    name = mod_name(op_module)
+
+    issues = if on?, do: issues, else: [{:CorrectionWithoutTier, name} | issues]
+    issues = if window_ms == 0, do: [{:CorrectionWindowZero, name} | issues], else: issues
+    event_time_clock(issues, acc)
+  end
+
+  # Sorted by procedure name so the refusal names the same procedure on every
+  # run: node refs are `make_ref/0` and their map order is not declaration order.
+  defp event_time_clock(issues, acc) do
+    clocks =
+      acc.nodes
+      |> Enum.map(fn {_ref, %{module: m}} -> {m.name(), Procedure.clock(m)} end)
+      |> Enum.sort()
+
+    if Enum.any?(clocks, fn {_name, clock} -> clock == :event_time end) do
+      issues
+    else
+      case clocks do
+        [{name, clock} | _] -> [{:CorrectionWithoutEventTime, name, clock} | issues]
+        [] -> issues
+      end
+    end
   end
 
   defp unkeyed_sinks(is, false, _acc), do: is

@@ -30,8 +30,6 @@
   },
   "toolchain": "elixir --version",
   "deferred": [
-    "effectively_once",
-    "correction_window",
     "workflow"
   ],
   "fixtures": {
@@ -92,6 +90,15 @@
     ],
     "entity_timers": [
       "session_timeout"
+    ],
+    "effectively_once": [
+      "tier_store",
+      "checkpoint_store",
+      "checkpoint_batched_store",
+      "bench_checkpoint"
+    ],
+    "correction_window": [
+      "candle"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"
