@@ -11,9 +11,9 @@ defmodule Flezha.SDK.Codec do
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
   # the factory-advertisement seam, and a factory whose two halves disagreed
-  # would be placeable on one path and not the other. The SDK persists no
-  # Entity state in v1 and so stamps no record headers, but it advertises
-  # factory ids the Rust and Java test apps also advertise — the controller's
+  # would be placeable on one path and not the other; `Flezha.SDK.Record`
+  # stamps the same byte on every durable record. The SDK advertises factory
+  # ids the Rust and Java test apps also advertise — the controller's
   # placement guard is what keeps those ids from crossing runtimes.
   @sdk_lang 3
 

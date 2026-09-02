@@ -5,7 +5,10 @@ defmodule Flezha.SDK.Procedure do
   `{:ok, new_state} | {:error, reason} | {:error, {:non_retryable, reason}}`.
   Optional, with defaults: `entity_keys/0` (static keyset, `[]`), `entities_for/1`,
   `mailbox_capacity/0` (1024, env `FLEZHA_MAILBOX_CAPACITY`, range 1..=1_048_576),
-  `max_entities/0` (100_000). Dynamic typing collapses the Rust type tokens —
+  `max_entities/0` (100_000 — the cap on a dynamic node's live Entities; at it
+  a new key's input is dropped and counted), `entity_idle_ttl_ms/0` (nil — a
+  dynamic Entity idle past it is evicted destructively by its Operative's
+  sweep; nil never evicts). Dynamic typing collapses the Rust type tokens —
   Input/Output/State are plain terms.
 
   Persistence: a procedure that exports `apply_change/2` is changeful — its
@@ -16,6 +19,15 @@ defmodule Flezha.SDK.Procedure do
   size at which the controller solicits a snapshot; `state_from_json/1` turns
   a JSON object read back from the controller (a migration, `init_values`)
   into this procedure's state term, the object itself by default.
+
+  Schema: `schema_version/0` (1) is stamped on every record and resolved per
+  record on restore against `min_readable_schema_version/0` (the version
+  itself); a record between the floor and the version is handed to
+  `migrate_state/2` (a snapshot) or `migrate_change/2` (a change) with the
+  stamped version and the DECODED term — this SDK's body codec is the
+  language's own — answering `{:ok, term}` at the running version or
+  `{:error, reason}`. Both default to refusing, so a floor declared without
+  its migration fails at the first old record.
   """
 
   alias Flezha.SDK.Ctx
@@ -31,17 +43,29 @@ defmodule Flezha.SDK.Procedure do
   @callback entities_for(input :: term()) :: [String.t()]
   @callback mailbox_capacity() :: pos_integer()
   @callback max_entities() :: pos_integer()
+  @callback entity_idle_ttl_ms() :: pos_integer() | nil
   @callback apply_change(state(), change :: term()) :: state()
   @callback compact_after_bytes() :: pos_integer()
   @callback state_from_json(map()) :: state()
+  @callback schema_version() :: pos_integer()
+  @callback min_readable_schema_version() :: pos_integer()
+  @callback migrate_state(from_version :: pos_integer(), old_state :: term()) ::
+              {:ok, state()} | {:error, term()}
+  @callback migrate_change(from_version :: pos_integer(), old_change :: term()) ::
+              {:ok, term()} | {:error, term()}
 
   @optional_callbacks entity_keys: 0,
                       entities_for: 1,
                       mailbox_capacity: 0,
                       max_entities: 0,
+                      entity_idle_ttl_ms: 0,
                       apply_change: 2,
                       compact_after_bytes: 0,
-                      state_from_json: 1
+                      state_from_json: 1,
+                      schema_version: 0,
+                      min_readable_schema_version: 0,
+                      migrate_state: 2,
+                      migrate_change: 2
 
   @default_mailbox_capacity 1024
   @max_mailbox_capacity 1_048_576
@@ -83,17 +107,47 @@ defmodule Flezha.SDK.Procedure do
       else: @default_max_entities
   end
 
+  @doc "Idle window after which a dynamic Entity is evicted; nil (the default) never evicts."
+  @spec entity_idle_ttl_ms(module()) :: pos_integer() | nil
+  def entity_idle_ttl_ms(module) do
+    if exports?(module, :entity_idle_ttl_ms, 0), do: module.entity_idle_ttl_ms(), else: nil
+  end
+
   @doc "Whether the procedure journals — it exports `apply_change/2`."
   @spec changeful?(module()) :: boolean()
   def changeful?(module), do: exports?(module, :apply_change, 2)
 
-  @doc "The schema version stamped on the procedure's records."
+  @doc "The schema version stamped on the procedure's records (1 unless declared)."
   @spec schema_version(module()) :: pos_integer()
-  def schema_version(_module), do: @default_schema_version
+  def schema_version(module) do
+    if exports?(module, :schema_version, 0),
+      do: module.schema_version(),
+      else: @default_schema_version
+  end
 
-  @doc "The oldest schema version the procedure reads (its own, until it declares one)."
+  @doc "The oldest schema version the procedure reads (its own unless declared)."
   @spec min_readable_schema_version(module()) :: pos_integer()
-  def min_readable_schema_version(module), do: schema_version(module)
+  def min_readable_schema_version(module) do
+    if exports?(module, :min_readable_schema_version, 0),
+      do: module.min_readable_schema_version(),
+      else: schema_version(module)
+  end
+
+  @doc "A snapshot stamped `from` as the running version's state; `:undeclared` without a migration."
+  @spec migrate_state(module(), pos_integer(), term()) ::
+          {:ok, state()} | {:error, term()} | :undeclared
+  def migrate_state(module, from, old) do
+    if exports?(module, :migrate_state, 2), do: module.migrate_state(from, old), else: :undeclared
+  end
+
+  @doc "A change stamped `from` as the running version's change; `:undeclared` without a migration."
+  @spec migrate_change(module(), pos_integer(), term()) ::
+          {:ok, term()} | {:error, term()} | :undeclared
+  def migrate_change(module, from, old) do
+    if exports?(module, :migrate_change, 2),
+      do: module.migrate_change(from, old),
+      else: :undeclared
+  end
 
   @doc "Per-Entity WAL size at which the controller solicits a snapshot (8 MiB unless overridden)."
   @spec compact_after_bytes(module()) :: pos_integer()

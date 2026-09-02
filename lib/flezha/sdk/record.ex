@@ -9,7 +9,8 @@ defmodule Flezha.SDK.Record do
   first, then the change log in the controller's on-disk framing, each record
   checked and its header resolved language first, then format, then schema,
   with the refusal wordings the shared core uses so a controller reads one
-  vocabulary whichever SDK refused.
+  vocabulary whichever SDK refused. A record between the Procedure's readable
+  floor and its version is decoded and handed to its migration.
   """
 
   alias Flezha.SDK.{Codec, Procedure}
@@ -150,9 +151,9 @@ defmodule Flezha.SDK.Record do
   defp restore_snapshot(module, entity_key, _header, <<>>, _versions),
     do: {:ok, module.init_state(entity_key), false}
 
-  defp restore_snapshot(_module, _entity_key, header, bytes, versions) do
+  defp restore_snapshot(module, _entity_key, header, bytes, versions) do
     with {:ok, decision} <- resolve(header, versions),
-         {:ok, state} <- decode(bytes, decision, "snapshot") do
+         {:ok, state} <- decode(bytes, decision, :snapshot, module) do
       {:ok, state, decision != :decode}
     end
   end
@@ -176,7 +177,7 @@ defmodule Flezha.SDK.Record do
 
     with :ok <- check_crc(header, body, crc, seq),
          {:ok, decision} <- resolve(header, versions),
-         {:ok, change} <- decode(body, decision, "change") do
+         {:ok, change} <- decode(body, decision, :change, module) do
       walk(
         tail,
         module,
@@ -197,11 +198,31 @@ defmodule Flezha.SDK.Record do
       else: {:error, "crc32 mismatch on change record (seq=#{seq})"}
   end
 
-  defp decode(bytes, :decode, _what), do: decode_body(bytes)
+  defp decode(bytes, :decode, _what, _module), do: decode_body(bytes)
 
-  defp decode(_bytes, {:migrate, from}, what),
-    do:
-      {:error, "no migration from schema_version #{from}: the procedure declares none (#{what})"}
+  # The decoded term goes to the migration: the body codec is the language's
+  # own, so there is no second codec for an author to choose.
+  defp decode(bytes, {:migrate, from}, what, module) do
+    with {:ok, old} <- decode_body(bytes) do
+      case migrate(module, what, from, old) do
+        {:ok, term} ->
+          {:ok, term}
+
+        :undeclared ->
+          {:error,
+           "no migration from schema_version #{from}: the procedure declares none (#{what})"}
+
+        {:error, reason} ->
+          {:error, "migration from schema_version #{from} failed (#{what}): #{describe(reason)}"}
+      end
+    end
+  end
+
+  defp migrate(module, :snapshot, from, old), do: Procedure.migrate_state(module, from, old)
+  defp migrate(module, :change, from, old), do: Procedure.migrate_change(module, from, old)
+
+  defp describe(reason) when is_binary(reason), do: reason
+  defp describe(reason), do: inspect(reason)
 
   defp lang_name(lang), do: Map.get(@lang_names, lang, "unallocated")
 

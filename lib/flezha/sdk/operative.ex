@@ -7,8 +7,18 @@ defmodule Flezha.SDK.Operative do
   one key, then delivers to the owning Entity (Single/Static/Dynamic) or a sink.
   The partition guard admits a dynamic key before any Entity state exists and
   filters static keys by ownership. Sink outputs and park frames leave on the
-  runner's secondary streams. Routing is serialized here (per-Entity ordering);
-  Entities dispatch concurrently.
+  runner's secondary streams; a sink frame is named by its producing node's
+  channel and, on a sink declared keyed, stamped with the Entity's identity,
+  the seq its dispatch started at with the emit ordinal, and the key. Routing
+  is serialized here (per-Entity ordering); Entities dispatch concurrently.
+
+  A dynamic node's Entities are minted per key up to its `max_entities/0` and,
+  under a declared `entity_idle_ttl_ms/0`, swept by one `:reap` tick here:
+  the sweep runs in this process, so no push can be routed while it asks each
+  Entity whether it is idle — the drain gate — and an idle one evicts itself
+  destructively before the next push can mint its successor. Evicted keys are
+  remembered, bounded, so a live read can say "evicted" rather than "never
+  existed".
   """
 
   use GenServer
@@ -18,6 +28,18 @@ defmodule Flezha.SDK.Operative do
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
+  # What an entry input carries into routing: no metadata, no key, no Entity.
+  @entry_emit %{meta: %{}, key: nil, origin: nil}
+  # How long a sweep waits on one Entity's idle probe before moving on.
+  @idle_probe_ms 50
+  # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
+  @reap_interval_env "FLEZHA_REAP_INTERVAL_MS"
+  @max_reap_interval_ms 30_000
+  # Evicted keys remembered; beyond it a key reads as never existed.
+  @evicted_trace_cap 1_024
+  # Evictions one sweep performs at most: the router is held while it runs,
+  # so a burst of expiries drains over a few ticks rather than stalling it.
+  @evict_budget 256
 
   defmodule State do
     @moduledoc false
@@ -32,6 +54,8 @@ defmodule Flezha.SDK.Operative do
       :credit,
       cells: %{},
       entities: %{},
+      dynamic: %{},
+      evicted: {:queue.new(), 0},
       monitors: %{}
     ]
   end
@@ -48,7 +72,8 @@ defmodule Flezha.SDK.Operative do
   what a restore of state the controller holds for it needs.
   """
   @spec lookup(GenServer.server(), String.t(), String.t() | nil, keyword()) ::
-          {:ok, pid()} | {:error, :procedure_not_found | :entity_not_found}
+          {:ok, pid()}
+          | {:error, :procedure_not_found | :entity_not_found | :entity_evicted | :entity_capped}
   def lookup(pid, procedure, key, opts \\ []),
     do: GenServer.call(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)})
 
@@ -79,26 +104,50 @@ defmodule Flezha.SDK.Operative do
       credit: Keyword.get(opts, :credit),
       # The slot survives the Entity: what a persistent Entity last shipped,
       # for the replacement of one killed untrappably.
-      slots: :ets.new(:flezha_sdk_slots, [:public, :set])
+      slots: :ets.new(:flezha_sdk_slots, [:public, :set]),
+      dynamic: dynamic_knobs(topology)
     }
 
-    {:ok, prewarm(state)}
+    {:ok, state |> prewarm() |> schedule_reap()}
+  end
+
+  # The dynamic nodes' knobs, read once: the cap, and the TTL when declared.
+  defp dynamic_knobs(topo) do
+    for {node_ref, :dynamic} <- topo.node_mode, into: %{} do
+      module = topo.node_modules[node_ref]
+
+      {node_ref,
+       %{cap: Procedure.max_entities(module), ttl_ms: Procedure.entity_idle_ttl_ms(module)}}
+    end
+  end
+
+  # One tick for the whole operative, at the shortest TTL's cadence; no TTL, no tick.
+  defp schedule_reap(%State{dynamic: dynamic} = s) do
+    case for {_ref, %{ttl_ms: ttl}} <- dynamic, ttl != nil, do: ttl do
+      [] -> s
+      ttls -> Process.send_after(self(), :reap, reap_interval(Enum.min(ttls)))
+    end
+
+    s
+  end
+
+  defp reap_interval(ttl_ms) do
+    with val when is_binary(val) <- System.get_env(@reap_interval_env),
+         {ms, _} <- Integer.parse(val) do
+      max(ms, 1)
+    else
+      _ -> ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1)
+    end
   end
 
   @impl true
   def handle_call({:lookup, procedure, key, materialise?}, _from, %State{topology: topo} = s) do
     with {:ok, node_ref} <- node_of(topo, procedure),
          {:ok, slot_key} <- slot_key(s, node_ref, key) do
-      case {Map.get(s.entities, {node_ref, slot_key}), materialise?} do
-        {nil, false} ->
-          {:reply, {:error, :entity_not_found}, s}
-
-        {nil, true} ->
-          {pid, s} = ensure_entity(s, node_ref, slot_key)
-          {:reply, {:ok, pid}, s}
-
-        {pid, _} ->
-          {:reply, {:ok, pid}, s}
+      case {get_in(s.entities, [node_ref, slot_key]), materialise?} do
+        {nil, false} -> {:reply, {:error, missing(s, node_ref, slot_key)}, s}
+        {nil, true} -> materialise(s, node_ref, slot_key)
+        {pid, _} -> {:reply, {:ok, pid}, s}
       end
     else
       {:error, _} = error -> {:reply, error, s}
@@ -108,11 +157,26 @@ defmodule Flezha.SDK.Operative do
   def handle_call(:entities, _from, %State{topology: topo} = s) do
     listing =
       Enum.map(topo.order, fn node_ref ->
-        pids = for {{^node_ref, key}, pid} <- s.entities, do: {key, pid}
-        {topo.node_modules[node_ref].name(), topo.node_mode[node_ref], Enum.sort(pids)}
+        pids = s.entities |> Map.get(node_ref, %{}) |> Enum.sort()
+        {topo.node_modules[node_ref].name(), topo.node_mode[node_ref], pids}
       end)
 
     {:reply, listing, s}
+  end
+
+  # A restore's case: mint the key it names, unless the node is at its cap.
+  defp materialise(%State{} = s, node_ref, key) do
+    case ensure_entity(s, node_ref, key) do
+      {:capped, s} -> {:reply, {:error, :entity_capped}, s}
+      {pid, s} -> {:reply, {:ok, pid}, s}
+    end
+  end
+
+  # Evicted and never-existed serve the same absence; the diagnosis differs.
+  defp missing(%State{topology: topo, evicted: {trace, _n}}, node_ref, key) do
+    if topo.node_mode[node_ref] == :dynamic and :queue.member(key, trace),
+      do: :entity_evicted,
+      else: :entity_not_found
   end
 
   # Eagerly create Single (one) and owned Static entities; Dynamic ones are lazy.
@@ -134,24 +198,36 @@ defmodule Flezha.SDK.Operative do
   end
 
   @impl true
-  def handle_cast({:input, channel, message, metadata}, %State{} = s) do
+  def handle_cast({:input, channel, message, _metadata}, %State{} = s) do
     channel = resolve_channel(s.topology, channel)
     # The frame counts before it can be declined: the stamp precedes the parse.
     EntryInput.stamp(Map.fetch!(s.cells, channel))
 
     case parse(s.topology, channel, message) do
       {:ok, value} ->
-        {:noreply, route_from(s, {:entry, channel}, value, metadata)}
+        {s, _ordinal} = route_from(s, {:entry, channel}, value, @entry_emit, 0)
+        {:noreply, s}
 
       {:error, reason} ->
         {:noreply, park_entry(s, channel, message, reason)}
     end
   end
 
+  # One invocation's emits: the ordinal counts its plugin outputs from zero.
   @impl true
-  def handle_cast({:emitted, node_ref, _entity_key, values}, %State{} = s) do
-    s =
-      Enum.reduce(values, s, fn value, acc -> route_from(acc, {:node, node_ref}, value, %{}) end)
+  def handle_cast({:emitted, node_ref, entity_key, emits, handout_seq}, %State{} = s) do
+    origin = %{node_ref: node_ref, entity_key: entity_key, seq: handout_seq}
+
+    {s, _ordinal} =
+      Enum.reduce(emits, {s, 0}, fn {value, meta, key}, {acc, ordinal} ->
+        route_from(
+          acc,
+          {:node, node_ref},
+          value,
+          %{meta: meta, key: key, origin: origin},
+          ordinal
+        )
+      end)
 
     {:noreply, s}
   end
@@ -168,7 +244,7 @@ defmodule Flezha.SDK.Operative do
     # crash must not take the Operative down with it, and must not leave the
     # key unroutable; the log is what makes a key crashing on every input
     # visible instead of looking like silent inactivity.
-    dead = for {ref, ^pid} <- s.entities, do: ref
+    dead = for {ref, keyed} <- s.entities, {key, ^pid} <- keyed, do: {ref, key}
 
     s =
       Enum.reduce(dead, s, fn {node_ref, key}, acc ->
@@ -188,35 +264,127 @@ defmodule Flezha.SDK.Operative do
   end
 
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    Enum.each(s.entities, fn {_ref, pid} -> send(pid, {:secondaries, secondaries}) end)
+    for {_ref, keyed} <- s.entities,
+        {_key, pid} <- keyed,
+        do: send(pid, {:secondaries, secondaries})
+
     {:noreply, %{s | secondaries: secondaries}}
+  end
+
+  # The sweep runs here, so no push is routed while it runs: the drain gate.
+  def handle_info(:reap, %State{} = s) do
+    {s, _left} =
+      Enum.reduce(s.dynamic, {s, @evict_budget}, fn
+        {node_ref, %{ttl_ms: ttl}}, {acc, left} when ttl != nil ->
+          reap_node(acc, node_ref, ttl, left)
+
+        _no_ttl, acc ->
+          acc
+      end)
+
+    {:noreply, schedule_reap(s)}
   end
 
   def handle_info(_msg, s), do: {:noreply, s}
 
+  # Two calls per Entity: a bounded probe that changes nothing, then — for one
+  # proved idle — the eviction, synchronous, so its delete is on the wire
+  # before any push can mint a successor on the same stream.
+  defp reap_node(%State{} = s, node_ref, ttl_ms, budget) do
+    s.entities
+    |> Map.get(node_ref, %{})
+    |> Enum.reduce({s, budget}, fn
+      _entity, {acc, 0} ->
+        {acc, 0}
+
+      {key, pid}, {acc, left} ->
+        if Entity.idle_for?(pid, ttl_ms, @idle_probe_ms) and Entity.evict(pid) == :evicted,
+          do: {note_evicted(forget_entity(acc, node_ref, key), key), left - 1},
+          else: {acc, left}
+    end)
+  end
+
+  defp note_evicted(%State{evicted: {trace, n}} = s, key) do
+    dynamic_event(s, :evicted)
+    {trace, n} = if n == @evicted_trace_cap, do: {:queue.drop(trace), n - 1}, else: {trace, n}
+    %{s | evicted: {:queue.in(key, trace), n + 1}}
+  end
+
+  defp dynamic_event(%State{operative_id: oid}, event),
+    do:
+      :telemetry.execute([:flezha, :sdk, :dynamic], %{count: 1}, %{
+        operative_id: oid,
+        event: event
+      })
+
   # --- routing ---
 
-  defp route_from(%State{topology: topo} = s, source, value, _metadata) do
+  # Fan `value` out along `source`'s routes; `emit` is the producing emit's
+  # metadata, key and origin, `ordinal` the invocation's plugin-output count.
+  defp route_from(%State{topology: topo} = s, source, value, emit, ordinal) do
     routes = Map.get(topo.routes, source, [])
 
-    Enum.reduce(routes, s, fn route, acc ->
+    Enum.reduce(routes, {s, ordinal}, fn route, {acc, ord} ->
       outputs = route.transform.(value)
 
-      Enum.reduce(outputs, acc, fn out, a ->
-        key = if route.key_by, do: route.key_by.(out), else: nil
-        deliver(a, route.to, out, key)
+      Enum.reduce(outputs, {acc, ord}, fn out, {a, o} ->
+        deliver(a, route, source, out, emit, o)
       end)
     end)
   end
 
-  defp deliver(%State{} = s, {:sink, plugin}, value, _key) do
+  # A sink frame: the producing node's channel name over the user's metadata,
+  # then — on a keyed sink — the identity stamps, which nothing can clobber.
+  # Every plugin output advances the ordinal, stamped or not.
+  defp deliver(%State{} = s, %{to: {:sink, plugin}} = route, source, value, emit, ordinal) do
     serializer = Map.get(s.topology.sink_serializers, plugin, &Channels.default_serialize/1)
-    bytes = serializer.(value)
-    emit_output(s, %{"channel" => plugin}, bytes)
-    s
+    metadata = emit.meta |> Map.delete("channel") |> Map.put("channel", channel_name(s, source))
+
+    metadata =
+      if route.keyed,
+        do: stamp(metadata, s, emit.origin, ordinal, sink_key(route, value, emit)),
+        else: metadata
+
+    emit_output(s, metadata, serializer.(value))
+    {s, ordinal + 1}
   end
 
-  defp deliver(%State{topology: topo} = s, {:node, node_ref}, value, key) do
+  defp deliver(
+         %State{} = s,
+         %{to: {:node, node_ref}, key_by: key_by},
+         _source,
+         value,
+         _emit,
+         ordinal
+       ) do
+    key = if key_by, do: key_by.(value), else: nil
+    {deliver_to_node(s, node_ref, value, key), ordinal}
+  end
+
+  # The emit's own key, else the sink route's, else the emitting Entity's —
+  # the reference's `emit_keyed` then the entity-key default.
+  defp sink_key(route, value, emit) do
+    cond do
+      emit.key -> emit.key
+      route.key_by -> route.key_by.(value)
+      emit.origin -> emit.origin.entity_key
+      true -> nil
+    end
+  end
+
+  defp stamp(metadata, %State{operative_id: oid, topology: topo}, origin, ordinal, key) do
+    %{node_ref: node_ref, entity_key: entity_key, seq: seq} = origin
+
+    metadata
+    |> Map.put("flz.entity", "#{oid}/#{topo.node_modules[node_ref].name()}/#{entity_key || ""}")
+    |> Map.put("flz.seq", "#{seq}.#{ordinal}")
+    |> Map.put("flz.key", key)
+  end
+
+  defp channel_name(_s, {:entry, name}), do: name
+  defp channel_name(%State{topology: topo}, {:node, node_ref}), do: topo.node_channel[node_ref]
+
+  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key) do
     case Map.fetch!(topo.node_mode, node_ref) do
       :single ->
         enqueue(s, node_ref, nil, value)
@@ -244,30 +412,45 @@ defmodule Flezha.SDK.Operative do
   # input" true by construction rather than by ordering luck; the retry starts
   # a fresh Entity, which is what the `:EXIT` clause would have arranged.
   defp enqueue(%State{} = s, node_ref, key, value, retry? \\ true) do
-    {pid, s} = ensure_entity(s, node_ref, key)
-    policy = knob(s.topology, node_ref, :on_full, :drop_nothing)
-
-    try do
-      case policy do
-        :drop_nothing -> Entity.enqueue_block(pid, value)
-        other -> Entity.enqueue_drop(pid, value, other)
-      end
-
-      s
-    catch
-      :exit, _reason when retry? ->
-        enqueue(forget_entity(s, node_ref, key), node_ref, key, value, false)
+    case ensure_entity(s, node_ref, key) do
+      {:capped, s} -> s
+      {pid, s} -> push(s, pid, node_ref, key, value, retry?)
     end
   end
 
-  defp ensure_entity(%State{} = s, node_ref, key) do
-    case Map.get(s.entities, {node_ref, key}) do
-      nil ->
-        {:ok, pid} = start_entity(s, node_ref, key)
-        {pid, %{s | entities: Map.put(s.entities, {node_ref, key}, pid)}}
+  defp push(%State{} = s, pid, node_ref, key, value, retry?) do
+    case knob(s.topology, node_ref, :on_full, :drop_nothing) do
+      :drop_nothing -> Entity.enqueue_block(pid, value)
+      other -> Entity.enqueue_drop(pid, value, other)
+    end
 
-      pid ->
-        {pid, s}
+    s
+  catch
+    :exit, _reason when retry? ->
+      enqueue(forget_entity(s, node_ref, key), node_ref, key, value, false)
+  end
+
+  defp ensure_entity(%State{} = s, node_ref, key) do
+    keyed = Map.get(s.entities, node_ref, %{})
+
+    case Map.get(keyed, key) do
+      nil -> mint_entity(s, node_ref, key, keyed)
+      pid -> {pid, s}
+    end
+  end
+
+  # A dynamic node at its cap mints nothing for a new key: the shared core's
+  # best-effort cap — counted, never reported back to the controller.
+  defp mint_entity(%State{dynamic: dynamic} = s, node_ref, key, keyed) do
+    case Map.get(dynamic, node_ref) do
+      %{cap: cap} when map_size(keyed) >= cap ->
+        dynamic_event(s, :capped)
+        {:capped, s}
+
+      knobs ->
+        {:ok, pid} = start_entity(s, node_ref, key)
+        if knobs, do: dynamic_event(s, :created)
+        {pid, %{s | entities: Map.put(s.entities, node_ref, Map.put(keyed, key, pid))}}
     end
   end
 
@@ -275,7 +458,7 @@ defmodule Flezha.SDK.Operative do
   # `:EXIT` clause, which does the same for the exit signal that follows.
   defp forget_entity(%State{} = s, node_ref, key) do
     Counters.dispatch_finished(s.counters, Entity.identity(s.operative_id, node_ref, key))
-    %{s | entities: Map.delete(s.entities, {node_ref, key})}
+    %{s | entities: Map.update(s.entities, node_ref, %{}, &Map.delete(&1, key))}
   end
 
   defp start_entity(%State{topology: topo} = s, node_ref, key) do
@@ -299,8 +482,23 @@ defmodule Flezha.SDK.Operative do
       secondaries: s.secondaries,
       slots: s.slots,
       credit: s.credit,
-      persistence_enabled: topo.persistence_enabled?
+      persistence_enabled: topo.persistence_enabled?,
+      ctx_opts: ctx_opts(topo, node_ref, key)
     )
+  end
+
+  # The facts the ctx refuses on: this node's channel name, whether an output
+  # reaches a keyed sink, and whether such a sink leaves a keyless Entity no
+  # key to fall back on.
+  defp ctx_opts(topo, node_ref, key) do
+    keyed =
+      for %{to: {:sink, _}, keyed: true} = r <- Map.get(topo.routes, {:node, node_ref}, []), do: r
+
+    [
+      channel: topo.node_channel[node_ref],
+      keyed_sink?: keyed != [],
+      key_required?: key == nil and Enum.any?(keyed, &is_nil(&1.key_by))
+    ]
   end
 
   defp node_of(topo, procedure) do

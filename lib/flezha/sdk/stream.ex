@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Stream do
   @moduledoc """
-  A builder-scoped stream handle. Carries the source node it flows from and the
+  A builder-scoped stream handle. Carries the source node it flows from, the
   pending edge transforms accumulated on it (fused into one closure per consumer
-  edge at build time). Immutable: reusing a handle in two `into`/`sink` calls
+  edge at build time), and whether the sink it reaches is declared keyed. Immutable: reusing a handle in two `into`/`sink` calls
   fans out. Valid only inside `channels/1`.
   """
 
@@ -12,6 +12,7 @@ defmodule Flezha.SDK.Stream do
     :source,
     chain: [],
     keyed: false,
+    keyed_sink: false,
     terminal: false,
     chain_id: nil,
     on_full: nil,
@@ -25,6 +26,7 @@ defmodule Flezha.SDK.Stream do
           source: source(),
           chain: [term()],
           keyed: boolean(),
+          keyed_sink: boolean(),
           terminal: boolean(),
           chain_id: reference() | nil,
           on_full: :drop_nothing | :drop_newest | :drop_oldest | nil,

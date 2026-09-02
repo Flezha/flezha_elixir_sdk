@@ -12,7 +12,10 @@ defmodule Flezha.SDK.Operative.Inbox do
   def input(pid, channel, message, metadata),
     do: GenServer.cast(pid, {:input, channel, message, metadata})
 
-  @doc "An Entity finished a dispatch and emitted values on its node's outputs."
-  def emitted(pid, node_ref, entity_key, values),
-    do: GenServer.cast(pid, {:emitted, node_ref, entity_key, values})
+  @doc """
+  An Entity finished a dispatch: its emits as `{value, metadata, key}` and the
+  change seq the dispatch started at — what a keyed sink's stamps read.
+  """
+  def emitted(pid, node_ref, entity_key, emits, handout_seq),
+    do: GenServer.cast(pid, {:emitted, node_ref, entity_key, emits, handout_seq})
 end

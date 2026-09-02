@@ -17,7 +17,8 @@ defmodule Flezha.SDK.Entity do
   restore (fold, re-arm), a compaction (the snapshot after its records), a
   live read and a state apply, each in mailbox order so no dispatch
   interleaves. With the class's persistence off the seq advances and nothing
-  ships.
+  ships. Its outputs reach the Operative with their metadata, their keys and
+  the seq the dispatch started at — what a keyed sink's stamps read.
   """
 
   use GenServer
@@ -47,10 +48,12 @@ defmodule Flezha.SDK.Entity do
       :identity,
       :slots,
       :credit,
+      ctx_opts: [],
       changeful?: false,
       persistent?: false,
       schema_version: 1,
       change_seq: 0,
+      last_input_ms: 0,
       secondary: nil,
       proc_state: nil,
       queue: :queue.new(),
@@ -108,6 +111,30 @@ defmodule Flezha.SDK.Entity do
   def apply_state(pid, json), do: GenServer.call(pid, {:apply_state, json}, :infinity)
 
   @doc """
+  Whether the Entity has been idle past `ttl_ms` holding no work at all — an
+  empty queue, no dispatch in flight, no park held, no deferred push. A probe
+  that times out (a dispatch in flight) is `false`, and its late reply is
+  inert to the caller.
+  """
+  @spec idle_for?(pid(), pos_integer(), timeout()) :: boolean()
+  def idle_for?(pid, ttl_ms, timeout) do
+    GenServer.call(pid, {:idle?, ttl_ms}, timeout)
+  catch
+    :exit, _ -> false
+  end
+
+  @doc """
+  Evict an Entity the caller proved idle: it ships `delete_entity_state` when
+  it persists, drops its slot so a successor is a cold start, and stops.
+  """
+  @spec evict(pid()) :: :evicted | :gone
+  def evict(pid) do
+    GenServer.call(pid, :evict, :infinity)
+  catch
+    :exit, _ -> :gone
+  end
+
+  @doc """
   An Entity's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
   same value to release the slot of an Entity that died mid-dispatch — the one
   unwind an `after` inside the Entity cannot reach.
@@ -144,11 +171,13 @@ defmodule Flezha.SDK.Entity do
       identity: identity,
       slots: slots,
       credit: Keyword.get(opts, :credit),
+      ctx_opts: Keyword.get(opts, :ctx_opts, []),
       changeful?: changeful?,
       persistent?: changeful? and Keyword.get(opts, :persistence_enabled, true),
       schema_version: Procedure.schema_version(module),
       proc_state: proc_state,
-      change_seq: change_seq
+      change_seq: change_seq,
+      last_input_ms: now_ms()
     }
 
     {:ok, put_secondaries(state, Keyword.get(opts, :secondaries, []))}
@@ -205,6 +234,23 @@ defmodule Flezha.SDK.Entity do
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.proc_state, s.change_seq}, s}
 
+  def handle_call({:idle?, ttl_ms}, _from, %State{} = s) do
+    idle? =
+      s.size == 0 and not s.processing? and not s.held? and :queue.is_empty(s.waiters) and
+        now_ms() - s.last_input_ms > ttl_ms
+
+    {:reply, idle?, s}
+  end
+
+  # Destructive: the delete follows the records on the same stream from the
+  # same process, the slot goes so a successor starts from `init_state/1`
+  # rather than from what this Entity last shipped, then the process ends.
+  def handle_call(:evict, _from, %State{} = s) do
+    if s.persistent?, do: send_delete(s)
+    if s.slots, do: :ets.delete(s.slots, s.identity)
+    {:stop, :normal, :evicted, s}
+  end
+
   def handle_call({:apply_state, json}, _from, %State{} = s) do
     {:reply, :ok, write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
   rescue
@@ -243,7 +289,8 @@ defmodule Flezha.SDK.Entity do
 
   # --- internals ---
 
-  defp enqueue(%State{} = s, value), do: %{s | queue: :queue.in(value, s.queue), size: s.size + 1}
+  defp enqueue(%State{} = s, value),
+    do: %{s | queue: :queue.in(value, s.queue), size: s.size + 1, last_input_ms: now_ms()}
 
   defp kick(%State{processing?: false, held?: false, size: size} = s) when size > 0 do
     send(self(), :process)
@@ -310,9 +357,12 @@ defmodule Flezha.SDK.Entity do
       case run_ladder(s, value, 1) do
         {:ok, new_proc_state, emits, changes} ->
           Counters.inc_dispatches(s.counters)
-          # The records leave before the outputs: flush-before-emit.
+          # The outputs are stamped with the seq the dispatch started at, not
+          # the one its own records advance to: the records leave before the
+          # outputs (flush-before-emit).
+          handout_seq = s.change_seq
           s = ship(%{s | proc_state: new_proc_state}, changes)
-          flush_emits(s, emits)
+          flush_emits(s, emits, handout_seq)
           s
 
         {:park, error, attempts} ->
@@ -324,7 +374,7 @@ defmodule Flezha.SDK.Entity do
   end
 
   defp run_ladder(%State{} = s, value, attempt) do
-    ctx = Ctx.new(s.module, s.entity_key, System.system_time(:millisecond))
+    ctx = Ctx.new(s.module, s.entity_key, System.system_time(:millisecond), s.ctx_opts)
 
     outcome =
       try do
@@ -437,6 +487,20 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
+  # Fire-and-forget, outside the credit window, as the shared core's own is.
+  defp send_delete(%State{secondary: nil} = s),
+    do: Logger.warning("[Flezha.SDK] #{label(s)} evicted with no state stream (reconnecting)")
+
+  defp send_delete(%State{} = s) do
+    case TransportStream.send_frame(s.secondary, "delete_entity_state", s.identity, %{}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Flezha.SDK] #{label(s)} delete undelivered: #{inspect(reason)}")
+    end
+  end
+
   # A replacement for an Entity killed untrappably continues from what its
   # predecessor last shipped; a first Entity starts from `init_state/1`.
   defp seed(nil, _identity, module, key), do: {module.init_state(key), 0}
@@ -467,12 +531,10 @@ defmodule Flezha.SDK.Entity do
       | secondary: Enum.at(secondaries, rem(:erlang.phash2(s.identity), length(secondaries)))
     }
 
-  defp flush_emits(%State{} = s, emits) do
-    values = Enum.map(emits, fn {value, _meta} -> value end)
+  defp flush_emits(_s, [], _handout_seq), do: :ok
 
-    if values != [],
-      do: Inbox.emitted(s.operative, s.node_ref, s.entity_key, values)
-  end
+  defp flush_emits(%State{} = s, emits, handout_seq),
+    do: Inbox.emitted(s.operative, s.node_ref, s.entity_key, emits, handout_seq)
 
   # Two readers, one event: telemetry is the in-node handle, the counter is what
   # leaves the runner on the heartbeat — a drop nobody can see from outside the
@@ -485,6 +547,8 @@ defmodule Flezha.SDK.Entity do
       policy: policy
     })
   end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)

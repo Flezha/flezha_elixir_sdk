@@ -1,8 +1,7 @@
 # Twins of the rust_runner e2e fixtures (test/apps/rust_runner/src/main.rs)
 # under the same factory ids, procedure names, channel names and output bytes;
 # the persisted-state family is in factories_state.ex. Elixir SDK deviations,
-# each noted on its fixture: no keyed channels (`keyed`/`emit_keyed` → the same
-# bytes go out unkeyed), no serializer-panic isolation.
+# each noted on its fixture: no serializer-panic isolation.
 
 # -- compare_filter ---------------------------------------------------------
 
@@ -587,7 +586,9 @@ defmodule ElixirRunner.PartitionRelayProc do
   def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
-  # Rust emits keyed on the same prefix; v1 has no `emit_keyed`, same bytes unkeyed.
+  # The Entity is dynamic, keyed by the prefix, so a plain emit carries that
+  # key — the reference's `emit_keyed(prefix, input)` with the same key by
+  # construction.
   def run(input, s, ctx) do
     s = Ctx.apply(ctx, s, {:push, input})
     Ctx.emit(ctx, input)
@@ -600,12 +601,10 @@ defmodule ElixirRunner.PartitionRelayOp do
   @behaviour Flezha.SDK.StreamOperative
   def factory_id, do: "partition_relay"
 
-  # Rust names the plugin channel `input` (a forwarded frame keeps its producing
-  # channel's name, and that selects the receiving class's entry) and declares
-  # the sink `keyed()`, so the entry here is `in` and cannot collide with it.
-  # v1 has neither keyed channels nor a channel name distinct from the plugin:
-  # `named/2` names the procedure node and an output frame carries the PLUGIN
-  # name, so a forwarded frame reads `relay_out`, not `input`.
+  # The plugin channel is named `input` because a forwarded frame keeps its
+  # producing channel's name in metadata, and that is what selects the
+  # receiving operative's entry channel — the downstream fixture's `input`.
+  # The entry here is `in` so the two names cannot collide inside this class.
   def channels(c) do
     import Flezha.SDK.Channels
 
@@ -614,6 +613,7 @@ defmodule ElixirRunner.PartitionRelayOp do
     |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
     |> into(ElixirRunner.PartitionRelayProc)
     |> named("input")
+    |> keyed()
     |> sink("relay_out")
   end
 end

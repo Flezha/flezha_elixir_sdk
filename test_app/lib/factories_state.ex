@@ -6,6 +6,10 @@
 # round-trip bench's durable twin, lives beside `bench_keyed_nopersist` in
 # lib/mix/tasks/bench/elixir_factories.ex. `coalescing_counter` ships
 # uncoalesced, as every veneer does: the fold is idempotent per `(interval, ts)`.
+# `schema_evolution_v1` / `_v2` are the same class either side of a deploy that
+# edits its own state type: both declare the procedure `evolving_cart`, so an
+# operative started under v1 and restarted under v2 restores from the very WAL
+# v1 wrote.
 
 # -- store_input ------------------------------------------------------------
 
@@ -220,6 +224,89 @@ defmodule ElixirRunner.ResumeProbeOp do
   end
 end
 
+# -- schema_evolution_v1 / schema_evolution_v2 -------------------------------
+
+defmodule ElixirRunner.EvolvingCartV1Proc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "evolving_cart"
+  def init_state(_), do: %{total: 0}
+  def apply_change(s, {:add, delta}), do: %{s | total: s.total + delta}
+  def state_from_json(%{"total" => total}), do: %{total: total}
+
+  def run(input, s, ctx) do
+    s = Ctx.apply(ctx, s, {:add, ElixirRunner.Numbers.int(input)})
+    Ctx.emit(ctx, "#{s.total}:")
+    {:ok, s}
+  end
+end
+
+# v2: `currency` joined the state and a note joined the change, at schema
+# version 2 reading down to 1 through the migrations; the output carries the
+# migrated field so the e2e reads it off the wire.
+defmodule ElixirRunner.EvolvingCartV2Proc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "evolving_cart"
+  def schema_version, do: 2
+  def min_readable_schema_version, do: 1
+  def init_state(_), do: %{total: 0, currency: ""}
+  def apply_change(s, {:add, delta, _note}), do: %{s | total: s.total + delta}
+
+  def state_from_json(%{"total" => total, "currency" => currency}),
+    do: %{total: total, currency: currency}
+
+  def migrate_state(1, %{total: total}), do: {:ok, %{total: total, currency: "EUR"}}
+  def migrate_state(from, _old), do: {:error, "no migration from #{from}"}
+  def migrate_change(1, {:add, delta}), do: {:ok, {:add, delta, "migrated"}}
+  def migrate_change(from, _old), do: {:error, "no migration from #{from}"}
+
+  def run(input, s, ctx) do
+    s = Ctx.apply(ctx, s, {:add, ElixirRunner.Numbers.int(input), "live"})
+    currency = if s.currency == "", do: "EUR", else: s.currency
+    Ctx.emit(ctx, "#{s.total}:#{currency}")
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.SchemaEvolutionV1Op do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "schema_evolution_v1"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.EvolvingCartV1Proc)
+    |> named("total")
+    |> sink("schema_evolution_out")
+  end
+end
+
+defmodule ElixirRunner.SchemaEvolutionV2Op do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "schema_evolution_v2"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.EvolvingCartV2Proc)
+    |> named("total")
+    |> sink("schema_evolution_out")
+  end
+end
+
 defmodule ElixirRunner.Numbers do
   @moduledoc false
 
@@ -241,7 +328,9 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.StatefulCounterOp,
       ElixirRunner.PersistenceOffCounterOp,
       ElixirRunner.CoalescingCounterOp,
-      ElixirRunner.ResumeProbeOp
+      ElixirRunner.ResumeProbeOp,
+      ElixirRunner.SchemaEvolutionV1Op,
+      ElixirRunner.SchemaEvolutionV2Op
     ]
   end
 end

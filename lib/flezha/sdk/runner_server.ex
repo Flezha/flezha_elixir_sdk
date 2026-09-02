@@ -6,7 +6,10 @@ defmodule Flezha.SDK.RunnerServer do
   `AssignRunnerId`, `ConnectSocket`, per-command dispatch, the control keepalive,
   data heartbeats, `UpdateFactories` on post-start set changes, the park-ack
   loop, and reconnect-with-the-same-stable-id (a binding swap; dead tags 20/21
-  are not implemented). The persistence family — restore, compaction, the live
+  are not implemented). A non-terminal `RunnerDisconnect` stops the runner in
+  place — the reference's `Stopped`: the controller tears the session down,
+  nothing reconnects, and the process stays, so a `:permanent` supervisor has
+  nothing to restart into a second registration. The persistence family — restore, compaction, the live
   read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
   off this loop, and a graceful stop ships every operative's state before the
   connection closes; a `"workflow"` `AddOperative` is refused.
@@ -82,7 +85,8 @@ defmodule Flezha.SDK.RunnerServer do
       parks: %{},
       idle: nil,
       reconnect_attempt: 0,
-      disconnecting?: false
+      disconnecting?: false,
+      stopped?: false
     ]
   end
 
@@ -287,7 +291,10 @@ defmodule Flezha.SDK.RunnerServer do
 
   # --- closes → reconnect ---
 
-  def handle_info({:flz_closed, _id, reason}, %State{disconnecting?: true} = s) do
+  # A stopped or disconnecting runner reconnects into nothing: the closes are
+  # the controller taking the session down, as ordered.
+  def handle_info({closed, _id, reason}, %State{} = s)
+      when closed in [:flz_closed, :data_stream_closed] and (s.disconnecting? or s.stopped?) do
     Logger.debug("[Flezha.SDK] stream closed during disconnect: #{reason}")
     {:noreply, s}
   end
@@ -388,9 +395,15 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
+  # Stopped in place, never exited: the ack goes out, then this side closes
+  # its streams (the controller waits for that close), and the process stays.
+  # An exit here would be a `:normal` one a `:permanent` supervisor restarts,
+  # and the restart registers again into the session being torn down.
   defp dispatch({:runner_disconnect, _}, ref, s) do
     reply(s, ref, "success")
-    {:stop, :normal, %{s | disconnecting?: true}}
+    s = teardown_streams(s)
+    Flezha.Transport.Stream.close(s.control_handle)
+    {:noreply, %{s | control_handle: nil, stopped?: true}}
   end
 
   defp dispatch({:park_payload_ack, %{park_id: park_id}}, _ref, s) do

@@ -20,6 +20,7 @@ defmodule Flezha.SDK.Topology do
             node_modules: %{},
             node_mode: %{},
             node_name: %{},
+            node_channel: %{},
             node_knobs: %{},
             routes: %{},
             order: [],
@@ -59,6 +60,7 @@ defmodule Flezha.SDK.Topology do
          node_modules: node_modules(acc),
          node_mode: node_mode,
          node_name: node_names(acc),
+         node_channel: node_channels(acc),
          node_knobs: acc.knobs,
          routes: routes,
          order: Map.keys(acc.nodes),
@@ -72,7 +74,7 @@ defmodule Flezha.SDK.Topology do
     end
   end
 
-  # routes: %{source => [%{to: {:node, ref} | {:sink, plugin}, transform, key_by, serializer}]}
+  # routes: %{source => [%{to: {:node, ref} | {:sink, plugin}, transform, key_by, serializer, keyed}]}
   defp build_routes(acc) do
     node_routes =
       Enum.reduce(acc.edges, %{}, fn e, m ->
@@ -85,7 +87,8 @@ defmodule Flezha.SDK.Topology do
         to: {:sink, s.plugin},
         transform: s.transform,
         key_by: s.key_by,
-        serializer: s.serializer
+        serializer: s.serializer,
+        keyed: s.keyed
       }
 
       Map.update(m, s.from, [route], &[route | &1])
@@ -253,6 +256,12 @@ defmodule Flezha.SDK.Topology do
 
   defp node_modules(acc), do: Map.new(acc.nodes, fn {ref, %{module: m}} -> {ref, m} end)
   defp node_names(acc), do: Map.new(acc.nodes, fn {ref, %{name: n}} -> {ref, n} end)
+
+  # The channel a node's outputs are named by on the wire: `named/2`'s name,
+  # else the procedure's own — the auto-derived channel name every SDK ships.
+  defp node_channels(acc),
+    do: Map.new(acc.nodes, fn {ref, %{module: m, name: n}} -> {ref, n || m.name()} end)
+
   defp module_of(acc, ref), do: mod_name(get_in(acc.nodes, [ref, :module]))
   defp mod_name(module), do: inspect(module)
 

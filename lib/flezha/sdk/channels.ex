@@ -2,8 +2,9 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`/`sealed`) and per-edge knobs
-  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`). Handles carry their pending
+  (`into`/`into_named`/`sink`/`sink_with`/`sealed`), per-edge knobs
+  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
+  identity on the sink the handle reaches). Handles carry their pending
   transform chain functionally; consumers write to a build accumulator kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
   builder's `pending`). Fan-out is handle reuse. Refusals accumulate — nothing
@@ -115,7 +116,8 @@ defmodule Flezha.SDK.Channels do
                 plugin: plugin,
                 serializer: serializer,
                 transform: transform,
-                key_by: key_by
+                key_by: key_by,
+                keyed: s.keyed_sink
               }
               | acc.sinks
             ]
@@ -123,8 +125,16 @@ defmodule Flezha.SDK.Channels do
       end
     end)
 
-    %{s | terminal: true, chain: [], keyed: false, chain_id: nil}
+    %{s | terminal: true, chain: [], keyed: false, keyed_sink: false, chain_id: nil}
   end
+
+  @doc """
+  Declare output identity on the sink this handle reaches — the reference's
+  `keyed()`: its frames carry `flz.entity`, `flz.seq` and `flz.key`. Refused on
+  an entry handle, and on one that reaches a procedure before any sink.
+  """
+  def keyed(%Stream{source: {:entry, _}} = s), do: refuse(s, {:KeyedOnEntry, describe(s.source)})
+  def keyed(%Stream{} = s), do: %{s | keyed_sink: true}
 
   @doc "Name the source procedure node."
   def named(%Stream{source: {:entry, _}} = s, _name),
@@ -200,6 +210,14 @@ defmodule Flezha.SDK.Channels do
   defp apply_step({:flat_map, f}, v), do: Enum.to_list(f.(v))
 
   # --- internals ---
+
+  defp do_into(%Stream{keyed_sink: true} = s, module, name),
+    do:
+      do_into(
+        refuse(%{s | keyed_sink: false}, {:KeyedInterProcedureChannel, describe(s.source)}),
+        module,
+        name
+      )
 
   defp do_into(%Stream{builder: ref} = s, module, name) do
     consume_chain(ref, s)

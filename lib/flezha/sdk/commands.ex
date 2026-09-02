@@ -127,7 +127,7 @@ defmodule Flezha.SDK.Commands do
     with {:ok, op} <- operative(s, operative_id),
          :ok <- check_selector(selector),
          {:ok, nodes} <- select_nodes(Operative.entities(op), operative_id, selector.procedure),
-         {:ok, top, seqs} <- collect(nodes, selector.entity_key),
+         {:ok, top, seqs} <- collect(op, nodes, selector.entity_key),
          {:ok, json} <- to_json(top) do
       {:ok, json, single(seqs)}
     end
@@ -240,9 +240,9 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  defp collect(nodes, key) do
+  defp collect(op, nodes, key) do
     Enum.reduce_while(nodes, {:ok, %{}, []}, fn {name, mode, entities}, {:ok, top, seqs} ->
-      case read_node(name, mode, entities, key) do
+      case read_node(op, name, mode, entities, key) do
         {:ok, :absent, _} -> {:cont, {:ok, top, seqs}}
         {:ok, value, node_seqs} -> {:cont, {:ok, Map.put(top, name, value), node_seqs ++ seqs}}
         {:error, _} = error -> {:halt, error}
@@ -252,17 +252,19 @@ defmodule Flezha.SDK.Commands do
 
   # A Single node's one Entity, or a keyed node's live Entities by key; a key
   # named against a Single node, or absent from a keyed one, is a refusal.
-  defp read_node(name, :single, _entities, key) when key != nil, do: {:error, missing(name, key)}
-  defp read_node(_name, :single, [], nil), do: {:ok, :absent, []}
+  defp read_node(op, name, :single, _entities, key) when key != nil,
+    do: {:error, missing(op, name, key)}
 
-  defp read_node(name, :single, [{nil, pid} | _], nil) do
+  defp read_node(_op, _name, :single, [], nil), do: {:ok, :absent, []}
+
+  defp read_node(_op, name, :single, [{nil, pid} | _], nil) do
     case read(pid, name, "") do
       {:ok, state, seq} -> {:ok, state, [seq]}
       :omit -> {:ok, :absent, []}
     end
   end
 
-  defp read_node(name, _keyed, entities, nil) do
+  defp read_node(_op, name, _keyed, entities, nil) do
     Enum.reduce(entities, {:ok, %{}, []}, fn {key, pid}, {:ok, inner, seqs} ->
       case read(pid, name, key) do
         {:ok, state, seq} -> {:ok, Map.put(inner, key, state), [seq | seqs]}
@@ -271,10 +273,10 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  defp read_node(name, _keyed, entities, key) do
+  defp read_node(op, name, _keyed, entities, key) do
     case List.keyfind(entities, key, 0) do
       nil ->
-        {:error, missing(name, key)}
+        {:error, missing(op, name, key)}
 
       {^key, pid} ->
         case Entity.read(pid, @serialize_wait_ms) do
@@ -285,7 +287,7 @@ defmodule Flezha.SDK.Commands do
             {:error, "entity_busy: Procedure `#{name}` Entity `#{key}` is mid-dispatch"}
 
           {:error, :gone} ->
-            {:error, missing(name, key)}
+            {:error, missing(op, name, key)}
         end
     end
   end
@@ -305,7 +307,18 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  defp missing(name, key), do: "entity_not_found: Procedure `#{name}` has no live Entity `#{key}`"
+  # Evicted and never-existed serve the same absence; the diagnosis differs,
+  # and the Operative's trace is what tells them apart.
+  defp missing(op, name, key) do
+    case Operative.lookup(op, name, key) do
+      {:error, :entity_evicted} ->
+        "entity_evicted: Entity `#{key}` of procedure `#{name}` was idle-evicted; eviction is " <>
+          "destructive, so there is no durable value to serve"
+
+      _ ->
+        "entity_not_found: Procedure `#{name}` has no live Entity `#{key}`"
+    end
+  end
 
   defp to_json(top) do
     case Jason.encode(top) do
