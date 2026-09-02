@@ -10,14 +10,17 @@ defmodule Flezha.SDK.Record do
   checked and its header resolved language first, then format, then schema,
   with the refusal wordings the shared core uses so a controller reads one
   vocabulary whichever SDK refused. A record between the Procedure's readable
-  floor and its version is decoded and handed to its migration.
+  floor and its version is decoded and handed to its migration. A timer-ops
+  record — `format_id` 3 over the postcard body every SDK writes — folds into
+  the Entity's pending-timer set, never into its state.
   """
 
-  alias Flezha.SDK.{Codec, Procedure}
+  alias Flezha.SDK.{Codec, Procedure, Timers}
   alias Flezha.State.Wire
 
   # Allocated in `flz_core::header`, the table of record.
   @format_id_etf 7
+  @format_id_timer_ops 3
   @header_size 16
   @lang_names %{
     0 => "unspecified",
@@ -30,19 +33,24 @@ defmodule Flezha.SDK.Record do
     7 => "python"
   }
 
-  @typedoc "The folded state, the highest seq folded (never below the hint), whether a record migrated."
-  @type fold :: {:ok, term(), non_neg_integer(), boolean()} | {:error, String.t()}
+  @typedoc "The folded state and pending timers, the highest seq folded (never below the hint), whether a record migrated."
+  @type fold ::
+          {:ok, term(), Timers.t(), non_neg_integer(), boolean()} | {:error, String.t()}
+  @typep decision :: :decode | {:migrate, pos_integer()}
 
   @spec format_id() :: pos_integer()
   def format_id, do: @format_id_etf
+
+  @spec timer_ops_format_id() :: pos_integer()
+  def timer_ops_format_id, do: @format_id_timer_ops
 
   @spec header_size() :: pos_integer()
   def header_size, do: @header_size
 
   @doc "The header for `body`, stamped at `schema_version`: language, version, schema, format, zeros, crc."
-  @spec header(binary(), pos_integer()) :: <<_::128>>
-  def header(body, schema_version) when is_binary(body) do
-    <<Codec.sdk_lang(), sdk_version()::32-big, schema_version::32-big, @format_id_etf, 0, 0,
+  @spec header(binary(), pos_integer(), pos_integer()) :: <<_::128>>
+  def header(body, schema_version, format \\ @format_id_etf) when is_binary(body) do
+    <<Codec.sdk_lang(), sdk_version()::32-big, schema_version::32-big, format, 0, 0,
       :erlang.crc32(body)::32-big>>
   end
 
@@ -80,12 +88,20 @@ defmodule Flezha.SDK.Record do
   def frame(identity, seq, body, schema_version),
     do: Wire.encode_frame(identity, seq, header(body, schema_version), body)
 
+  @doc "The wire frame of a timer-ops record at `seq`: the shared postcard body under `format_id` 3."
+  @spec timer_ops_frame(binary(), non_neg_integer(), [Timers.op()], pos_integer()) :: binary()
+  def timer_ops_frame(identity, seq, ops, schema_version) do
+    body = Wire.encode_timer_ops(ops)
+    Wire.encode_frame(identity, seq, header(body, schema_version, @format_id_timer_ops), body)
+  end
+
   @doc """
   Rebuild an Entity of `module` from a `RestoreInitState`: `init_state/1`,
   the snapshot over it when there is one, then every whole record of the
-  change log folded in seq order. The terminal is the highest seq folded, never
-  below `terminal_hint` (a snapshot-only restore has no record to derive it
-  from). A refusal names its reason and folds nothing further.
+  change log folded in seq order — a change into the state, a timer-ops record
+  into the pending set. The terminal is the highest seq folded, never below
+  `terminal_hint` (a snapshot-only restore has no record to derive it from). A
+  refusal names its reason and folds nothing further.
   """
   @spec fold(module(), String.t() | nil, binary(), binary(), binary(), non_neg_integer()) ::
           fold()
@@ -94,9 +110,9 @@ defmodule Flezha.SDK.Record do
 
     with {:ok, state, migrated} <-
            restore_snapshot(module, entity_key, snapshot_header, snapshot_bytes, versions),
-         {:ok, state, terminal, migrated} <-
-           walk(change_log_bytes, module, state, 0, migrated, versions) do
-      {:ok, state, max(terminal, terminal_hint), migrated}
+         {:ok, {state, timers}, terminal, migrated} <-
+           walk(change_log_bytes, module, {state, Timers.new()}, 0, migrated, versions) do
+      {:ok, state, timers, max(terminal, terminal_hint), migrated}
     end
   rescue
     e -> {:error, "restore fold failed: #{Exception.message(e)}"}
@@ -106,10 +122,11 @@ defmodule Flezha.SDK.Record do
   Resolve a record header against the running procedure's `{schema, floor}`:
   the language before anything else, then the format, then the schema —
   `:decode` at the running version, `{:migrate, from}` between the floor and
-  it, a refusal above it or below the floor.
+  it, a refusal above it or below the floor; a timer-ops header answers
+  `{:timer_ops, decision}` under the same checks, its body never migrated.
   """
   @spec resolve(binary(), {pos_integer(), pos_integer()}) ::
-          {:ok, :decode | {:migrate, pos_integer()}} | {:error, String.t()}
+          {:ok, decision() | {:timer_ops, decision()}} | {:error, String.t()}
   def resolve(<<lang, _version::32, schema::32-big, format, _::16, _crc::32>>, {running, floor}) do
     # A floor above the running version reads the running version only.
     floor = min(floor, running)
@@ -121,10 +138,24 @@ defmodule Flezha.SDK.Record do
            "the record was written by #{lang_name(lang)} (#{lang}); durable bodies are " <>
            "per-SDK and are never decoded across languages"}
 
-      format != @format_id_etf ->
+      format not in [@format_id_etf, @format_id_timer_ops] ->
         {:error,
-         "format_id #{format} is not one this SDK writes (#{@format_id_etf}): the body cannot be decoded"}
+         "format_id #{format} is not one this SDK writes (#{@format_id_timer_ops}, #{@format_id_etf}): " <>
+           "the body cannot be decoded"}
 
+      format == @format_id_timer_ops ->
+        with {:ok, decision} <- decide(schema, running, floor), do: {:ok, {:timer_ops, decision}}
+
+      true ->
+        decide(schema, running, floor)
+    end
+  end
+
+  def resolve(_short, _versions),
+    do: {:error, "malformed restoration header (truncated or invalid)"}
+
+  defp decide(schema, running, floor) do
+    cond do
       schema == running ->
         {:ok, :decode}
 
@@ -143,18 +174,24 @@ defmodule Flezha.SDK.Record do
     end
   end
 
-  def resolve(_short, _versions),
-    do: {:error, "malformed restoration header (truncated or invalid)"}
-
   # --- the fold ---
 
   defp restore_snapshot(module, entity_key, _header, <<>>, _versions),
     do: {:ok, module.init_state(entity_key), false}
 
+  # A snapshot in a format other than the state's is malformed, as the core's
+  # `resolve_state` says.
   defp restore_snapshot(module, _entity_key, header, bytes, versions) do
-    with {:ok, decision} <- resolve(header, versions),
-         {:ok, state} <- decode(bytes, decision, :snapshot, module) do
-      {:ok, state, decision != :decode}
+    case resolve(header, versions) do
+      {:ok, {:timer_ops, _decision}} ->
+        {:error, "malformed restoration header (truncated or invalid)"}
+
+      {:ok, decision} ->
+        with {:ok, state} <- decode(bytes, decision, :snapshot, module),
+             do: {:ok, state, decision != :decode}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -164,7 +201,7 @@ defmodule Flezha.SDK.Record do
   defp walk(
          <<seq::64-big, len::32-big, rest::binary>>,
          module,
-         state,
+         {state, timers},
          terminal,
          migrated,
          versions
@@ -176,21 +213,27 @@ defmodule Flezha.SDK.Record do
       rest
 
     with :ok <- check_crc(header, body, crc, seq),
-         {:ok, decision} <- resolve(header, versions),
-         {:ok, change} <- decode(body, decision, :change, module) do
-      walk(
-        tail,
-        module,
-        module.apply_change(state, change),
-        max(terminal, seq),
-        migrated or decision != :decode,
-        versions
-      )
+         {:ok, resolved} <- resolve(header, versions),
+         {:ok, folded, decision} <- fold_record(body, resolved, module, state, timers) do
+      walk(tail, module, folded, max(terminal, seq), migrated or decision != :decode, versions)
     end
   end
 
-  defp walk(_torn_or_empty, _module, state, terminal, migrated, _versions),
-    do: {:ok, state, terminal, migrated}
+  defp walk(_torn_or_empty, _module, folded, terminal, migrated, _versions),
+    do: {:ok, folded, terminal, migrated}
+
+  # A change into the state; timer ops into the pending set, never migrated.
+  defp fold_record(body, {:timer_ops, decision}, _module, state, timers) do
+    case Wire.decode_timer_ops(body) do
+      {:ok, ops} -> {:ok, {state, Timers.apply_all(timers, ops)}, decision}
+      {:error, reason} -> {:error, "timer-ops decode failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp fold_record(body, decision, module, state, timers) do
+    with {:ok, change} <- decode(body, decision, :change, module),
+         do: {:ok, {module.apply_change(state, change), timers}, decision}
+  end
 
   defp check_crc(header, body, crc, seq) do
     if :erlang.crc32(:erlang.crc32(header), body) == crc,

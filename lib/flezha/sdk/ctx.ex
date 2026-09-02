@@ -16,7 +16,19 @@ defmodule Flezha.SDK.Ctx do
   keyless emit from an Entity with no key of its own on such a sink is refused
   here, at the call — the reference's `KeyRequiredOnKeyedChannel` — from two
   topology facts the Entity hands `new/4`.
+
+  Timers ride the same dictionary: `timer_after/2` and `timer_at_event_time/2`
+  register on a `Flezha.SDK.Timers` session over a copy of the Entity's pending
+  set — opened on the first timer call, so an invocation that registers
+  nothing pays nothing — answering the absolute timestamp, the handle the two
+  cancels take; the Entity commits the session's ops with the changes when
+  `run/3` (or `on_timer/4`) answers `{:ok, _}`, and a firing commits its own
+  removal even when it registered nothing. `now/1` is the declared clock's value: the
+  epoch millisecond, the durable seq, or the input's event time, evaluated
+  once per invocation — and, inside a firing, the scheduled timestamp.
   """
+
+  alias Flezha.SDK.{Procedure, Timers}
 
   @enforce_keys [:module, :entity_key, :now_ms, :ref]
   defstruct [
@@ -25,9 +37,14 @@ defmodule Flezha.SDK.Ctx do
     :now_ms,
     :ref,
     :channel,
+    :timers,
+    :timer_policy,
+    :firing,
     keyed_sink?: false,
     key_required?: false
   ]
+
+  @zero_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
 
   @type t :: %__MODULE__{}
 
@@ -36,8 +53,10 @@ defmodule Flezha.SDK.Ctx do
   @doc """
   A fresh ctx for one invocation of `module`. `now_ms` is captured once here;
   `opts` carries the node's channel name, whether its sink is keyed
-  (`keyed_sink?`) and whether a keyless emit has nothing to fall back on
-  (`key_required?`).
+  (`keyed_sink?`), whether a keyless emit has nothing to fall back on
+  (`key_required?`), the Entity's pending timers (`timers`, empty by default),
+  the procedure's timer policy (`timer_policy`, resolved from `module` by
+  default) and the firing this invocation is (`firing`, `{kind, at}` or nil).
   """
   def new(module, entity_key, now_ms, opts \\ []) do
     ref = make_ref()
@@ -50,6 +69,10 @@ defmodule Flezha.SDK.Ctx do
       now_ms: now_ms,
       ref: ref,
       channel: Keyword.get(opts, :channel),
+      timers: Keyword.get(opts, :timers, Timers.new()),
+      timer_policy:
+        Keyword.get_lazy(opts, :timer_policy, fn -> Procedure.timer_policy(module) end),
+      firing: Keyword.get(opts, :firing),
       keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
       key_required?: Keyword.get(opts, :key_required?, false)
     }
@@ -96,8 +119,28 @@ defmodule Flezha.SDK.Ctx do
       when is_binary(key) and is_map(meta),
       do: put_emit(ctx, value, meta, key)
 
-  @doc "Wall-clock milliseconds, evaluated once at invocation entry."
+  @doc "The declared clock's value, evaluated once at invocation entry; the scheduled timestamp inside a firing."
   def now(%__MODULE__{now_ms: ms}), do: ms
+
+  @doc "Register a processing-time timer `delay_ms` after `now/1`; `{:ok, at}`, the cancellation handle."
+  @spec timer_after(t(), integer()) :: {:ok, non_neg_integer()} | {:error, Timers.refusal()}
+  def timer_after(%__MODULE__{} = ctx, delay_ms),
+    do: with_session(ctx, &Timers.register_after(&1, delay_ms))
+
+  @doc "Register an event-time timer at `at`; refused under a clock that is not `:event_time`."
+  @spec timer_at_event_time(t(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, Timers.refusal()}
+  def timer_at_event_time(%__MODULE__{} = ctx, at),
+    do: with_session(ctx, &Timers.register(&1, :event_time, at))
+
+  @doc "Cancel the processing-time timer `timer_after/2` answered; whether one was pending."
+  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: boolean()
+  def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
+    do: cancel(ctx, :processing_time, at)
+
+  @doc "Cancel the event-time timer `timer_at_event_time/2` answered; whether one was pending."
+  @spec cancel_event_time_timer(t(), non_neg_integer()) :: boolean()
+  def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
 
   @doc "The owning Entity's key, or nil for a Single Entity."
   def entity_key(%__MODULE__{entity_key: k}), do: k
@@ -116,11 +159,51 @@ defmodule Flezha.SDK.Ctx do
     changes
   end
 
+  # An invocation that opened no session has nothing to commit; a firing
+  # commits its removal, op 0 of a session opened here if `on_timer/4` opened
+  # none.
+  @doc false
+  def take_timers(%__MODULE__{ref: ref, firing: nil} = ctx) do
+    case Process.delete(timers_key(ref)) do
+      nil -> {ctx.timers, [], @zero_tally}
+      session -> Timers.commit(session)
+    end
+  end
+
+  def take_timers(%__MODULE__{ref: ref} = ctx) do
+    Timers.commit(Process.delete(timers_key(ref)) || open(ctx))
+  end
+
   @doc false
   def discard(%__MODULE__{ref: ref}) do
     Process.delete(key(ref))
     Process.delete(changes_key(ref))
+    Process.delete(timers_key(ref))
   end
+
+  defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
+    case fun.(session(ctx)) do
+      {:ok, at, session} ->
+        Process.put(timers_key(ref), session)
+        {:ok, at}
+
+      {:error, refusal, session} ->
+        Process.put(timers_key(ref), session)
+        {:error, refusal}
+    end
+  end
+
+  defp cancel(%__MODULE__{ref: ref} = ctx, kind, at) do
+    {changed?, session} = Timers.cancel(session(ctx), kind, at)
+    Process.put(timers_key(ref), session)
+    changed?
+  end
+
+  # The session open in this invocation, or one opened now.
+  defp session(%__MODULE__{ref: ref} = ctx), do: Process.get(timers_key(ref)) || open(ctx)
+
+  defp open(%__MODULE__{} = ctx),
+    do: Timers.session(ctx.timers, ctx.timer_policy, ctx.now_ms, ctx.firing)
 
   defp put_emit(%__MODULE__{ref: ref}, value, meta, key) do
     case reserved_key(meta) do
@@ -142,4 +225,5 @@ defmodule Flezha.SDK.Ctx do
 
   defp key(ref), do: {__MODULE__, ref}
   defp changes_key(ref), do: {__MODULE__, ref, :changes}
+  defp timers_key(ref), do: {__MODULE__, ref, :timers}
 end

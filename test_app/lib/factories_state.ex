@@ -9,7 +9,8 @@
 # `schema_evolution_v1` / `_v2` are the same class either side of a deploy that
 # edits its own state type: both declare the procedure `evolving_cart`, so an
 # operative started under v1 and restarted under v2 restores from the very WAL
-# v1 wrote.
+# v1 wrote. `session_timeout` is the worked timer shape: durable, so the e2e's
+# re-seat half folds its pending timer back out of the change log.
 
 # -- store_input ------------------------------------------------------------
 
@@ -307,6 +308,64 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
   end
 end
 
+# -- session_timeout ----------------------------------------------------------
+
+# The worked session-timeout shape (`entity_timers`): each input pushes the
+# idle deadline out, and the firing closes the session. Single-entity so the
+# e2e's crash-resume half exercises a durable Entity. The timeout is read from
+# `TIMER_TEST_TIMEOUT_MS` (the e2e sets it short).
+defmodule ElixirRunner.SessionTimeoutProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "session_timeout_procedure"
+  def init_state(_), do: %{touched: [], closed_at: []}
+  def apply_change(s, {:touched, input}), do: %{s | touched: s.touched ++ [input]}
+  def apply_change(s, {:closed, at}), do: %{s | closed_at: s.closed_at ++ [at]}
+
+  def state_from_json(%{"touched" => touched, "closed_at" => closed_at}),
+    do: %{touched: touched, closed_at: closed_at}
+
+  def run(input, s, ctx) do
+    s = Ctx.apply(ctx, s, {:touched, input})
+    # A processing-time timer, because the answer to "nothing has arrived"
+    # cannot be an event-time one: nothing would advance the clock.
+    {:ok, _at} = Ctx.timer_after(ctx, session_timeout_ms())
+    {:ok, s}
+  end
+
+  def on_timer(fired_at, _kind, s, ctx) do
+    s = Ctx.apply(ctx, s, {:closed, fired_at})
+    Ctx.emit(ctx, "closed@#{fired_at}")
+    {:ok, s}
+  end
+
+  defp session_timeout_ms do
+    case Integer.parse(System.get_env("TIMER_TEST_TIMEOUT_MS", "")) do
+      {ms, ""} -> ms
+      _ -> 1_000
+    end
+  end
+end
+
+defmodule ElixirRunner.SessionTimeoutOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "session_timeout"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input")
+    |> into(ElixirRunner.SessionTimeoutProc)
+    |> named("kafka")
+    |> sink("test_kafka")
+  end
+end
+
 defmodule ElixirRunner.Numbers do
   @moduledoc false
 
@@ -330,7 +389,8 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.CoalescingCounterOp,
       ElixirRunner.ResumeProbeOp,
       ElixirRunner.SchemaEvolutionV1Op,
-      ElixirRunner.SchemaEvolutionV2Op
+      ElixirRunner.SchemaEvolutionV2Op,
+      ElixirRunner.SessionTimeoutOp
     ]
   end
 end

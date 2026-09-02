@@ -29,6 +29,13 @@ defmodule Flezha.SDK.Counters do
   for the controller's grant — so a runner parked on an exhausted window reads
   as parked beside a frozen `dispatches`, not wedged.
 
+  `timers_armed` is the processing-time timers the runner's Entities hold on
+  the BEAM's timer service — one per armed deadline, released on its firing,
+  its disarm and the Entity's own end; an Entity killed untrappably releases
+  nothing, so the gauge over-states by its count until the runner restarts —
+  and `timers_fired` the firings completed, the two timer keys every other
+  SDK's heartbeat carries.
+
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
 
@@ -37,11 +44,13 @@ defmodule Flezha.SDK.Counters do
   @drops_newest 3
   @drops_oldest 4
   @credit_parked 5
+  @timers_fired 6
+  @timers_armed 7
   # Start-time slots follow the counters; adding a counter moves the base with
   # it rather than leaving a second place to remember how many there are.
   @slots 64
-  @blocks [dispatch: @credit_parked, deferred: @credit_parked + @slots]
-  @size @credit_parked + 2 * @slots
+  @blocks [dispatch: @timers_armed, deferred: @timers_armed + @slots]
+  @size @timers_armed + 2 * @slots
 
   @type t :: :atomics.atomics_ref()
   @typedoc "An Entity's identity, as the slot table hashes it."
@@ -77,6 +86,20 @@ defmodule Flezha.SDK.Counters do
 
   @spec credit_parked(t()) :: non_neg_integer()
   def credit_parked(ref), do: :atomics.get(ref, @credit_parked)
+
+  @spec inc_timers_fired(t()) :: :ok
+  def inc_timers_fired(ref), do: :atomics.add(ref, @timers_fired, 1)
+
+  @spec timers_fired(t()) :: non_neg_integer()
+  def timers_fired(ref), do: :atomics.get(ref, @timers_fired)
+
+  @doc "Move the armed-timer gauge: one per processing-time timer armed, one less per firing or disarm."
+  @spec add_timers_armed(t(), integer()) :: :ok
+  def add_timers_armed(ref, delta) when delta >= 0, do: :atomics.add(ref, @timers_armed, delta)
+  def add_timers_armed(ref, delta), do: :atomics.sub(ref, @timers_armed, -delta)
+
+  @spec timers_armed(t()) :: non_neg_integer()
+  def timers_armed(ref), do: :atomics.get(ref, @timers_armed)
 
   @typedoc "Which block of start-time slots — one Entity may hold one of each."
   @type block :: :dispatch | :deferred

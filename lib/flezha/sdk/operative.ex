@@ -55,8 +55,7 @@ defmodule Flezha.SDK.Operative do
       cells: %{},
       entities: %{},
       dynamic: %{},
-      evicted: {:queue.new(), 0},
-      monitors: %{}
+      evicted: {:queue.new(), 0}
     ]
   end
 
@@ -239,11 +238,13 @@ defmodule Flezha.SDK.Operative do
   end
 
   @impl true
-  def handle_info({:EXIT, pid, reason}, %State{} = s) do
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s) do
     # An Entity died — forget it; it is recreated on that key's next input. A
     # crash must not take the Operative down with it, and must not leave the
     # key unroutable; the log is what makes a key crashing on every input
-    # visible instead of looking like silent inactivity.
+    # visible instead of looking like silent inactivity. Monitored, not
+    # linked, so this process's own exit — `:normal` on `RemOperative` — ends
+    # every Entity through its monitor of this process.
     dead = for {ref, keyed} <- s.entities, {key, ^pid} <- keyed, do: {ref, key}
 
     s =
@@ -257,7 +258,7 @@ defmodule Flezha.SDK.Operative do
 
         # The Entity's `after` cannot run for an untrappable kill, so its
         # in-flight slot is released here or it would report a stall forever.
-        forget_entity(acc, node_ref, key)
+        acc |> forget_entity(node_ref, key) |> remint(node_ref, key, reason)
       end)
 
     {:noreply, s}
@@ -286,6 +287,15 @@ defmodule Flezha.SDK.Operative do
   end
 
   def handle_info(_msg, s), do: {:noreply, s}
+
+  # A Single or Static Entity that crashed is minted again at once, as
+  # `prewarm/1` minted it: what its slot holds — armed timers above all — must
+  # not wait for an input. A dynamic one stays lazy, as its keys are.
+  defp remint(%State{topology: topo} = s, node_ref, key, reason) do
+    if reason in [:normal, :shutdown] or topo.node_mode[node_ref] == :dynamic,
+      do: s,
+      else: s |> ensure_entity(node_ref, key) |> elem(1)
+  end
 
   # Two calls per Entity: a bounded probe that changes nothing, then — for one
   # proved idle — the eviction, synchronous, so its delete is on the wire
@@ -406,11 +416,11 @@ defmodule Flezha.SDK.Operative do
 
   # A `:drop_nothing` enqueue is a `GenServer.call`, so an Entity that died between
   # the last input and this one takes the CALLER down — this Operative — unless
-  # the exit is caught. The `:EXIT` clause cannot be relied on to have run first:
-  # the input and the exit signal are two messages racing for the same mailbox.
+  # the exit is caught. The `:DOWN` clause cannot be relied on to have run first:
+  # the input and the down message are two messages racing for the same mailbox.
   # Catching it here is what makes "the key is routable again on its next
   # input" true by construction rather than by ordering luck; the retry starts
-  # a fresh Entity, which is what the `:EXIT` clause would have arranged.
+  # a fresh Entity, which is what the `:DOWN` clause would have arranged.
   defp enqueue(%State{} = s, node_ref, key, value, retry? \\ true) do
     case ensure_entity(s, node_ref, key) do
       {:capped, s} -> s
@@ -449,13 +459,14 @@ defmodule Flezha.SDK.Operative do
 
       knobs ->
         {:ok, pid} = start_entity(s, node_ref, key)
+        Process.monitor(pid)
         if knobs, do: dynamic_event(s, :created)
         {pid, %{s | entities: Map.put(s.entities, node_ref, Map.put(keyed, key, pid))}}
     end
   end
 
   # Drop a dead Entity and release its in-flight slot. Idempotent with the
-  # `:EXIT` clause, which does the same for the exit signal that follows.
+  # `:DOWN` clause, which does the same for the down message that follows.
   defp forget_entity(%State{} = s, node_ref, key) do
     Counters.dispatch_finished(s.counters, Entity.identity(s.operative_id, node_ref, key))
     %{s | entities: Map.update(s.entities, node_ref, %{}, &Map.delete(&1, key))}
@@ -464,7 +475,7 @@ defmodule Flezha.SDK.Operative do
   defp start_entity(%State{topology: topo} = s, node_ref, key) do
     module = topo.node_modules[node_ref]
 
-    Entity.start_link(
+    Entity.start(
       operative: self(),
       operative_id: s.operative_id,
       node_ref: node_ref,

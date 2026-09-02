@@ -31,7 +31,6 @@
   "toolchain": "elixir --version",
   "deferred": [
     "effectively_once",
-    "entity_timers",
     "correction_window",
     "workflow"
   ],
@@ -90,6 +89,9 @@
     "schema_evolution": [
       "schema_evolution_v1",
       "schema_evolution_v2"
+    ],
+    "entity_timers": [
+      "session_timeout"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"

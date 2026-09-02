@@ -148,6 +148,7 @@ defmodule Flezha.SDK.Topology do
         |> check_dynamic_keying(module, mode, in_routes)
         |> check_entities_for(module)
         |> check_mailbox(module)
+        |> check_clock(module)
       end)
 
     # cycles among nodes
@@ -208,6 +209,29 @@ defmodule Flezha.SDK.Topology do
       end
     else
       is
+    end
+  end
+
+  # A clock the runtime cannot serve: the reference's `UnservableClock` (a
+  # logical clock reads a change seq no changeless procedure has), and the
+  # two a dynamic declaration can get wrong.
+  defp check_clock(is, module) do
+    case Procedure.clock(module) do
+      :wall ->
+        is
+
+      :logical ->
+        if Procedure.changeful?(module),
+          do: is,
+          else: [{:UnservableClock, mod_name(module)} | is]
+
+      :event_time ->
+        if Procedure.exports?(module, :event_time_of, 1),
+          do: is,
+          else: [{:EventTimeClockWithoutExtractor, mod_name(module)} | is]
+
+      _other ->
+        [{:UnknownClock, mod_name(module)} | is]
     end
   end
 

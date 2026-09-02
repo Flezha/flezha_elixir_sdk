@@ -19,56 +19,40 @@ defmodule Flezha.SDK.Entity do
   interleaves. With the class's persistence off the seq advances and nothing
   ships. Its outputs reach the Operative with their metadata, their keys and
   the seq the dispatch started at — what a keyed sink's stamps read.
+
+  Its timers fire through the same queue and ladder as its inputs, with
+  `on_timer/4` in place of `run/3`: a processing-time timer is one
+  `Process.send_after/3` on the BEAM's timer service — the wake list no
+  thread of this SDK owns — whose due message folds every timer due by then
+  onto the queue, ascending; an event-time timer fires at admission, when an
+  input's event time advances the high-water past it, ahead of that input. A
+  firing's ops and outputs ship as a dispatch's do, its removal committed
+  even when it parks; a restore, a slot and an eviction re-arm, re-arm and
+  discard the armed set with the pending one.
   """
 
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Credit, Ctx, Jitter, Park, Procedure, Record}
+  alias Flezha.SDK.{Counters, Ctx, Jitter, Park, Procedure, Timers}
+  alias Flezha.SDK.Entity.{Records, State}
   alias Flezha.SDK.Operative.Inbox
-  alias Flezha.Transport.Stream, as: TransportStream
 
   @retry_backoff_cap_ms 5_000
+  # A due message that finds no room comes back this much later, never drops.
+  @wake_retry_backoff_ms 5
 
-  defmodule State do
+  # A due timer: on the queue beside the inputs, dispatched through the same
+  # ladder with `on_timer/4` in place of `run/3`.
+  defmodule Fire do
     @moduledoc false
-    defstruct [
-      :operative,
-      :operative_id,
-      :node_ref,
-      :node_name,
-      :input_channel,
-      :module,
-      :entity_key,
-      :capacity,
-      :policy,
-      :retry_max,
-      :retry_backoff_ms,
-      :counters,
-      :identity,
-      :slots,
-      :credit,
-      ctx_opts: [],
-      changeful?: false,
-      persistent?: false,
-      schema_version: 1,
-      change_seq: 0,
-      last_input_ms: 0,
-      secondary: nil,
-      proc_state: nil,
-      queue: :queue.new(),
-      size: 0,
-      processing?: false,
-      held?: false,
-      park_id: nil,
-      park_seq: 0,
-      waiters: :queue.new()
-    ]
+    defstruct [:kind, :at]
   end
 
   # --- API (used by the Operative router) ---
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+  @doc "Start an Entity, unlinked: its Operative monitors it, and it monitors its Operative."
+  def start(opts), do: GenServer.start(__MODULE__, opts)
 
   @doc "Enqueue under `:drop_nothing` — the caller waits until there is room."
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
@@ -153,10 +137,12 @@ defmodule Flezha.SDK.Entity do
     identity = Park.identity(operative_id, module.name(), entity_key || "")
     changeful? = Procedure.changeful?(module)
     slots = Keyword.get(opts, :slots)
-    {proc_state, change_seq} = seed(slots, identity, module, entity_key)
+    {proc_state, change_seq, timers} = Records.seed(slots, identity, module, entity_key)
+    operative = Keyword.fetch!(opts, :operative)
+    Process.monitor(operative)
 
     state = %State{
-      operative: Keyword.fetch!(opts, :operative),
+      operative: operative,
       operative_id: operative_id,
       node_ref: Keyword.fetch!(opts, :node_ref),
       node_name: Keyword.get(opts, :node_name),
@@ -171,7 +157,17 @@ defmodule Flezha.SDK.Entity do
       identity: identity,
       slots: slots,
       credit: Keyword.get(opts, :credit),
-      ctx_opts: Keyword.get(opts, :ctx_opts, []),
+      # The static ctx facts: the node's, from the Operative, and the timer
+      # policy this procedure declares.
+      ctx_opts:
+        [timer_policy: Procedure.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
+      timers: %{
+        pending: timers,
+        clock: clock_of(module),
+        on_timer?: Procedure.on_timer?(module),
+        refs: %{},
+        high_water: nil
+      },
       changeful?: changeful?,
       persistent?: changeful? and Keyword.get(opts, :persistence_enabled, true),
       schema_version: Procedure.schema_version(module),
@@ -180,7 +176,7 @@ defmodule Flezha.SDK.Entity do
       last_input_ms: now_ms()
     }
 
-    {:ok, put_secondaries(state, Keyword.get(opts, :secondaries, []))}
+    {:ok, state |> Records.put_secondaries(Keyword.get(opts, :secondaries, [])) |> rearm()}
   end
 
   @impl true
@@ -199,37 +195,19 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
-  def handle_call({:restore, header, snapshot, log, hint}, _from, %State{changeful?: true} = s) do
-    case Record.fold(s.module, s.entity_key, header, snapshot, log, hint) do
-      {:ok, state, terminal, migrated} ->
-        s = write_slot(%{s | proc_state: state, change_seq: terminal + 1})
-        {:reply, {:ok, terminal, migrated}, s}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, s}
+  def handle_call({:restore, header, snapshot, log, hint}, _from, %State{} = s) do
+    case Records.restore(s, header, snapshot, log, hint) do
+      {:ok, s, terminal, migrated} -> {:reply, {:ok, terminal, migrated}, rearm(s)}
+      {:error, reason} -> {:reply, {:error, reason}, s}
     end
   end
 
-  def handle_call({:restore, _h, _s, _l, _hint}, _from, %State{} = s),
-    do: {:reply, {:error, "#{label(s)} persists nothing"}, s}
-
-  # The snapshot folds every seq already on the wire: nothing is pending, so
-  # that is `change_seq - 1`, and the frame leaves behind the records on the
-  # same stream from the same process.
-  def handle_call(:snapshot, _from, %State{changeful?: true, secondary: secondary} = s)
-      when secondary != nil do
-    seq = max(s.change_seq - 1, 0)
-    body = Record.encode_body(s.proc_state)
-    frame = Record.frame(s.identity, seq, body, s.schema_version)
-
-    case TransportStream.send_frame(secondary, "entity_state_snapshot", frame, %{}) do
-      :ok -> {:reply, {:ok, seq, byte_size(body)}, s}
-      {:error, reason} -> {:reply, {:error, inspect(reason)}, s}
+  def handle_call(:snapshot, _from, %State{} = s) do
+    case Records.snapshot(s) do
+      {:ok, s, seq, size} -> {:reply, {:ok, seq, size}, s}
+      {:error, reason} -> {:reply, {:error, reason}, s}
     end
   end
-
-  def handle_call(:snapshot, _from, %State{} = s),
-    do: {:reply, {:error, "#{label(s)} has no state stream"}, s}
 
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.proc_state, s.change_seq}, s}
@@ -242,17 +220,14 @@ defmodule Flezha.SDK.Entity do
     {:reply, idle?, s}
   end
 
-  # Destructive: the delete follows the records on the same stream from the
-  # same process, the slot goes so a successor starts from `init_state/1`
-  # rather than from what this Entity last shipped, then the process ends.
   def handle_call(:evict, _from, %State{} = s) do
-    if s.persistent?, do: send_delete(s)
-    if s.slots, do: :ets.delete(s.slots, s.identity)
+    Records.delete(s)
     {:stop, :normal, :evicted, s}
   end
 
   def handle_call({:apply_state, json}, _from, %State{} = s) do
-    {:reply, :ok, write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
+    {:reply, :ok,
+     Records.write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
   rescue
     e -> {:reply, {:error, "apply_state: #{Exception.message(e)}"}, s}
   end
@@ -278,14 +253,46 @@ defmodule Flezha.SDK.Entity do
   def handle_info(:process, %State{} = s), do: {:noreply, process_next(s)}
 
   def handle_info({:secondaries, secondaries}, %State{} = s),
-    do: {:noreply, put_secondaries(s, secondaries)}
+    do: {:noreply, Records.put_secondaries(s, secondaries)}
 
   def handle_info({:park_released, park_id}, %State{park_id: park_id} = s) do
     {:noreply, process_next(%{s | held?: false, park_id: nil})}
   end
 
   def handle_info({:park_released, _stale}, s), do: {:noreply, s}
+
+  # The BEAM's timer service is the wake list: a due message folds every
+  # processing-time timer due by now onto the queue, ascending, so the order
+  # never depends on the order two same-millisecond messages arrive in; one
+  # that finds no room comes back later rather than dropping.
+  def handle_info({:timer_due, at}, %State{size: size, capacity: capacity} = s)
+      when size >= capacity do
+    Process.send_after(self(), {:timer_due, at}, @wake_retry_backoff_ms)
+    {:noreply, s}
+  end
+
+  def handle_info({:timer_due, at}, %State{} = s) do
+    upto = max(at, System.system_time(:millisecond))
+
+    s =
+      s.timers.pending
+      |> Timers.due(:processing_time, upto)
+      |> Enum.reduce(s, &enqueue(&2, %Fire{kind: :processing_time, at: &1}))
+
+    {:noreply, kick(s)}
+  end
+
+  # The Operative is gone — stopped or crashed — so this Entity ends with it,
+  # quietly, through `terminate/2`. Not a link: a link discards a `:normal`
+  # exit signal, which is exactly how a removed operative's Entities outlived it.
+  def handle_info({:DOWN, _ref, :process, operative, _reason}, %State{operative: operative} = s),
+    do: {:stop, :normal, s}
+
   def handle_info(_msg, s), do: {:noreply, s}
+
+  # Evicted, or its Operative gone: the armed timers go with the process.
+  @impl true
+  def terminate(_reason, %State{} = s), do: disarm_all(s)
 
   # --- internals ---
 
@@ -306,9 +313,9 @@ defmodule Flezha.SDK.Entity do
       {:empty, _} ->
         admit_waiter(%{s | processing?: false})
 
-      {{:value, value}, q} ->
+      {{:value, item}, q} ->
         s = %{s | queue: q, size: s.size - 1}
-        s = dispatch(s, value)
+        s = admit(s, item)
         s = admit_waiter(s)
 
         if s.held? do
@@ -345,40 +352,103 @@ defmodule Flezha.SDK.Entity do
     s
   end
 
+  # A firing whose timer has left the pending set fires nothing. A value under an
+  # event-time clock advances the high-water first, and the event-time timers
+  # it makes due go ahead of it on the queue, ascending — the drain comes back
+  # to the value behind them. Anything else dispatches.
+  defp admit(%State{} = s, %Fire{kind: kind, at: at} = fire) do
+    if Timers.contains?(s.timers.pending, kind, at), do: dispatch(s, fire), else: s
+  end
+
+  defp admit(%State{timers: %{clock: {:event_time, extract}} = timers} = s, value) do
+    case safe_extract(extract, value) do
+      {:ok, event_time} ->
+        high_water = max(timers.high_water || -1, event_time)
+        s = %{s | timers: %{timers | high_water: high_water}}
+
+        case Timers.due(timers.pending, :event_time, high_water) do
+          [] -> dispatch(s, value)
+          due -> requeue(s, Enum.map(due, &%Fire{kind: :event_time, at: &1}) ++ [value])
+        end
+
+      # The ladder meets the raise and parks the value as any bad input.
+      :error ->
+        dispatch(s, value)
+    end
+  end
+
+  defp admit(%State{} = s, value), do: dispatch(s, value)
+
+  # Items at the head, in order; the size overshoots the capacity by internal
+  # items only, bounded by the pending set.
+  defp requeue(%State{} = s, items) do
+    queue = items |> Enum.reverse() |> Enum.reduce(s.queue, &:queue.in_r/2)
+    %{s | queue: queue, size: s.size + length(items)}
+  end
+
+  defp safe_extract(extract, value) do
+    {:ok, extract.(value)}
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
   # `after` is the contract, not politeness: the in-flight report is what makes
   # ONE wedged Entity visible to the controller, so a dispatch that unwinds
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
-  defp dispatch(%State{} = s, value) do
+  defp dispatch(%State{} = s, item) do
     identity = identity(s.operative_id, s.node_ref, s.entity_key)
     Counters.dispatch_started(s.counters, identity)
 
     try do
-      case run_ladder(s, value, 1) do
-        {:ok, new_proc_state, emits, changes} ->
-          Counters.inc_dispatches(s.counters)
-          # The outputs are stamped with the seq the dispatch started at, not
-          # the one its own records advance to: the records leave before the
-          # outputs (flush-before-emit).
-          handout_seq = s.change_seq
-          s = ship(%{s | proc_state: new_proc_state}, changes)
-          flush_emits(s, emits, handout_seq)
-          s
+      case run_ladder(s, item, 1) do
+        {:ok, new_proc_state, emits, changes, timers} ->
+          complete(s, new_proc_state, emits, changes, timers)
 
         {:park, error, attempts} ->
-          park(s, value, error, attempts)
+          s |> park_firing(item) |> park(item, error, attempts)
       end
     after
       Counters.dispatch_finished(s.counters, identity)
     end
   end
 
-  defp run_ladder(%State{} = s, value, attempt) do
-    ctx = Ctx.new(s.module, s.entity_key, System.system_time(:millisecond), s.ctx_opts)
+  # The records leave first (flush-before-emit, and the outputs are stamped
+  # with the seq the dispatch started at), then the timers are armed, then the
+  # outputs leave: an output on the wire means its dispatch's timers are armed
+  # and counted, for every reader.
+  defp complete(%State{} = s, new_proc_state, emits, changes, {pending, ops, tally}) do
+    Counters.inc_dispatches(s.counters)
+    handout_seq = s.change_seq
+    s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
+    s = s |> Records.ship(changes, ops) |> reflect(ops, tally)
+    flush_emits(s, emits, handout_seq)
+    s
+  end
 
+  # A firing that exhausted its ladder still commits its removal, so a poison
+  # timer parks once instead of firing for ever.
+  defp park_firing(%State{} = s, %Fire{kind: kind, at: at}) do
+    policy = Keyword.fetch!(s.ctx_opts, :timer_policy)
+
+    {pending, ops, tally} =
+      s.timers.pending |> Timers.session(policy, at, {kind, at}) |> Timers.commit()
+
+    s = %{s | timers: %{s.timers | pending: pending}}
+    s |> Records.ship([], ops) |> reflect(ops, tally)
+  end
+
+  defp park_firing(%State{} = s, _value), do: s
+
+  # The clock is read inside the attempt: an extractor that raises on an input
+  # is that input failing, and it rides the ladder like any other failure.
+  defp run_ladder(%State{} = s, item, attempt) do
     outcome =
       try do
-        {:result, s.module.run(value, s.proc_state, ctx)}
+        ctx = Ctx.new(s.module, s.entity_key, clock_now(s, item), ctx_opts(s, item))
+        {:result, ctx, call(s, item, ctx)}
       rescue
         e -> {:raised, Exception.message(e)}
       catch
@@ -386,21 +456,113 @@ defmodule Flezha.SDK.Entity do
       end
 
     case outcome do
-      {:result, {:ok, new_state}} ->
-        {:ok, new_state, Ctx.take_emits(ctx), Ctx.take_changes(ctx)}
+      {:result, ctx, {:ok, new_state}} ->
+        {:ok, new_state, Ctx.take_emits(ctx), Ctx.take_changes(ctx), Ctx.take_timers(ctx)}
 
-      {:result, {:error, {:non_retryable, reason}}} ->
+      {:result, ctx, {:error, {:non_retryable, reason}}} ->
         Ctx.discard(ctx)
         {:park, format_error(reason), attempt}
 
-      {:result, {:error, reason}} ->
+      {:result, ctx, {:error, reason}} ->
         Ctx.discard(ctx)
-        retry_or_park(s, value, attempt, format_error(reason))
+        retry_or_park(s, item, attempt, format_error(reason))
 
       {:raised, message} ->
-        Ctx.discard(ctx)
-        retry_or_park(s, value, attempt, message)
+        retry_or_park(s, item, attempt, message)
     end
+  end
+
+  # `on_timer/4` on a firing, `run/3` on an input; a firing on a procedure that
+  # exports no handler parks by name, without the retries a raise would climb.
+  defp call(%State{timers: %{on_timer?: true}} = s, %Fire{kind: kind, at: at}, ctx),
+    do: s.module.on_timer(at, kind, s.proc_state, ctx)
+
+  defp call(%State{module: module}, %Fire{}, _ctx) do
+    {:error,
+     {:non_retryable,
+      "procedure `#{module.name()}` registered a timer but does not export on_timer/4"}}
+  end
+
+  defp call(%State{} = s, value, ctx), do: s.module.run(value, s.proc_state, ctx)
+
+  # The declared clock, evaluated once per attempt: the epoch millisecond, the
+  # durable seq this dispatch starts at, or the input's own event time — and,
+  # inside a firing, the scheduled timestamp under every clock.
+  defp clock_now(_s, %Fire{at: at}), do: at
+  defp clock_now(%State{timers: %{clock: :wall}}, _value), do: System.system_time(:millisecond)
+  defp clock_now(%State{timers: %{clock: :logical}, change_seq: seq}, _value), do: seq
+  defp clock_now(%State{timers: %{clock: {:event_time, extract}}}, value), do: extract.(value)
+
+  defp clock_of(module) do
+    case Procedure.clock(module) do
+      :event_time -> {:event_time, &module.event_time_of/1}
+      clock -> clock
+    end
+  end
+
+  # The invocation's timer session opens over the live pending set; a firing's
+  # opens on its own removal.
+  defp ctx_opts(%State{} = s, item),
+    do: [timers: s.timers.pending, firing: firing(item)] ++ s.ctx_opts
+
+  defp firing(%Fire{kind: kind, at: at}), do: {kind, at}
+  defp firing(_value), do: nil
+
+  # Committed ops onto the BEAM's timer service — one `send_after` per
+  # processing-time registration, cancelled per removal — the counters and
+  # the telemetry. A dispatch that touched no timer — the common one — pays
+  # nothing here.
+  defp reflect(%State{} = s, [], %{registered: 0, fired: 0, cancelled: 0, refused: 0}), do: s
+
+  defp reflect(%State{} = s, ops, tally) do
+    s =
+      Enum.reduce(ops, s, fn
+        %{kind: :processing_time, register: true, scheduled_at: at}, acc -> arm(acc, at)
+        %{kind: :processing_time, register: false, scheduled_at: at}, acc -> disarm(acc, at)
+        _event_time, acc -> acc
+      end)
+
+    if tally.fired > 0, do: Counters.inc_timers_fired(s.counters)
+    Enum.each(tally, fn {event, n} -> if n > 0, do: timers_event(s, event, n) end)
+    s
+  end
+
+  defp arm(%State{} = s, at) do
+    %State{timers: timers} = s = disarm(s, at)
+    delay = max(at - System.system_time(:millisecond), 0)
+    ref = Process.send_after(self(), {:timer_due, at}, delay)
+    Counters.add_timers_armed(s.counters, 1)
+    %{s | timers: %{timers | refs: Map.put(timers.refs, at, ref)}}
+  end
+
+  defp disarm(%State{timers: timers} = s, at) do
+    case Map.pop(timers.refs, at) do
+      {nil, _refs} ->
+        s
+
+      {ref, refs} ->
+        Process.cancel_timer(ref)
+        Counters.add_timers_armed(s.counters, -1)
+        %{s | timers: %{timers | refs: refs}}
+    end
+  end
+
+  defp disarm_all(%State{timers: timers} = s),
+    do: Enum.reduce(Map.keys(timers.refs), s, &disarm(&2, &1))
+
+  # What a restore folded or a slot seeded, armed afresh; an overdue one fires
+  # at once.
+  defp rearm(%State{} = s) do
+    s = disarm_all(s)
+    Enum.reduce(Timers.all(s.timers.pending, :processing_time), s, &arm(&2, &1))
+  end
+
+  defp timers_event(%State{} = s, event, count) do
+    :telemetry.execute([:flezha, :sdk, :timers], %{count: count}, %{
+      operative_id: s.operative_id,
+      procedure: s.module.name(),
+      event: event
+    })
   end
 
   defp retry_or_park(%State{retry_max: max}, _value, attempt, error) when attempt >= max,
@@ -408,7 +570,7 @@ defmodule Flezha.SDK.Entity do
 
   defp retry_or_park(%State{} = s, value, attempt, error) do
     Logger.debug(
-      "[Flezha.SDK] #{label(s)} attempt #{attempt}/#{s.retry_max} failed: #{error}; retrying"
+      "[Flezha.SDK] #{State.label(s)} attempt #{attempt}/#{s.retry_max} failed: #{error}; retrying"
     )
 
     :telemetry.execute([:flezha, :sdk, :retry], %{count: 1}, %{
@@ -428,7 +590,7 @@ defmodule Flezha.SDK.Entity do
 
   defp park(%State{} = s, value, error, attempts) do
     seq = s.park_seq
-    park_id = "#{label(s)}##{seq}"
+    park_id = "#{State.label(s)}##{seq}"
 
     channel = s.input_channel || s.node_name || s.operative_id
     body = Park.body(park_id, channel, error, attempts, value)
@@ -444,92 +606,6 @@ defmodule Flezha.SDK.Entity do
 
     %{s | held?: true, park_id: park_id, park_seq: seq + 1}
   end
-
-  # --- the record stream ---
-
-  defp ship(%State{changeful?: false} = s, _changes), do: s
-  defp ship(%State{} = s, []), do: s
-
-  defp ship(%State{} = s, changes) do
-    seq =
-      Enum.reduce(changes, s.change_seq, fn change, seq ->
-        if s.persistent?, do: send_record(s, seq, Record.encode_body(change))
-        seq + 1
-      end)
-
-    write_slot(%{s | change_seq: seq})
-  end
-
-  # Between a close and its reconnect there is no stream: the seq still
-  # advances, so the gap it leaves is what makes the controller resync the
-  # Entity from its own copy rather than a silently diverged one.
-  defp send_record(%State{secondary: nil} = s, seq, _body) do
-    Logger.warning(
-      "[Flezha.SDK] #{label(s)} record seq #{seq} had no state stream (reconnecting); " <>
-        "the controller resyncs the gap"
-    )
-  end
-
-  # Debit-on-send: parks here, in the Entity, when the window is exhausted —
-  # and the router's push behind it waits, which is the emit-path park.
-  defp send_record(%State{} = s, seq, body) do
-    frame = Record.frame(s.identity, seq, body, s.schema_version)
-    Credit.acquire(s.credit, byte_size(frame))
-
-    case TransportStream.send_frame(s.secondary, "entity_state_change", frame, %{}) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Flezha.SDK] #{label(s)} record seq #{seq} undelivered: #{inspect(reason)}"
-        )
-    end
-  end
-
-  # Fire-and-forget, outside the credit window, as the shared core's own is.
-  defp send_delete(%State{secondary: nil} = s),
-    do: Logger.warning("[Flezha.SDK] #{label(s)} evicted with no state stream (reconnecting)")
-
-  defp send_delete(%State{} = s) do
-    case TransportStream.send_frame(s.secondary, "delete_entity_state", s.identity, %{}) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Flezha.SDK] #{label(s)} delete undelivered: #{inspect(reason)}")
-    end
-  end
-
-  # A replacement for an Entity killed untrappably continues from what its
-  # predecessor last shipped; a first Entity starts from `init_state/1`.
-  defp seed(nil, _identity, module, key), do: {module.init_state(key), 0}
-
-  defp seed(slots, identity, module, key) do
-    case :ets.lookup(slots, identity) do
-      [{^identity, state, seq}] -> {state, seq}
-      [] -> {module.init_state(key), 0}
-    end
-  end
-
-  # The slot is what the WAL holds — written after the records are on the
-  # wire, read by the replacement of an Entity killed untrappably.
-  defp write_slot(%State{changeful?: true, slots: slots} = s) when slots != nil do
-    :ets.insert(slots, {s.identity, s.proc_state, s.change_seq})
-    s
-  end
-
-  defp write_slot(s), do: s
-
-  # One stream per Entity, chosen by identity: its records and its snapshot
-  # stay in order because one process writes them to one stream.
-  defp put_secondaries(%State{} = s, []), do: %{s | secondary: nil}
-
-  defp put_secondaries(%State{} = s, secondaries),
-    do: %{
-      s
-      | secondary: Enum.at(secondaries, rem(:erlang.phash2(s.identity), length(secondaries)))
-    }
 
   defp flush_emits(_s, [], _handout_seq), do: :ok
 
@@ -552,8 +628,4 @@ defmodule Flezha.SDK.Entity do
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: inspect(reason)
-
-  defp label(%State{operative_id: oid, node_name: name, entity_key: key}) do
-    "#{oid}/#{name || "node"}/#{key || "single"}"
-  end
 end

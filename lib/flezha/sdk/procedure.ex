@@ -28,6 +28,15 @@ defmodule Flezha.SDK.Procedure do
   language's own — answering `{:ok, term}` at the running version or
   `{:error, reason}`. Both default to refusing, so a floor declared without
   its migration fails at the first old record.
+
+  Time: `clock/0` (`:wall`) names what `Flezha.SDK.Ctx.now/1` serves — the
+  epoch millisecond at dispatch entry, `:logical` (the Entity's durable change
+  seq) or `:event_time` (what `event_time_of/1` extracts from the input; a
+  `:logical` clock on a procedure without `apply_change/2` and an `:event_time`
+  clock without its extractor are refused at registration). Timers:
+  `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
+  what `run/3` answers and is what a timer registered through the ctx fires
+  into; `max_timers_per_entity/0` (10_000) bounds an Entity's pending set.
   """
 
   alias Flezha.SDK.Ctx
@@ -53,6 +62,15 @@ defmodule Flezha.SDK.Procedure do
               {:ok, state()} | {:error, term()}
   @callback migrate_change(from_version :: pos_integer(), old_change :: term()) ::
               {:ok, term()} | {:error, term()}
+  @callback clock() :: :wall | :logical | :event_time
+  @callback event_time_of(input :: term()) :: non_neg_integer()
+  @callback on_timer(
+              fired_at :: non_neg_integer(),
+              kind :: :event_time | :processing_time,
+              state(),
+              Ctx.t()
+            ) :: run_result()
+  @callback max_timers_per_entity() :: pos_integer()
 
   @optional_callbacks entity_keys: 0,
                       entities_for: 1,
@@ -65,7 +83,11 @@ defmodule Flezha.SDK.Procedure do
                       schema_version: 0,
                       min_readable_schema_version: 0,
                       migrate_state: 2,
-                      migrate_change: 2
+                      migrate_change: 2,
+                      clock: 0,
+                      event_time_of: 1,
+                      on_timer: 4,
+                      max_timers_per_entity: 0
 
   @default_mailbox_capacity 1024
   @max_mailbox_capacity 1_048_576
@@ -75,6 +97,8 @@ defmodule Flezha.SDK.Procedure do
   # the controller's `:default_compact_after_bytes`.
   @default_compact_after_bytes 8 * 1024 * 1024
   @default_schema_version 1
+  # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_ENTITY`.
+  @default_max_timers_per_entity 10_000
 
   @doc "Static entity keyset (`[]` unless the procedure overrides `entity_keys/0`)."
   def entity_keys(module) do
@@ -148,6 +172,29 @@ defmodule Flezha.SDK.Procedure do
       do: module.migrate_change(from, old),
       else: :undeclared
   end
+
+  @doc "The declared clock (`:wall` unless declared)."
+  @spec clock(module()) :: atom()
+  def clock(module) do
+    if exports?(module, :clock, 0), do: module.clock(), else: :wall
+  end
+
+  @doc "Whether the procedure handles a firing — it exports `on_timer/4`."
+  @spec on_timer?(module()) :: boolean()
+  def on_timer?(module), do: exports?(module, :on_timer, 4)
+
+  @doc "Cap on an Entity's pending timers (10_000 unless declared)."
+  @spec max_timers_per_entity(module()) :: pos_integer()
+  def max_timers_per_entity(module) do
+    if exports?(module, :max_timers_per_entity, 0),
+      do: module.max_timers_per_entity(),
+      else: @default_max_timers_per_entity
+  end
+
+  @doc "What the procedure declares about its timers, resolved once: the name a refusal reports, the cap, the clock."
+  @spec timer_policy(module()) :: Flezha.SDK.Timers.policy()
+  def timer_policy(module),
+    do: %{procedure: module.name(), cap: max_timers_per_entity(module), clock: clock(module)}
 
   @doc "Per-Entity WAL size at which the controller solicits a snapshot (8 MiB unless overridden)."
   @spec compact_after_bytes(module()) :: pos_integer()
