@@ -30,7 +30,6 @@
   },
   "toolchain": "elixir --version",
   "deferred": [
-    "state_persistence",
     "effectively_once",
     "entity_timers",
     "correction_window",
@@ -76,6 +75,14 @@
     ],
     "pool_wedge": [
       "wedge_probe"
+    ],
+    "state_persistence": [
+      "store_input",
+      "stateful_counter",
+      "coalescing_counter",
+      "persistence_off_counter",
+      "resume_probe",
+      "bench_keyed"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"

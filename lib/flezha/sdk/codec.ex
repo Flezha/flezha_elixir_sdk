@@ -63,6 +63,41 @@ defmodule Flezha.SDK.Codec do
     IO.iodata_to_binary(iodata)
   end
 
+  @doc "Encode a `RestoreInitStateResponse` — the raw_data of a `RestoreInitState` reply."
+  @spec encode_restore_response(binary(), non_neg_integer(), boolean()) :: binary()
+  def encode_restore_response(entity_id, terminal_seq, migrated) do
+    encode(%RunnerCommands.RestoreInitStateResponse{
+      entity_id: entity_id,
+      terminal_seq: terminal_seq,
+      migrated: migrated
+    })
+  end
+
+  @doc "Encode a `CompactEntityResponse` — the raw_data of a `CompactEntity` reply."
+  @spec encode_compact_response(binary(), non_neg_integer(), non_neg_integer()) :: binary()
+  def encode_compact_response(entity_id, snapshot_seq, snapshot_bytes_size) do
+    encode(%RunnerCommands.CompactEntityResponse{
+      entity_id: entity_id,
+      snapshot_seq: snapshot_seq,
+      snapshot_bytes_size: snapshot_bytes_size
+    })
+  end
+
+  @doc "Encode a `CreditWindowAck` — the raw_data that marks the session credit-speaking."
+  @spec encode_credit_ack(String.t()) :: binary()
+  def encode_credit_ack(stream_id),
+    do: encode(%RunnerCommands.CreditWindowAck{stream_id: stream_id})
+
+  @doc "The `RunnerShutdownNotification` command tuple for `encode_request/2`."
+  @spec shutdown_notification_command(String.t(), binary()) :: {atom(), struct()}
+  def shutdown_notification_command(operative_id, serialized_state) do
+    {:runner_shutdown_notification,
+     %RunnerCommands.RunnerShutdownNotification{
+       operative_id: operative_id,
+       serialized_state: serialized_state
+     }}
+  end
+
   @doc "Build the `UpdateFactories` command tuple from a list of `{id, description}`."
   @spec update_factories_command([{String.t(), String.t() | nil}]) :: {atom(), struct()}
   def update_factories_command(factories) do
@@ -72,5 +107,10 @@ defmodule Flezha.SDK.Codec do
       end)
 
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}
+  end
+
+  defp encode(message) do
+    {:ok, iodata, _size} = Protox.encode(message)
+    IO.iodata_to_binary(iodata)
   end
 end

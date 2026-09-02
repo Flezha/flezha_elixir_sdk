@@ -1,27 +1,42 @@
 defmodule Flezha.SDK.Ctx do
   @moduledoc """
   The invocation context handed to `Procedure.run/3`. `emit/2` and
-  `emit_with_meta/3` accumulate outputs for this invocation; `now/1` is a
-  wall-clock millisecond stamp captured once at invocation entry; `entity_key/1`
-  is the owning Entity's key (or nil for a Single Entity). Emits are held in the
-  running process's dictionary under a per-invocation ref (so `emit/2` can
-  side-effect through an immutable struct) and are flushed by the Entity only
-  when `run/3` returns `{:ok, _}` — a failing invocation discards its partial
-  emits. Reserved `flz.`-prefixed metadata keys are refused.
+  `emit_with_meta/3` accumulate outputs for this invocation; `apply/3` folds a
+  change into the state through the procedure's `apply_change/2` and records
+  it for the Entity's record stream — one fold, one push, the only recorded
+  mutation path; `now/1` is a wall-clock millisecond stamp captured once at
+  invocation entry; `entity_key/1` is the owning Entity's key (or nil for a
+  Single Entity). Emits and changes are held in the running process's
+  dictionary under a per-invocation ref (so `emit/2` can side-effect through an
+  immutable struct) and are taken by the Entity only when `run/3` returns
+  `{:ok, _}` — a failing invocation discards both. Reserved `flz.`-prefixed
+  metadata keys are refused.
   """
 
-  @enforce_keys [:entity_key, :now_ms, :ref]
-  defstruct [:entity_key, :now_ms, :ref]
+  @enforce_keys [:module, :entity_key, :now_ms, :ref]
+  defstruct [:module, :entity_key, :now_ms, :ref]
 
   @type t :: %__MODULE__{}
 
   @reserved_prefix "flz."
 
-  @doc "A fresh ctx for one invocation. `now_ms` is captured once here."
-  def new(entity_key, now_ms) do
+  @doc "A fresh ctx for one invocation of `module`. `now_ms` is captured once here."
+  def new(module, entity_key, now_ms) do
     ref = make_ref()
     Process.put(key(ref), [])
-    %__MODULE__{entity_key: entity_key, now_ms: now_ms, ref: ref}
+    Process.put(changes_key(ref), [])
+    %__MODULE__{module: module, entity_key: entity_key, now_ms: now_ms, ref: ref}
+  end
+
+  @doc """
+  Fold `change` into `state` with the procedure's `apply_change/2` and record
+  it, so the Entity ships it after the invocation succeeds. The returned state
+  is what `run/3` returns in its `{:ok, _}`.
+  """
+  @spec apply(t(), term(), term()) :: term()
+  def apply(%__MODULE__{module: module, ref: ref}, state, change) do
+    Process.put(changes_key(ref), [change | Process.get(changes_key(ref), [])])
+    module.apply_change(state, change)
   end
 
   @doc "Emit a value on the procedure's outgoing channels."
@@ -55,7 +70,17 @@ defmodule Flezha.SDK.Ctx do
   end
 
   @doc false
-  def discard(%__MODULE__{ref: ref}), do: Process.delete(key(ref))
+  def take_changes(%__MODULE__{ref: ref}) do
+    changes = Process.get(changes_key(ref), []) |> Enum.reverse()
+    Process.delete(changes_key(ref))
+    changes
+  end
+
+  @doc false
+  def discard(%__MODULE__{ref: ref}) do
+    Process.delete(key(ref))
+    Process.delete(changes_key(ref))
+  end
 
   defp reserved_key(meta) do
     Enum.find_value(meta, fn {k, _v} ->
@@ -65,4 +90,5 @@ defmodule Flezha.SDK.Ctx do
   end
 
   defp key(ref), do: {__MODULE__, ref}
+  defp changes_key(ref), do: {__MODULE__, ref, :changes}
 end

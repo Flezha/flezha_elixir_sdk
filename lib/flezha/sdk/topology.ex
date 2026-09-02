@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless procedure → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Procedure}
+  alias Flezha.SDK.{Channels, Procedure, StreamOperative}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -24,7 +24,9 @@ defmodule Flezha.SDK.Topology do
             routes: %{},
             order: [],
             sink_serializers: %{},
-            keyless?: false
+            keyless?: false,
+            persistence_enabled?: true,
+            compact_after_bytes: nil
 
   @type t :: %__MODULE__{}
 
@@ -61,7 +63,9 @@ defmodule Flezha.SDK.Topology do
          routes: routes,
          order: Map.keys(acc.nodes),
          sink_serializers: sink_serializers(acc),
-         keyless?: keyless?(acc, node_mode)
+         keyless?: keyless?(acc, node_mode),
+         persistence_enabled?: StreamOperative.persistence_enabled?(module),
+         compact_after_bytes: compact_after_bytes(acc)
        }}
     else
       {:error, {:invalid_topology, Enum.reverse(issues)}}
@@ -146,7 +150,22 @@ defmodule Flezha.SDK.Topology do
     # cycles among nodes
     issues = check_cycles(acc, routes, issues)
 
-    issues
+    check_changeful_identity(acc, issues)
+  end
+
+  # A changeful procedure's records are keyed by its `name/0`, so two nodes of
+  # one changeful module in a class would share a WAL. The reference gives a
+  # named node its own identity; here `named/2` also names the channel and the
+  # scenarios pin the procedure name, so the shape is refused instead.
+  defp check_changeful_identity(acc, issues) do
+    acc.nodes
+    |> Enum.map(fn {_ref, %{module: m}} -> m end)
+    |> Enum.filter(&Procedure.changeful?/1)
+    |> Enum.frequencies()
+    |> Enum.reduce(issues, fn
+      {module, n}, is when n > 1 -> [{:DuplicatePersistentProcedure, module.name()} | is]
+      _, is -> is
+    end)
   end
 
   defp check_unreachable(is, _ref, in_routes, _acc) when in_routes != [], do: is
@@ -221,6 +240,16 @@ defmodule Flezha.SDK.Topology do
 
   defp sink_serializers(acc),
     do: Map.new(acc.sinks, fn s -> {s.plugin, s.serializer} end)
+
+  # The smallest threshold across the class's changeful procedures — what the
+  # class declares when it differs from the default; nil when nothing journals.
+  defp compact_after_bytes(acc) do
+    acc.nodes
+    |> Enum.map(fn {_ref, %{module: m}} -> m end)
+    |> Enum.filter(&Procedure.changeful?/1)
+    |> Enum.map(&Procedure.compact_after_bytes/1)
+    |> Enum.min(fn -> nil end)
+  end
 
   defp node_modules(acc), do: Map.new(acc.nodes, fn {ref, %{module: m}} -> {ref, m} end)
   defp node_names(acc), do: Map.new(acc.nodes, fn {ref, %{name: n}} -> {ref, n} end)

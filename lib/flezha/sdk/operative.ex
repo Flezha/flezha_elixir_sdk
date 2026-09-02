@@ -28,6 +28,8 @@ defmodule Flezha.SDK.Operative do
       :counters,
       :runner,
       :secondaries,
+      :slots,
+      :credit,
       cells: %{},
       entities: %{},
       monitors: %{}
@@ -39,6 +41,22 @@ defmodule Flezha.SDK.Operative do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   def stop(pid), do: GenServer.stop(pid, :normal)
+
+  @doc """
+  The Entity of `procedure` (its `name/0`) at `key` — `nil` for a Single node.
+  `materialise: true` creates a dynamic key that has no Entity yet, which is
+  what a restore of state the controller holds for it needs.
+  """
+  @spec lookup(GenServer.server(), String.t(), String.t() | nil, keyword()) ::
+          {:ok, pid()} | {:error, :procedure_not_found | :entity_not_found}
+  def lookup(pid, procedure, key, opts \\ []),
+    do: GenServer.call(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)})
+
+  @doc "Every node as `{procedure_name, mode, [{key, entity_pid}]}` — the live-read walk's input."
+  @spec entities(GenServer.server()) :: [
+          {String.t(), :single | :static | :dynamic, [{term(), pid()}]}
+        ]
+  def entities(pid), do: GenServer.call(pid, :entities)
 
   # --- server ---
 
@@ -57,10 +75,44 @@ defmodule Flezha.SDK.Operative do
       range: Keyword.fetch!(opts, :range),
       counters: Keyword.fetch!(opts, :counters),
       runner: Keyword.fetch!(opts, :runner),
-      secondaries: Keyword.fetch!(opts, :secondaries)
+      secondaries: Keyword.fetch!(opts, :secondaries),
+      credit: Keyword.get(opts, :credit),
+      # The slot survives the Entity: what a persistent Entity last shipped,
+      # for the replacement of one killed untrappably.
+      slots: :ets.new(:flezha_sdk_slots, [:public, :set])
     }
 
     {:ok, prewarm(state)}
+  end
+
+  @impl true
+  def handle_call({:lookup, procedure, key, materialise?}, _from, %State{topology: topo} = s) do
+    with {:ok, node_ref} <- node_of(topo, procedure),
+         {:ok, slot_key} <- slot_key(s, node_ref, key) do
+      case {Map.get(s.entities, {node_ref, slot_key}), materialise?} do
+        {nil, false} ->
+          {:reply, {:error, :entity_not_found}, s}
+
+        {nil, true} ->
+          {pid, s} = ensure_entity(s, node_ref, slot_key)
+          {:reply, {:ok, pid}, s}
+
+        {pid, _} ->
+          {:reply, {:ok, pid}, s}
+      end
+    else
+      {:error, _} = error -> {:reply, error, s}
+    end
+  end
+
+  def handle_call(:entities, _from, %State{topology: topo} = s) do
+    listing =
+      Enum.map(topo.order, fn node_ref ->
+        pids = for {{^node_ref, key}, pid} <- s.entities, do: {key, pid}
+        {topo.node_modules[node_ref].name(), topo.node_mode[node_ref], Enum.sort(pids)}
+      end)
+
+    {:reply, listing, s}
   end
 
   # Eagerly create Single (one) and owned Static entities; Dynamic ones are lazy.
@@ -135,8 +187,10 @@ defmodule Flezha.SDK.Operative do
     {:noreply, s}
   end
 
-  def handle_info({:secondaries, secondaries}, %State{} = s),
-    do: {:noreply, %{s | secondaries: secondaries}}
+  def handle_info({:secondaries, secondaries}, %State{} = s) do
+    Enum.each(s.entities, fn {_ref, pid} -> send(pid, {:secondaries, secondaries}) end)
+    {:noreply, %{s | secondaries: secondaries}}
+  end
 
   def handle_info(_msg, s), do: {:noreply, s}
 
@@ -241,8 +295,41 @@ defmodule Flezha.SDK.Operative do
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
       retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, @default_retry_backoff_ms),
-      counters: s.counters
+      counters: s.counters,
+      secondaries: s.secondaries,
+      slots: s.slots,
+      credit: s.credit,
+      persistence_enabled: topo.persistence_enabled?
     )
+  end
+
+  defp node_of(topo, procedure) do
+    case Enum.find(topo.node_modules, fn {_ref, m} -> m.name() == procedure end) do
+      {ref, _module} -> {:ok, ref}
+      nil -> {:error, :procedure_not_found}
+    end
+  end
+
+  # The key an Entity is registered under for its node's mode: none for a
+  # Single node, a declared and owned one for a Static node, any owned key for
+  # a Dynamic node.
+  defp slot_key(%State{topology: topo} = s, node_ref, key) do
+    case Map.fetch!(topo.node_mode, node_ref) do
+      :single when key in [nil, ""] ->
+        {:ok, nil}
+
+      :static ->
+        if key in Procedure.entity_keys(topo.node_modules[node_ref]) and
+             KeyGroup.owns?(s.range, key),
+           do: {:ok, key},
+           else: {:error, :entity_not_found}
+
+      :dynamic when is_binary(key) ->
+        if KeyGroup.owns?(s.range, key), do: {:ok, key}, else: {:error, :entity_not_found}
+
+      _ ->
+        {:error, :entity_not_found}
+    end
   end
 
   # --- parking (entry-parse + partition mis-route) ---

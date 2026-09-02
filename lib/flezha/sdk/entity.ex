@@ -7,13 +7,25 @@ defmodule Flezha.SDK.Entity do
   router, waits, which is the documented co-tenancy cost);
   `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
   the input and HOLDS the Entity until the controller's `ParkPayloadAck`.
+
+  A changeful Entity (its procedure exports `apply_change/2`) is also the
+  writer of its own record stream: after a successful dispatch it ships one
+  `entity_state_change` frame per recorded change at the next seq on one
+  secondary stream, before the dispatch's outputs leave, then writes its
+  `{state, seq}` into the Operative's slot table so a replacement started
+  after an untrappable kill continues on the same seq line. It answers a
+  restore (fold, re-arm), a compaction (the snapshot after its records), a
+  live read and a state apply, each in mailbox order so no dispatch
+  interleaves. With the class's persistence off the seq advances and nothing
+  ships.
   """
 
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Ctx, Jitter, Park}
+  alias Flezha.SDK.{Counters, Credit, Ctx, Jitter, Park, Procedure, Record}
   alias Flezha.SDK.Operative.Inbox
+  alias Flezha.Transport.Stream, as: TransportStream
 
   @retry_backoff_cap_ms 5_000
 
@@ -32,6 +44,14 @@ defmodule Flezha.SDK.Entity do
       :retry_max,
       :retry_backoff_ms,
       :counters,
+      :identity,
+      :slots,
+      :credit,
+      changeful?: false,
+      persistent?: false,
+      schema_version: 1,
+      change_seq: 0,
+      secondary: nil,
       proc_state: nil,
       queue: :queue.new(),
       size: 0,
@@ -56,6 +76,37 @@ defmodule Flezha.SDK.Entity do
   @doc "Release a held (parked) Entity after its `ParkPayloadAck`."
   def release_park(pid, park_id), do: send(pid, {:park_released, park_id})
 
+  @doc "Rebuild the state from a `RestoreInitState` payload; `{:ok, terminal_seq, migrated?}`."
+  @spec restore(pid(), binary(), binary(), binary(), non_neg_integer()) ::
+          {:ok, non_neg_integer(), boolean()} | {:error, String.t()}
+  def restore(pid, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint),
+    do:
+      GenServer.call(
+        pid,
+        {:restore, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint},
+        :infinity
+      )
+
+  @doc "Ship the state as an `entity_state_snapshot`; `{:ok, snapshot_seq, body_size}`."
+  @spec snapshot(pid()) :: {:ok, non_neg_integer(), non_neg_integer()} | {:error, String.t()}
+  def snapshot(pid), do: GenServer.call(pid, :snapshot, :infinity)
+
+  @doc """
+  The state and the seq it was read at; `{:error, :busy}` when a dispatch holds
+  the Entity past `timeout` — the reference's serialize gate.
+  """
+  @spec read(pid(), timeout()) :: {:ok, term(), non_neg_integer()} | {:error, :busy | :gone}
+  def read(pid, timeout) do
+    GenServer.call(pid, :read, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :busy}
+    :exit, _gone -> {:error, :gone}
+  end
+
+  @doc "Replace the state with a JSON object through the procedure's `state_from_json/1`."
+  @spec apply_state(pid(), map()) :: :ok | {:error, String.t()}
+  def apply_state(pid, json), do: GenServer.call(pid, {:apply_state, json}, :infinity)
+
   @doc """
   An Entity's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
   same value to release the slot of an Entity that died mid-dispatch — the one
@@ -71,10 +122,15 @@ defmodule Flezha.SDK.Entity do
   def init(opts) do
     module = Keyword.fetch!(opts, :module)
     entity_key = Keyword.get(opts, :entity_key)
+    operative_id = Keyword.fetch!(opts, :operative_id)
+    identity = Park.identity(operative_id, module.name(), entity_key || "")
+    changeful? = Procedure.changeful?(module)
+    slots = Keyword.get(opts, :slots)
+    {proc_state, change_seq} = seed(slots, identity, module, entity_key)
 
     state = %State{
       operative: Keyword.fetch!(opts, :operative),
-      operative_id: Keyword.fetch!(opts, :operative_id),
+      operative_id: operative_id,
       node_ref: Keyword.fetch!(opts, :node_ref),
       node_name: Keyword.get(opts, :node_name),
       input_channel: Keyword.get(opts, :input_channel),
@@ -85,10 +141,17 @@ defmodule Flezha.SDK.Entity do
       retry_max: Keyword.fetch!(opts, :retry_max),
       retry_backoff_ms: Keyword.fetch!(opts, :retry_backoff_ms),
       counters: Keyword.fetch!(opts, :counters),
-      proc_state: module.init_state(entity_key)
+      identity: identity,
+      slots: slots,
+      credit: Keyword.get(opts, :credit),
+      changeful?: changeful?,
+      persistent?: changeful? and Keyword.get(opts, :persistence_enabled, true),
+      schema_version: Procedure.schema_version(module),
+      proc_state: proc_state,
+      change_seq: change_seq
     }
 
-    {:ok, state}
+    {:ok, put_secondaries(state, Keyword.get(opts, :secondaries, []))}
   end
 
   @impl true
@@ -105,6 +168,47 @@ defmodule Flezha.SDK.Entity do
       Counters.deferred_started(s.counters, identity(s.operative_id, s.node_ref, s.entity_key))
       {:noreply, %{s | waiters: :queue.in({from, value}, s.waiters)}}
     end
+  end
+
+  def handle_call({:restore, header, snapshot, log, hint}, _from, %State{changeful?: true} = s) do
+    case Record.fold(s.module, s.entity_key, header, snapshot, log, hint) do
+      {:ok, state, terminal, migrated} ->
+        s = write_slot(%{s | proc_state: state, change_seq: terminal + 1})
+        {:reply, {:ok, terminal, migrated}, s}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, s}
+    end
+  end
+
+  def handle_call({:restore, _h, _s, _l, _hint}, _from, %State{} = s),
+    do: {:reply, {:error, "#{label(s)} persists nothing"}, s}
+
+  # The snapshot folds every seq already on the wire: nothing is pending, so
+  # that is `change_seq - 1`, and the frame leaves behind the records on the
+  # same stream from the same process.
+  def handle_call(:snapshot, _from, %State{changeful?: true, secondary: secondary} = s)
+      when secondary != nil do
+    seq = max(s.change_seq - 1, 0)
+    body = Record.encode_body(s.proc_state)
+    frame = Record.frame(s.identity, seq, body, s.schema_version)
+
+    case TransportStream.send_frame(secondary, "entity_state_snapshot", frame, %{}) do
+      :ok -> {:reply, {:ok, seq, byte_size(body)}, s}
+      {:error, reason} -> {:reply, {:error, inspect(reason)}, s}
+    end
+  end
+
+  def handle_call(:snapshot, _from, %State{} = s),
+    do: {:reply, {:error, "#{label(s)} has no state stream"}, s}
+
+  def handle_call(:read, _from, %State{} = s),
+    do: {:reply, {:ok, s.proc_state, s.change_seq}, s}
+
+  def handle_call({:apply_state, json}, _from, %State{} = s) do
+    {:reply, :ok, write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
+  rescue
+    e -> {:reply, {:error, "apply_state: #{Exception.message(e)}"}, s}
   end
 
   @impl true
@@ -126,6 +230,9 @@ defmodule Flezha.SDK.Entity do
 
   @impl true
   def handle_info(:process, %State{} = s), do: {:noreply, process_next(s)}
+
+  def handle_info({:secondaries, secondaries}, %State{} = s),
+    do: {:noreply, put_secondaries(s, secondaries)}
 
   def handle_info({:park_released, park_id}, %State{park_id: park_id} = s) do
     {:noreply, process_next(%{s | held?: false, park_id: nil})}
@@ -201,10 +308,12 @@ defmodule Flezha.SDK.Entity do
 
     try do
       case run_ladder(s, value, 1) do
-        {:ok, new_proc_state, emits} ->
+        {:ok, new_proc_state, emits, changes} ->
           Counters.inc_dispatches(s.counters)
+          # The records leave before the outputs: flush-before-emit.
+          s = ship(%{s | proc_state: new_proc_state}, changes)
           flush_emits(s, emits)
-          %{s | proc_state: new_proc_state}
+          s
 
         {:park, error, attempts} ->
           park(s, value, error, attempts)
@@ -215,7 +324,7 @@ defmodule Flezha.SDK.Entity do
   end
 
   defp run_ladder(%State{} = s, value, attempt) do
-    ctx = Ctx.new(s.entity_key, System.system_time(:millisecond))
+    ctx = Ctx.new(s.module, s.entity_key, System.system_time(:millisecond))
 
     outcome =
       try do
@@ -228,7 +337,7 @@ defmodule Flezha.SDK.Entity do
 
     case outcome do
       {:result, {:ok, new_state}} ->
-        {:ok, new_state, Ctx.take_emits(ctx)}
+        {:ok, new_state, Ctx.take_emits(ctx), Ctx.take_changes(ctx)}
 
       {:result, {:error, {:non_retryable, reason}}} ->
         Ctx.discard(ctx)
@@ -285,6 +394,78 @@ defmodule Flezha.SDK.Entity do
 
     %{s | held?: true, park_id: park_id, park_seq: seq + 1}
   end
+
+  # --- the record stream ---
+
+  defp ship(%State{changeful?: false} = s, _changes), do: s
+  defp ship(%State{} = s, []), do: s
+
+  defp ship(%State{} = s, changes) do
+    seq =
+      Enum.reduce(changes, s.change_seq, fn change, seq ->
+        if s.persistent?, do: send_record(s, seq, Record.encode_body(change))
+        seq + 1
+      end)
+
+    write_slot(%{s | change_seq: seq})
+  end
+
+  # Between a close and its reconnect there is no stream: the seq still
+  # advances, so the gap it leaves is what makes the controller resync the
+  # Entity from its own copy rather than a silently diverged one.
+  defp send_record(%State{secondary: nil} = s, seq, _body) do
+    Logger.warning(
+      "[Flezha.SDK] #{label(s)} record seq #{seq} had no state stream (reconnecting); " <>
+        "the controller resyncs the gap"
+    )
+  end
+
+  # Debit-on-send: parks here, in the Entity, when the window is exhausted —
+  # and the router's push behind it waits, which is the emit-path park.
+  defp send_record(%State{} = s, seq, body) do
+    frame = Record.frame(s.identity, seq, body, s.schema_version)
+    Credit.acquire(s.credit, byte_size(frame))
+
+    case TransportStream.send_frame(s.secondary, "entity_state_change", frame, %{}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Flezha.SDK] #{label(s)} record seq #{seq} undelivered: #{inspect(reason)}"
+        )
+    end
+  end
+
+  # A replacement for an Entity killed untrappably continues from what its
+  # predecessor last shipped; a first Entity starts from `init_state/1`.
+  defp seed(nil, _identity, module, key), do: {module.init_state(key), 0}
+
+  defp seed(slots, identity, module, key) do
+    case :ets.lookup(slots, identity) do
+      [{^identity, state, seq}] -> {state, seq}
+      [] -> {module.init_state(key), 0}
+    end
+  end
+
+  # The slot is what the WAL holds — written after the records are on the
+  # wire, read by the replacement of an Entity killed untrappably.
+  defp write_slot(%State{changeful?: true, slots: slots} = s) when slots != nil do
+    :ets.insert(slots, {s.identity, s.proc_state, s.change_seq})
+    s
+  end
+
+  defp write_slot(s), do: s
+
+  # One stream per Entity, chosen by identity: its records and its snapshot
+  # stay in order because one process writes them to one stream.
+  defp put_secondaries(%State{} = s, []), do: %{s | secondary: nil}
+
+  defp put_secondaries(%State{} = s, secondaries),
+    do: %{
+      s
+      | secondary: Enum.at(secondaries, rem(:erlang.phash2(s.identity), length(secondaries)))
+    }
 
   defp flush_emits(%State{} = s, emits) do
     values = Enum.map(emits, fn {value, _meta} -> value end)

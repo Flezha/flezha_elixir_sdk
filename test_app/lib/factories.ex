@@ -1,8 +1,8 @@
 # Twins of the rust_runner e2e fixtures (test/apps/rust_runner/src/main.rs)
-# under the same factory ids, procedure names, channel names and output bytes.
-# Elixir SDK v1 deviations, each noted on its fixture: no keyed channels
-# (`keyed`/`emit_keyed` → the same bytes go out unkeyed), no Change journaling
-# (state is a plain term), no serializer-panic isolation.
+# under the same factory ids, procedure names, channel names and output bytes;
+# the persisted-state family is in factories_state.ex. Elixir SDK deviations,
+# each noted on its fixture: no keyed channels (`keyed`/`emit_keyed` → the same
+# bytes go out unkeyed), no serializer-panic isolation.
 
 # -- compare_filter ---------------------------------------------------------
 
@@ -584,11 +584,14 @@ defmodule ElixirRunner.PartitionRelayProc do
 
   def name, do: "partition_relay_procedure"
   def init_state(_), do: %{seen: []}
+  def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
+  def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
   # Rust emits keyed on the same prefix; v1 has no `emit_keyed`, same bytes unkeyed.
   def run(input, s, ctx) do
+    s = Ctx.apply(ctx, s, {:push, input})
     Ctx.emit(ctx, input)
-    {:ok, %{s | seen: [input | s.seen]}}
+    {:ok, s}
   end
 end
 
@@ -634,6 +637,6 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,
       ElixirRunner.PartitionRelayOp
-    ]
+    ] ++ ElixirRunner.FactoriesState.all()
   end
 end

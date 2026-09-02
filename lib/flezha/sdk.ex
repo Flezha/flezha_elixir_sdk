@@ -196,6 +196,10 @@ defmodule Flezha.SDK do
       id: Keyword.get(opts, :id, __MODULE__),
       start: {__MODULE__, :start_link, [opts]},
       restart: Keyword.get(opts, :restart, :permanent),
+      # A graceful stop serialises every operative and waits for the
+      # controller's acks; the budget covers both inside a container's grace
+      # period.
+      shutdown: Keyword.get(opts, :shutdown, 10_000),
       type: :worker
     }
   end

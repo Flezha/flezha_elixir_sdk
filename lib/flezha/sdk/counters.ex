@@ -25,6 +25,10 @@ defmodule Flezha.SDK.Counters do
   and to the handout report, and without it backpressure that withholds work
   looks exactly like a runner doing nothing.
 
+  `credit_parked` counts the credit window's park iterations — a sender waiting
+  for the controller's grant — so a runner parked on an exhausted window reads
+  as parked beside a frozen `dispatches`, not wedged.
+
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
 
@@ -32,11 +36,12 @@ defmodule Flezha.SDK.Counters do
   @blocked_parks 2
   @drops_newest 3
   @drops_oldest 4
+  @credit_parked 5
   # Start-time slots follow the counters; adding a counter moves the base with
   # it rather than leaving a second place to remember how many there are.
   @slots 64
-  @blocks [dispatch: @drops_oldest, deferred: @drops_oldest + @slots]
-  @size @drops_oldest + 2 * @slots
+  @blocks [dispatch: @credit_parked, deferred: @credit_parked + @slots]
+  @size @credit_parked + 2 * @slots
 
   @type t :: :atomics.atomics_ref()
   @typedoc "An Entity's identity, as the slot table hashes it."
@@ -66,6 +71,12 @@ defmodule Flezha.SDK.Counters do
 
   @spec drops_oldest(t()) :: non_neg_integer()
   def drops_oldest(ref), do: :atomics.get(ref, @drops_oldest)
+
+  @spec inc_credit_parked(t()) :: :ok
+  def inc_credit_parked(ref), do: :atomics.add(ref, @credit_parked, 1)
+
+  @spec credit_parked(t()) :: non_neg_integer()
+  def credit_parked(ref), do: :atomics.get(ref, @credit_parked)
 
   @typedoc "Which block of start-time slots — one Entity may hold one of each."
   @type block :: :dispatch | :deferred

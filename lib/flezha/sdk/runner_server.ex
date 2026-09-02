@@ -6,8 +6,10 @@ defmodule Flezha.SDK.RunnerServer do
   `AssignRunnerId`, `ConnectSocket`, per-command dispatch, the control keepalive,
   data heartbeats, `UpdateFactories` on post-start set changes, the park-ack
   loop, and reconnect-with-the-same-stable-id (a binding swap; dead tags 20/21
-  are not implemented). Persistence-family commands are answered with a safe
-  empty success and a warn; a `"workflow"` `AddOperative` is refused.
+  are not implemented). The persistence family — restore, compaction, the live
+  read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
+  off this loop, and a graceful stop ships every operative's state before the
+  connection closes; a `"workflow"` `AddOperative` is refused.
   """
 
   use GenServer
@@ -15,7 +17,9 @@ defmodule Flezha.SDK.RunnerServer do
 
   alias Flezha.SDK.{
     Codec,
+    Commands,
     Counters,
+    Credit,
     DataStream,
     Entity,
     EntryIdle,
@@ -25,6 +29,7 @@ defmodule Flezha.SDK.RunnerServer do
     Operative,
     Park,
     PersistentId,
+    Procedure,
     Transport
   }
 
@@ -36,6 +41,20 @@ defmodule Flezha.SDK.RunnerServer do
   @park_resend_ms 2_000
   @park_warn_every 5
   @reconnect_cap_ms 30_000
+  # Per-operative ack wait on a graceful stop, run in parallel — the shared
+  # core's `ACK_TIMEOUT`.
+  @shutdown_ack_ms 2_000
+  @persistence_commands [
+    :restore_init_state,
+    :compact_entity,
+    :entity_state,
+    :entity_apply_state,
+    :migration_serialization,
+    :migration_deserialization,
+    :entity_mailbox_status,
+    :credit_window_init,
+    :credit_grant
+  ]
   # Exit status of a terminally-disconnected runner. Any non-zero value makes
   # the orchestrator restart the process; a distinct one lets an operator tell
   # "the controller proved me wedged" apart from a crash. Matches
@@ -51,6 +70,7 @@ defmodule Flezha.SDK.RunnerServer do
       :registry,
       :counters,
       :payload,
+      :credit,
       session_token: nil,
       control_handle: nil,
       conn: nil,
@@ -86,26 +106,8 @@ defmodule Flezha.SDK.RunnerServer do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    namespace = Keyword.fetch!(opts, :namespace)
-    transport = Keyword.fetch!(opts, :transport)
-    topologies = Keyword.fetch!(opts, :topologies)
-    factories = Keyword.fetch!(opts, :factories)
-    idle_observers = Keyword.get(opts, :idle_observers, [])
-
-    if transport == :native, do: TransportServer.ensure_started(:native)
-
-    stable_id = PersistentId.stable_id(namespace, Enum.map(factories, &elem(&1, 0)))
-
-    state = %State{
-      namespace: namespace,
-      transport: transport,
-      stable_id: stable_id,
-      registry: :ets.new(:flezha_sdk_operatives, [:public, :set, {:read_concurrency, true}]),
-      counters: Counters.new(),
-      topologies: topologies,
-      factories: factories,
-      payload: handshake_payload(namespace, factories, stable_id)
-    }
+    state = initial_state(opts)
+    if state.transport == :native, do: TransportServer.ensure_started(:native)
 
     case do_connect(state) do
       {:ok, state} ->
@@ -113,8 +115,9 @@ defmodule Flezha.SDK.RunnerServer do
         schedule_keepalive()
 
         {:ok,
-         Enum.reduce(idle_observers, state, fn {channel, threshold_ms, observer}, acc ->
-           register_idle(acc, channel, threshold_ms, observer)
+         Enum.reduce(Keyword.get(opts, :idle_observers, []), state, fn
+           {channel, threshold_ms, observer}, acc ->
+             register_idle(acc, channel, threshold_ms, observer)
          end)}
 
       {:error, reason} ->
@@ -133,6 +136,28 @@ defmodule Flezha.SDK.RunnerServer do
 
         {:stop, {:connect_failed, reason}}
     end
+  end
+
+  # Everything the runner owns before it connects: its identity, the registry
+  # and counters its Operatives share, and the credit window linked here.
+  defp initial_state(opts) do
+    namespace = Keyword.fetch!(opts, :namespace)
+    factories = Keyword.fetch!(opts, :factories)
+    stable_id = PersistentId.stable_id(namespace, Enum.map(factories, &elem(&1, 0)))
+    counters = Counters.new()
+    {:ok, credit} = Credit.start_link(counters: counters)
+
+    %State{
+      namespace: namespace,
+      transport: Keyword.fetch!(opts, :transport),
+      stable_id: stable_id,
+      registry: :ets.new(:flezha_sdk_operatives, [:public, :set, {:read_concurrency, true}]),
+      counters: counters,
+      credit: credit,
+      topologies: Keyword.fetch!(opts, :topologies),
+      factories: factories,
+      payload: handshake_payload(namespace, factories, stable_id)
+    }
   end
 
   @impl true
@@ -214,6 +239,7 @@ defmodule Flezha.SDK.RunnerServer do
     meta = %{
       "dispatches" => Integer.to_string(Counters.dispatches(s.counters)),
       "blocked_parks" => Integer.to_string(Counters.blocked_parks(s.counters)),
+      "credit_parked" => Integer.to_string(Counters.credit_parked(s.counters)),
       "drops_newest" => Integer.to_string(Counters.drops_newest(s.counters)),
       "drops_oldest" => Integer.to_string(Counters.drops_oldest(s.counters)),
       "inflight" => Integer.to_string(inflight),
@@ -280,6 +306,12 @@ defmodule Flezha.SDK.RunnerServer do
     park = %{entity: entity_pid, identity: identity, body: body, resends: 0, timer: ref}
     {:noreply, %{s | parks: Map.put(s.parks, body.park_id, park)}}
   end
+
+  # A graceful stop — the supervisor's shutdown, `Flezha.SDK.close/1`, a
+  # `RunnerDisconnect` — ships every operative's state before the connection
+  # goes, so a reconnect-resume is loss-free.
+  @impl true
+  def terminate(_reason, %State{} = s), do: Commands.shutdown(s, @shutdown_ack_ms)
 
   # --- command dispatch ---
 
@@ -365,22 +397,9 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, release_park(s, park_id)}
   end
 
-  # Persistence-family and dead tags: a persistence-free runner never triggers
-  # these, but answer each safely rather than crash.
-  defp dispatch({tag, _payload}, ref, s)
-       when tag in [
-              :entity_state,
-              :entity_apply_state,
-              :restore_init_state,
-              :compact_entity,
-              :migration_serialization,
-              :migration_deserialization,
-              :entity_mailbox_status,
-              :credit_window_init,
-              :credit_grant
-            ] do
-    Logger.warning("[Flezha.SDK] ignoring #{tag} — persistence is deferred for this runner")
-    reply_ok(s, ref)
+  defp dispatch({tag, payload}, ref, s) when tag in @persistence_commands do
+    Commands.dispatch(tag, payload, &reply(s, ref, &1, &2, &3, &4), s)
+    {:noreply, s}
   end
 
   defp dispatch(other, ref, s) do
@@ -423,15 +442,37 @@ defmodule Flezha.SDK.RunnerServer do
             range: range,
             counters: s.counters,
             runner: self(),
-            secondaries: s.secondaries
+            secondaries: s.secondaries,
+            credit: s.credit
           )
 
         :ets.insert(s.registry, {add.operative_id, op_pid})
-        metadata = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}
+        seed_init_values(op_pid, add)
 
         {:ok,
          %{s | operatives: Map.put(s.operatives, add.operative_id, {op_pid, add.factory_id})},
-         metadata}
+         declarations(topo)}
+    end
+  end
+
+  # What the class declares to the controller: partitionability only when
+  # refusable, the compaction threshold only when it differs from the default.
+  defp declarations(topo) do
+    keyed = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}
+    threshold = topo.compact_after_bytes
+
+    if threshold && threshold != Procedure.default_compact_after_bytes(),
+      do: Map.put(keyed, "compact_after_bytes", Integer.to_string(threshold)),
+      else: keyed
+  end
+
+  defp seed_init_values(op_pid, add) do
+    case Commands.apply_json(op_pid, add.operative_id, add.init_values) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Flezha.SDK] #{add.operative_id} init_values: #{reason}")
     end
   end
 
@@ -512,6 +553,8 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp reconnect(%State{reconnect_attempt: n} = s, reason) do
     Logger.warning("[Flezha.SDK] connection lost (#{reason}); reconnecting (attempt #{n + 1})")
+    # The credit session died with the stream; the controller re-offers one.
+    Credit.disarm(s.credit)
     s = teardown_streams(s)
     Process.sleep(reconnect_backoff(n))
 
@@ -563,13 +606,14 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  defp reply(s, ref, status, errors \\ [], raw \\ <<>>)
+  # `metadata` rides the reply frame: the live read's `flz.change_seq`.
+  defp reply(s, ref, status, errors \\ [], raw \\ <<>>, metadata \\ %{})
 
-  defp reply(%State{control_handle: nil}, _ref, _status, _errors, _raw), do: :ok
+  defp reply(%State{control_handle: nil}, _ref, _status, _errors, _raw, _metadata), do: :ok
 
-  defp reply(%State{} = s, ref, status, errors, raw) do
+  defp reply(%State{} = s, ref, status, errors, raw, metadata) do
     bin = Codec.encode_response(ref, status, errors, raw)
-    Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, %{})
+    Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, metadata)
   end
 
   # The idle process starts with the first registration and is linked here, so
