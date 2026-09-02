@@ -312,12 +312,11 @@ defmodule Flezha.SDK.RunnerServer do
     reply_ok(s, ref)
   end
 
-  # A terminal disconnect is the last rung of the controller's convergence
-  # ladder: eviction moves a wedged runner's operatives but leaves the process
-  # connected and placeable, so it takes work and wedges again. Only the process
-  # going away clears it, and only the orchestrator brings it back — for a
-  # FAILURE, never for a clean stop, hence the non-zero status. The ack goes out
-  # first: the controller must see it before the runtime starts stopping.
+  # A terminal disconnect is the rung of the controller's convergence ladder
+  # that ends a wedged process: nothing else clears it, and only the
+  # orchestrator brings it back — for a FAILURE, never for a clean stop, hence
+  # the non-zero status. The ack goes out first: the controller must see it
+  # before the runtime starts stopping.
   defp dispatch({:runner_disconnect, %{terminal: true} = cmd}, ref, s) do
     reply(s, ref, "success")
 
@@ -331,13 +330,15 @@ defmodule Flezha.SDK.RunnerServer do
       # take the controller down with it. Stop the runner and leave the node's
       # lifecycle to whoever owns the controller.
       Logger.error("[Flezha.SDK] in-node runner: stopping the runner instead of the VM")
+      {:stop, :normal, %{s | disconnecting?: true}}
     else
       # `System.stop/1` runs the application shutdown — this server, its
       # Operatives and their Entities — and then ends the VM with the status.
+      # The server stays up until then: a stopped one is restarted by its
+      # supervisor and re-registers the process the controller just ended.
       System.stop(@terminal_exit_status)
+      {:noreply, %{s | disconnecting?: true}}
     end
-
-    {:stop, :normal, %{s | disconnecting?: true}}
   end
 
   defp dispatch({:runner_disconnect, _}, ref, s) do
