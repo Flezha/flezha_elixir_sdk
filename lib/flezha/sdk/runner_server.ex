@@ -18,6 +18,8 @@ defmodule Flezha.SDK.RunnerServer do
     Counters,
     DataStream,
     Entity,
+    EntryIdle,
+    EntryInput,
     Jitter,
     KeyGroup,
     Operative,
@@ -58,6 +60,7 @@ defmodule Flezha.SDK.RunnerServer do
       secondaries: [],
       operatives: %{},
       parks: %{},
+      idle: nil,
       reconnect_attempt: 0,
       disconnecting?: false
     ]
@@ -74,6 +77,10 @@ defmodule Flezha.SDK.RunnerServer do
   def remove(server, module), do: GenServer.call(server, {:remove, module})
   def namespace(server), do: GenServer.call(server, :namespace)
 
+  @doc "Register an idle observer on the live runner (see `Flezha.SDK.on_entry_idle/4`)."
+  def on_entry_idle(server, channel, threshold_ms, observer),
+    do: GenServer.call(server, {:on_entry_idle, channel, threshold_ms, observer})
+
   # --- server ---
 
   @impl true
@@ -83,6 +90,7 @@ defmodule Flezha.SDK.RunnerServer do
     transport = Keyword.fetch!(opts, :transport)
     topologies = Keyword.fetch!(opts, :topologies)
     factories = Keyword.fetch!(opts, :factories)
+    idle_observers = Keyword.get(opts, :idle_observers, [])
 
     if transport == :native, do: TransportServer.ensure_started(:native)
 
@@ -103,7 +111,11 @@ defmodule Flezha.SDK.RunnerServer do
       {:ok, state} ->
         schedule_heartbeat()
         schedule_keepalive()
-        {:ok, state}
+
+        {:ok,
+         Enum.reduce(idle_observers, state, fn {channel, threshold_ms, observer}, acc ->
+           register_idle(acc, channel, threshold_ms, observer)
+         end)}
 
       {:error, reason} ->
         # The one diagnosis, before this runner gives up: which of the four
@@ -165,6 +177,9 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   def handle_call(:namespace, _from, %State{} = s), do: {:reply, s.namespace, s}
+
+  def handle_call({:on_entry_idle, channel, threshold_ms, observer}, _from, %State{} = s),
+    do: {:reply, :ok, register_idle(s, channel, threshold_ms, observer)}
 
   # --- control commands ---
 
@@ -404,6 +419,7 @@ defmodule Flezha.SDK.RunnerServer do
           Operative.start_link(
             operative_id: add.operative_id,
             topology: topo,
+            cells: EntryInput.cells_for(topo.entries),
             range: range,
             counters: s.counters,
             runner: self(),
@@ -554,6 +570,25 @@ defmodule Flezha.SDK.RunnerServer do
   defp reply(%State{} = s, ref, status, errors, raw) do
     bin = Codec.encode_response(ref, status, errors, raw)
     Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, %{})
+  end
+
+  # The idle process starts with the first registration and is linked here, so
+  # it ends with the runner. Interning happens in this process, one at a time.
+  defp register_idle(%State{} = s, channel, threshold_ms, observer) do
+    s =
+      case s.idle do
+        nil ->
+          {:ok, pid} = EntryIdle.start_link()
+          %{s | idle: pid}
+
+        _pid ->
+          s
+      end
+
+    :ok =
+      EntryIdle.register(s.idle, channel, EntryInput.cell_for(channel), threshold_ms, observer)
+
+    s
   end
 
   defp schedule_heartbeat do

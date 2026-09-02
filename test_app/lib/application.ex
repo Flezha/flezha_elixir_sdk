@@ -22,11 +22,18 @@ defmodule ElixirRunner.Application do
 
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
     streams = ElixirFactories.all() ++ ElixirRunner.Factories.all()
+    # A runner-level registration, not a declaration: armed beside the streams.
+    idle_observers = ElixirRunner.EntryIdleCounter.arm()
 
     Logger.info("[elixir_runner] namespace=#{namespace} transport=#{transport}")
 
     children = [
-      Flezha.SDK.child_spec(namespace: namespace, streams: streams, transport: transport)
+      Flezha.SDK.child_spec(
+        namespace: namespace,
+        streams: streams,
+        transport: transport,
+        idle_observers: idle_observers
+      )
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: ElixirRunner.Supervisor)

@@ -37,7 +37,6 @@
     "keyed_channels",
     "workflow",
     "dynamic_entity",
-    "entry_idle",
     "schema_evolution"
   ],
   "fixtures": {
@@ -67,6 +66,9 @@
       "bounded_mailbox_drop_nothing",
       "bounded_mailbox_drop_newest",
       "bounded_mailbox_drop_oldest"
+    ],
+    "entry_idle": [
+      "entry_idle_probe"
     ],
     "partitioned": [
       "partition_relay",

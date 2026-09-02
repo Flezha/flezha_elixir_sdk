@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Channels, Counters, Entity, KeyGroup, Park, Procedure}
+  alias Flezha.SDK.{Channels, Counters, Entity, EntryInput, KeyGroup, Park, Procedure}
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
@@ -28,6 +28,7 @@ defmodule Flezha.SDK.Operative do
       :counters,
       :runner,
       :secondaries,
+      cells: %{},
       entities: %{},
       monitors: %{}
     ]
@@ -45,9 +46,14 @@ defmodule Flezha.SDK.Operative do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    topology = Keyword.fetch!(opts, :topology)
+
     state = %State{
       operative_id: Keyword.fetch!(opts, :operative_id),
-      topology: Keyword.fetch!(opts, :topology),
+      topology: topology,
+      # The entry cells, resolved once: the RunnerServer interns them before
+      # starting this process, so the delivery path below is one atomic store.
+      cells: Keyword.get_lazy(opts, :cells, fn -> EntryInput.cells_for(topology.entries) end),
       range: Keyword.fetch!(opts, :range),
       counters: Keyword.fetch!(opts, :counters),
       runner: Keyword.fetch!(opts, :runner),
@@ -78,6 +84,8 @@ defmodule Flezha.SDK.Operative do
   @impl true
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     channel = resolve_channel(s.topology, channel)
+    # The frame counts before it can be declined: the stamp precedes the parse.
+    EntryInput.stamp(Map.fetch!(s.cells, channel))
 
     case parse(s.topology, channel, message) do
       {:ok, value} ->
