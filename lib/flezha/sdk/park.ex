@@ -16,16 +16,26 @@ defmodule Flezha.SDK.Park do
   alias Flezha.State.Wire
 
   @spec body(binary(), binary(), binary(), non_neg_integer(), term()) :: map()
-  def body(park_id, channel, error, attempts, payload) do
-    %{
-      park_id: park_id,
-      origin_offset: nil,
+  def body(park_id, channel, error, attempts, payload),
+    do:
+      Map.merge(
+        %{park_id: park_id, origin_offset: nil},
+        dlq_entry(channel, error, attempts, payload)
+      )
+
+  @doc """
+  The `DlqEntryBody` an effect record carries: the same four fields the park
+  frame carries, without the ack correlation the tier has no use for — a tier
+  park rides its own record and is durable when the record is.
+  """
+  @spec dlq_entry(binary(), binary(), non_neg_integer(), term()) :: map()
+  def dlq_entry(channel, error, attempts, payload),
+    do: %{
       channel: channel,
       error: error,
       attempts: attempts,
       payload: recoverable_payload(payload)
     }
-  end
 
   @doc """
   The on-wire identity of the Entity a park belongs to — the triple the

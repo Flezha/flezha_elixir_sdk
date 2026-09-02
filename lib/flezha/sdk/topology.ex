@@ -27,7 +27,9 @@ defmodule Flezha.SDK.Topology do
             sink_serializers: %{},
             keyless?: false,
             persistence_enabled?: true,
-            compact_after_bytes: nil
+            compact_after_bytes: nil,
+            effectively_once?: false,
+            checkpoint: nil
 
   @type t :: %__MODULE__{}
 
@@ -50,7 +52,7 @@ defmodule Flezha.SDK.Topology do
   defp compile(module, acc) do
     routes = build_routes(acc)
     node_mode = derive_modes(acc, routes)
-    issues = collect_issues(acc, routes, node_mode)
+    issues = collect_issues(module, acc, routes, node_mode)
 
     if issues == [] do
       {:ok,
@@ -67,7 +69,9 @@ defmodule Flezha.SDK.Topology do
          sink_serializers: sink_serializers(acc),
          keyless?: keyless?(acc, node_mode),
          persistence_enabled?: StreamOperative.persistence_enabled?(module),
-         compact_after_bytes: compact_after_bytes(acc)
+         compact_after_bytes: compact_after_bytes(acc),
+         effectively_once?: acc.tier.effectively_once,
+         checkpoint: acc.tier.checkpoint
        }}
     else
       {:error, {:invalid_topology, Enum.reverse(issues)}}
@@ -88,7 +92,10 @@ defmodule Flezha.SDK.Topology do
         transform: s.transform,
         key_by: s.key_by,
         serializer: s.serializer,
-        keyed: s.keyed
+        keyed: s.keyed,
+        # The channel a frame off this route is named by: a static property of
+        # the route's source, resolved once here rather than per output.
+        channel: source_channel(acc, s.from)
       }
 
       Map.update(m, s.from, [route], &[route | &1])
@@ -125,7 +132,7 @@ defmodule Flezha.SDK.Topology do
     end)
   end
 
-  defp collect_issues(acc, routes, node_mode) do
+  defp collect_issues(op_module, acc, routes, node_mode) do
     incoming = incoming_by_node(routes)
 
     issues = acc.issues
@@ -154,7 +161,63 @@ defmodule Flezha.SDK.Topology do
     # cycles among nodes
     issues = check_cycles(acc, routes, issues)
 
+    issues = check_tier(op_module, acc, issues)
+
     check_changeful_identity(acc, issues)
+  end
+
+  # What the effectively-once tier refuses, the reference's names
+  # (`builder.rs` `refuse_class_facts` / `refuse_channel`, plus the core's
+  # zero-delay refusal at `register.rs`): a checkpoint policy without the
+  # tier, a cadence or a delay of zero, a plugin wire the tier cannot
+  # deduplicate by identity, and a shedding policy under a contract that says
+  # nothing is lost.
+  defp check_tier(op_module, acc, issues) do
+    %{effectively_once: on?, checkpoint: policy} = acc.tier
+
+    issues
+    |> class_facts(on?, policy, mod_name(op_module))
+    |> unkeyed_sinks(on?, acc)
+    |> shedding_edges(on?, acc)
+  end
+
+  defp class_facts(is, on?, policy, name) do
+    is = if policy != nil and not on?, do: [{:CheckpointAckWithoutTier, name} | is], else: is
+    is = if policy[:every] == 0, do: [{:CheckpointEveryZero, name} | is], else: is
+    if policy[:max_delay_ms] == 0, do: [{:CheckpointMaxDelayZero, name} | is], else: is
+  end
+
+  defp unkeyed_sinks(is, false, _acc), do: is
+
+  defp unkeyed_sinks(is, true, acc) do
+    Enum.reduce(acc.sinks, is, fn sink, is ->
+      if sink.keyed,
+        do: is,
+        else: [{:UnkeyedChannelUnderEffectivelyOnce, source_channel(acc, sink.from)} | is]
+    end)
+  end
+
+  defp shedding_edges(is, false, _acc), do: is
+
+  defp shedding_edges(is, true, acc) do
+    Enum.reduce(acc.edges, is, fn edge, is ->
+      case get_in(acc.knobs, [edge.to, :on_full]) do
+        policy when policy in [:drop_newest, :drop_oldest] ->
+          [{:DroppingPolicyUnderEffectivelyOnce, source_channel(acc, edge.from), policy} | is]
+
+        _ ->
+          is
+      end
+    end)
+  end
+
+  # The channel a route's source is named by on the wire: an entry's own name,
+  # a node's `named/2` name or its procedure's.
+  defp source_channel(_acc, {:entry, name}), do: name
+
+  defp source_channel(acc, {:node, ref}) do
+    %{module: module, name: name} = Map.fetch!(acc.nodes, ref)
+    name || module.name()
   end
 
   # A changeful procedure's records are keyed by its `name/0`, so two nodes of

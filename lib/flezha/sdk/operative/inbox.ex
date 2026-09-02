@@ -13,9 +13,14 @@ defmodule Flezha.SDK.Operative.Inbox do
     do: GenServer.cast(pid, {:input, channel, message, metadata})
 
   @doc """
-  An Entity finished a dispatch: its emits as `{value, metadata, key}` and the
-  change seq the dispatch started at — what a keyed sink's stamps read.
+  An Entity finished a dispatch: its emits as `{value, metadata, key}`, the
+  change seq the dispatch started at — what a keyed sink's stamps read — and
+  the durable offset of the input that produced them, which an
+  inter-procedure push inherits under the effectively-once tier.
+
+  `report` is `{entity_pid, ref}` when the Entity is holding that invocation's
+  effect record until every push lands, and nil when it owes nothing.
   """
-  def emitted(pid, node_ref, entity_key, emits, handout_seq),
-    do: GenServer.cast(pid, {:emitted, node_ref, entity_key, emits, handout_seq})
+  def emitted(pid, node_ref, entity_key, emits, handout_seq, offset, report),
+    do: GenServer.cast(pid, {:emitted, node_ref, entity_key, emits, handout_seq, offset, report})
 end

@@ -24,12 +24,14 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Channels, Counters, Entity, EntryInput, KeyGroup, Park, Procedure}
+  alias Flezha.SDK.{Counters, Entity, EntryInput, KeyGroup, Park, Procedure}
+  alias Flezha.SDK.Operative.Routing
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
-  # What an entry input carries into routing: no metadata, no key, no Entity.
-  @entry_emit %{meta: %{}, key: nil, origin: nil}
+  # What an entry input carries into routing: no metadata, no key, no Entity,
+  # and the durable offset the controller stamped under the tier.
+  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil}
   # How long a sweep waits on one Entity's idle probe before moving on.
   @idle_probe_ms 50
   # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
@@ -197,14 +199,15 @@ defmodule Flezha.SDK.Operative do
   end
 
   @impl true
-  def handle_cast({:input, channel, message, _metadata}, %State{} = s) do
+  def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     channel = resolve_channel(s.topology, channel)
     # The frame counts before it can be declined: the stamp precedes the parse.
     EntryInput.stamp(Map.fetch!(s.cells, channel))
 
     case parse(s.topology, channel, message) do
       {:ok, value} ->
-        {s, _ordinal} = route_from(s, {:entry, channel}, value, @entry_emit, 0)
+        emit = %{@entry_emit | offset: consumed_offset(s.topology, metadata)}
+        {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
         {:noreply, s}
 
       {:error, reason} ->
@@ -214,7 +217,10 @@ defmodule Flezha.SDK.Operative do
 
   # One invocation's emits: the ordinal counts its plugin outputs from zero.
   @impl true
-  def handle_cast({:emitted, node_ref, entity_key, emits, handout_seq}, %State{} = s) do
+  def handle_cast(
+        {:emitted, node_ref, entity_key, emits, handout_seq, offset, report},
+        %State{} = s
+      ) do
     origin = %{node_ref: node_ref, entity_key: entity_key, seq: handout_seq}
 
     {s, _ordinal} =
@@ -223,10 +229,18 @@ defmodule Flezha.SDK.Operative do
           acc,
           {:node, node_ref},
           value,
-          %{meta: meta, key: key, origin: origin},
+          %{meta: meta, key: key, origin: origin, offset: offset},
           ordinal
         )
       end)
+
+    # Every push of this invocation has been admitted — an `enqueue_block` that
+    # returned is a push the consumer holds — so the record it produced may
+    # become durable now.
+    case report do
+      {entity, ref} -> send(entity, {:edges_delivered, ref})
+      nil -> :ok
+    end
 
     {:noreply, s}
   end
@@ -343,19 +357,26 @@ defmodule Flezha.SDK.Operative do
     end)
   end
 
+  # Under the effectively-once tier a sink output IS the Entity's effect
+  # record: it never reaches the wire from here, and the ordinal advances as
+  # it would have.
+  defp deliver(
+         %State{topology: %{effectively_once?: true}} = s,
+         %{to: {:sink, _}},
+         _source,
+         _value,
+         _emit,
+         ordinal
+       ),
+       do: {s, ordinal + 1}
+
   # A sink frame: the producing node's channel name over the user's metadata,
   # then — on a keyed sink — the identity stamps, which nothing can clobber.
   # Every plugin output advances the ordinal, stamped or not.
-  defp deliver(%State{} = s, %{to: {:sink, plugin}} = route, source, value, emit, ordinal) do
-    serializer = Map.get(s.topology.sink_serializers, plugin, &Channels.default_serialize/1)
-    metadata = emit.meta |> Map.delete("channel") |> Map.put("channel", channel_name(s, source))
-
-    metadata =
-      if route.keyed,
-        do: stamp(metadata, s, emit.origin, ordinal, sink_key(route, value, emit)),
-        else: metadata
-
-    emit_output(s, metadata, serializer.(value))
+  defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
+    stamp_with = if route.keyed, do: {s.operative_id, s.topology.node_modules}
+    {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
+    emit_output(s, metadata, bytes)
     {s, ordinal + 1}
   end
 
@@ -364,51 +385,44 @@ defmodule Flezha.SDK.Operative do
          %{to: {:node, node_ref}, key_by: key_by},
          _source,
          value,
-         _emit,
+         emit,
          ordinal
        ) do
     key = if key_by, do: key_by.(value), else: nil
-    {deliver_to_node(s, node_ref, value, key), ordinal}
+    {deliver_to_node(s, node_ref, value, key, emit.offset), ordinal}
   end
 
-  # The emit's own key, else the sink route's, else the emitting Entity's —
-  # the reference's `emit_keyed` then the entity-key default.
-  defp sink_key(route, value, emit) do
-    cond do
-      emit.key -> emit.key
-      route.key_by -> route.key_by.(value)
-      emit.origin -> emit.origin.entity_key
-      true -> nil
+  # What the controller stamped on a forwarded input of a tier class; nothing
+  # off the tier, where no metadata is read at all.
+  defp consumed_offset(%{effectively_once?: true}, metadata) when is_map(metadata) do
+    case Integer.parse(Map.get(metadata, "flz.offset", "")) do
+      {offset, _rest} -> offset
+      :error -> nil
     end
   end
 
-  defp stamp(metadata, %State{operative_id: oid, topology: topo}, origin, ordinal, key) do
-    %{node_ref: node_ref, entity_key: entity_key, seq: seq} = origin
+  defp consumed_offset(_topo, _metadata), do: nil
 
-    metadata
-    |> Map.put("flz.entity", "#{oid}/#{topo.node_modules[node_ref].name()}/#{entity_key || ""}")
-    |> Map.put("flz.seq", "#{seq}.#{ordinal}")
-    |> Map.put("flz.key", key)
-  end
+  # The queue item: under the tier the offset rides the input, so the Entity
+  # can skip a re-forward it already made durable. Off the tier the queue is
+  # the raw value it has always been.
+  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, offset) do
+    item = if topo.effectively_once?, do: %Entity.Input{value: value, offset: offset}, else: value
 
-  defp channel_name(_s, {:entry, name}), do: name
-  defp channel_name(%State{topology: topo}, {:node, node_ref}), do: topo.node_channel[node_ref]
-
-  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key) do
     case Map.fetch!(topo.node_mode, node_ref) do
       :single ->
-        enqueue(s, node_ref, nil, value)
+        enqueue(s, node_ref, nil, item)
 
       :static ->
         module = topo.node_modules[node_ref]
 
         Procedure.entities_for(module, value)
         |> Enum.filter(&KeyGroup.owns?(s.range, &1))
-        |> Enum.reduce(s, fn k, acc -> enqueue(acc, node_ref, k, value) end)
+        |> Enum.reduce(s, fn k, acc -> enqueue(acc, node_ref, k, item) end)
 
       :dynamic ->
         case KeyGroup.admit(s.range, key || "") do
-          :ok -> enqueue(s, node_ref, key, value)
+          :ok -> enqueue(s, node_ref, key, item)
           {:error, reason} -> park_misroute(s, node_ref, value, reason)
         end
     end
@@ -494,8 +508,24 @@ defmodule Flezha.SDK.Operative do
       slots: s.slots,
       credit: s.credit,
       persistence_enabled: topo.persistence_enabled?,
+      tier: tier_facts(topo, node_ref),
       ctx_opts: ctx_opts(topo, node_ref, key)
     )
+  end
+
+  # What an Entity of this node needs to know about the tier: whether it is on,
+  # the checkpoint policy, the sink routes it captures its own outputs through
+  # — the router delivers a tier class's emits to nodes only — and whether it
+  # has an inter-procedure edge at all.
+  defp tier_facts(topo, node_ref) do
+    routes = Map.get(topo.routes, {:node, node_ref}, [])
+
+    %{
+      on?: topo.effectively_once?,
+      checkpoint: topo.checkpoint,
+      sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
+      edges?: Enum.any?(routes, &match?(%{to: {:node, _}}, &1))
+    }
   end
 
   # The facts the ctx refuses on: this node's channel name, whether an output

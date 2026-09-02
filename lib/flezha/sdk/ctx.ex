@@ -26,6 +26,12 @@ defmodule Flezha.SDK.Ctx do
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
   once per invocation — and, inside a firing, the scheduled timestamp.
+
+  Under the effectively-once tier two more slots ride the same dictionary:
+  `checkpoint/1` raises the flag the Entity reads at the invocation's end to
+  close its staged interval, and `stable_id/1` answers a replay-stable id
+  derived from the Entity's wire identity, the change seq the invocation
+  started at and a per-invocation ordinal.
   """
 
   alias Flezha.SDK.{Procedure, Timers}
@@ -40,11 +46,20 @@ defmodule Flezha.SDK.Ctx do
     :timers,
     :timer_policy,
     :firing,
+    identity: <<>>,
+    seq: 0,
     keyed_sink?: false,
     key_required?: false
   ]
 
   @zero_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
+
+  # FNV-1a-128, the constants `flz_core::operative::instance` fixes; the
+  # rendered id is a cross-language contract, so the three fixture vectors are
+  # the only thing that may change it.
+  @fnv128_offset_basis 0x6C62272E07BB014262B821756295C58D
+  @fnv128_prime 0x0000000001000000000000000000013B
+  @fnv128_mask 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
   @type t :: %__MODULE__{}
 
@@ -59,20 +74,22 @@ defmodule Flezha.SDK.Ctx do
   default) and the firing this invocation is (`firing`, `{kind, at}` or nil).
   """
   def new(module, entity_key, now_ms, opts \\ []) do
-    ref = make_ref()
-    Process.put(key(ref), [])
-    Process.put(changes_key(ref), [])
-
+    # Nothing is written here: every reader of a slot defaults to empty, so an
+    # invocation that emits nothing, applies nothing and registers no timer
+    # touches the dictionary not at all — and one that never returns from here
+    # leaves nothing behind to delete.
     %__MODULE__{
       module: module,
       entity_key: entity_key,
       now_ms: now_ms,
-      ref: ref,
+      ref: make_ref(),
       channel: Keyword.get(opts, :channel),
       timers: Keyword.get(opts, :timers, Timers.new()),
       timer_policy:
         Keyword.get_lazy(opts, :timer_policy, fn -> Procedure.timer_policy(module) end),
       firing: Keyword.get(opts, :firing),
+      identity: Keyword.get(opts, :identity, <<>>),
+      seq: Keyword.get(opts, :seq, 0),
       keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
       key_required?: Keyword.get(opts, :key_required?, false)
     }
@@ -145,6 +162,51 @@ defmodule Flezha.SDK.Ctx do
   @doc "The owning Entity's key, or nil for a Single Entity."
   def entity_key(%__MODULE__{entity_key: k}), do: k
 
+  @doc """
+  Close the staged checkpoint interval at the end of this invocation. A no-op
+  on a class that did not declare checkpoint granularity — the Entity reads the
+  flag only when it has an interval to close.
+  """
+  @spec checkpoint(t()) :: :ok
+  def checkpoint(%__MODULE__{ref: ref}) do
+    Process.put(checkpoint_key(ref), true)
+    :ok
+  end
+
+  @doc false
+  @spec checkpointed?(t()) :: boolean()
+  def checkpointed?(%__MODULE__{ref: ref}), do: Process.get(checkpoint_key(ref), false)
+
+  @doc """
+  A replay-stable 128-bit id, 32 lowercase hex digits: FNV-1a-128 over the
+  Entity's wire identity, the change seq this invocation started at and a
+  per-invocation ordinal. The same invocation on a replay derives the same
+  ids in the same order, which is what makes an effect idempotent.
+  """
+  @spec stable_id(t()) :: String.t()
+  def stable_id(%__MODULE__{ref: ref} = ctx) do
+    ordinal = Process.get(stable_id_key(ref), 0)
+    Process.put(stable_id_key(ref), ordinal + 1)
+    derive_stable_id(ctx.identity, ctx.seq, ordinal)
+  end
+
+  @doc false
+  @spec derive_stable_id(binary(), non_neg_integer(), non_neg_integer()) :: String.t()
+  def derive_stable_id(identity, seq, ordinal) do
+    @fnv128_offset_basis
+    |> fnv1a128(identity)
+    |> fnv1a128(<<seq::64-big>>)
+    |> fnv1a128(<<ordinal::32-big>>)
+    |> Integer.to_string(16)
+    |> String.downcase()
+    |> String.pad_leading(32, "0")
+  end
+
+  defp fnv1a128(hash, <<byte, rest::binary>>),
+    do: fnv1a128(Bitwise.band(Bitwise.bxor(hash, byte) * @fnv128_prime, @fnv128_mask), rest)
+
+  defp fnv1a128(hash, <<>>), do: hash
+
   @doc false
   def take_emits(%__MODULE__{ref: ref}) do
     emits = Process.get(key(ref), []) |> Enum.reverse()
@@ -179,6 +241,8 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(key(ref))
     Process.delete(changes_key(ref))
     Process.delete(timers_key(ref))
+    Process.delete(checkpoint_key(ref))
+    Process.delete(stable_id_key(ref))
   end
 
   defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
@@ -226,4 +290,6 @@ defmodule Flezha.SDK.Ctx do
   defp key(ref), do: {__MODULE__, ref}
   defp changes_key(ref), do: {__MODULE__, ref, :changes}
   defp timers_key(ref), do: {__MODULE__, ref, :timers}
+  defp checkpoint_key(ref), do: {__MODULE__, ref, :checkpoint}
+  defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
 end

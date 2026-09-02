@@ -471,14 +471,25 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # What the class declares to the controller: partitionability only when
-  # refusable, the compaction threshold only when it differs from the default.
-  defp declarations(topo) do
+  # refusable, the compaction threshold only when it differs from the default,
+  # the tier and its granularity when declared. The cadence, the outputs
+  # posture and the delay stay SDK-side, as they do in every other SDK.
+  @doc false
+  def declarations(topo) do
     keyed = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}
     threshold = topo.compact_after_bytes
 
-    if threshold && threshold != Procedure.default_compact_after_bytes(),
-      do: Map.put(keyed, "compact_after_bytes", Integer.to_string(threshold)),
-      else: keyed
+    compacted =
+      if threshold && threshold != Procedure.default_compact_after_bytes(),
+        do: Map.put(keyed, "compact_after_bytes", Integer.to_string(threshold)),
+        else: keyed
+
+    tiered =
+      if topo.effectively_once?,
+        do: Map.put(compacted, "effectively_once", "true"),
+        else: compacted
+
+    if topo.checkpoint, do: Map.put(tiered, "ack_granularity", "checkpoint"), else: tiered
   end
 
   defp seed_init_values(op_pid, add) do

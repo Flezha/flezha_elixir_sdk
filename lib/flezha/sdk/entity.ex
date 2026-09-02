@@ -8,8 +8,10 @@ defmodule Flezha.SDK.Entity do
   `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
   the input and HOLDS the Entity until the controller's `ParkPayloadAck`.
 
-  A changeful Entity (its procedure exports `apply_change/2`) is also the
-  writer of its own record stream: after a successful dispatch it ships one
+  An Entity that writes a record stream — a changeful one, whose procedure
+  exports `apply_change/2`, and under the effectively-once tier a changeless
+  one too, because there the record carries the outputs and the consumed
+  offset rather than only changes — is the writer of it: after a successful dispatch it ships one
   `entity_state_change` frame per recorded change at the next seq on one
   secondary stream, before the dispatch's outputs leave, then writes its
   `{state, seq}` into the Operative's slot table so a replacement started
@@ -35,7 +37,7 @@ defmodule Flezha.SDK.Entity do
   require Logger
 
   alias Flezha.SDK.{Counters, Ctx, Jitter, Park, Procedure, Timers}
-  alias Flezha.SDK.Entity.{Records, State}
+  alias Flezha.SDK.Entity.{Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
 
   @retry_backoff_cap_ms 5_000
@@ -47,6 +49,22 @@ defmodule Flezha.SDK.Entity do
   defmodule Fire do
     @moduledoc false
     defstruct [:kind, :at]
+  end
+
+  # The deadline's close, on the queue in mailbox order behind the items that
+  # preceded it, running no author code. A close that already happened leaves
+  # this one to find nothing open.
+  defmodule Close do
+    @moduledoc false
+    defstruct [:opened_at]
+  end
+
+  # An input under the effectively-once tier: the value with the durable
+  # offset the controller stamped on it. Off the tier the queue holds the raw
+  # value, so nothing there pays for this.
+  defmodule Input do
+    @moduledoc false
+    defstruct [:value, :offset]
   end
 
   # --- API (used by the Operative router) ---
@@ -136,8 +154,9 @@ defmodule Flezha.SDK.Entity do
     operative_id = Keyword.fetch!(opts, :operative_id)
     identity = Park.identity(operative_id, module.name(), entity_key || "")
     changeful? = Procedure.changeful?(module)
+    tier = Map.merge(%State{}.tier, Keyword.get(opts, :tier, %{}))
     slots = Keyword.get(opts, :slots)
-    {proc_state, change_seq, timers} = Records.seed(slots, identity, module, entity_key)
+    held = Records.seed(slots, identity, module, entity_key)
     operative = Keyword.fetch!(opts, :operative)
     Process.monitor(operative)
 
@@ -161,23 +180,42 @@ defmodule Flezha.SDK.Entity do
       # policy this procedure declares.
       ctx_opts:
         [timer_policy: Procedure.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
-      timers: %{
-        pending: timers,
-        clock: clock_of(module),
-        on_timer?: Procedure.on_timer?(module),
-        refs: %{},
-        high_water: nil
-      },
+      timers: seed_timers(module, held),
       changeful?: changeful?,
-      persistent?: changeful? and Keyword.get(opts, :persistence_enabled, true),
+      tier: tier,
+      persistent?: persists?(changeful?, tier, opts),
       schema_version: Procedure.schema_version(module),
-      proc_state: proc_state,
-      change_seq: change_seq,
+      proc_state: held.state,
+      change_seq: held.seq,
       last_input_ms: now_ms()
     }
 
+    state = seed_tier(state, held)
     {:ok, state |> Records.put_secondaries(Keyword.get(opts, :secondaries, [])) |> rearm()}
   end
+
+  # Off the tier a record stream exists only to carry changes, so a changeless
+  # procedure writes none. Under the tier the record carries the OUTPUTS and
+  # the consumed offset as well — and the router delivers no sink for a tier
+  # class — so a changeless one writes them too. The class's own opt-out
+  # silences both: the seq advances and the frames are discarded.
+  defp persists?(changeful?, tier, opts),
+    do: Keyword.get(opts, :persistence_enabled, true) and (changeful? or tier.on?)
+
+  defp seed_timers(module, held) do
+    %{
+      pending: held.timers,
+      clock: clock_of(module),
+      on_timer?: Procedure.on_timer?(module),
+      refs: %{},
+      high_water: nil
+    }
+  end
+
+  # The slot's interval and floor over the struct's defaults: a replacement
+  # re-holds what its predecessor had staged but not yet made durable.
+  defp seed_tier(%State{} = s, held),
+    do: %{s | tier: %{s.tier | staged: held.staged, floor: held.floor}}
 
   @impl true
   def handle_call({:enqueue, value}, from, %State{} = s) do
@@ -197,8 +235,11 @@ defmodule Flezha.SDK.Entity do
 
   def handle_call({:restore, header, snapshot, log, hint}, _from, %State{} = s) do
     case Records.restore(s, header, snapshot, log, hint) do
-      {:ok, s, terminal, migrated} -> {:reply, {:ok, terminal, migrated}, rearm(s)}
-      {:error, reason} -> {:reply, {:error, reason}, s}
+      {:ok, s, terminal, migrated} ->
+        {:reply, {:ok, terminal, migrated}, rearm(Tier.cancel_deadline(s))}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, s}
     end
   end
 
@@ -214,7 +255,7 @@ defmodule Flezha.SDK.Entity do
 
   def handle_call({:idle?, ttl_ms}, _from, %State{} = s) do
     idle? =
-      s.size == 0 and not s.processing? and not s.held? and :queue.is_empty(s.waiters) and
+      s.size == 0 and not s.processing? and not s.park.held? and :queue.is_empty(s.waiters) and
         now_ms() - s.last_input_ms > ttl_ms
 
     {:reply, idle?, s}
@@ -255,8 +296,8 @@ defmodule Flezha.SDK.Entity do
   def handle_info({:secondaries, secondaries}, %State{} = s),
     do: {:noreply, Records.put_secondaries(s, secondaries)}
 
-  def handle_info({:park_released, park_id}, %State{park_id: park_id} = s) do
-    {:noreply, process_next(%{s | held?: false, park_id: nil})}
+  def handle_info({:park_released, park_id}, %State{park: %{id: park_id}} = s) do
+    {:noreply, process_next(%{s | park: %{s.park | held?: false, id: nil}})}
   end
 
   def handle_info({:park_released, _stale}, s), do: {:noreply, s}
@@ -288,25 +329,37 @@ defmodule Flezha.SDK.Entity do
   def handle_info({:DOWN, _ref, :process, operative, _reason}, %State{operative: operative} = s),
     do: {:stop, :normal, s}
 
+  # The interval's delay elapsed: the close goes on the queue rather than
+  # running here, so it lands behind the inputs that preceded the deadline.
+  def handle_info({:close_interval, opened}, %State{} = s) do
+    s = %{s | tier: %{s.tier | deadline: nil}}
+    {:noreply, kick(enqueue(s, %Close{opened_at: opened}))}
+  end
+
+  # Every inter-procedure push of one invocation has been admitted: its record
+  # may become durable now.
+  def handle_info({:edges_delivered, ref}, %State{} = s),
+    do: {:noreply, Records.release(s, ref)}
+
   def handle_info(_msg, s), do: {:noreply, s}
 
   # Evicted, or its Operative gone: the armed timers go with the process.
   @impl true
-  def terminate(_reason, %State{} = s), do: disarm_all(s)
+  def terminate(_reason, %State{} = s), do: s |> Tier.cancel_deadline() |> disarm_all()
 
   # --- internals ---
 
   defp enqueue(%State{} = s, value),
     do: %{s | queue: :queue.in(value, s.queue), size: s.size + 1, last_input_ms: now_ms()}
 
-  defp kick(%State{processing?: false, held?: false, size: size} = s) when size > 0 do
+  defp kick(%State{processing?: false, park: %{held?: false}, size: size} = s) when size > 0 do
     send(self(), :process)
     %{s | processing?: true}
   end
 
   defp kick(s), do: s
 
-  defp process_next(%State{held?: true} = s), do: s
+  defp process_next(%State{park: %{held?: true}} = s), do: s
 
   defp process_next(%State{} = s) do
     case :queue.out(s.queue) do
@@ -318,7 +371,7 @@ defmodule Flezha.SDK.Entity do
         s = admit(s, item)
         s = admit_waiter(s)
 
-        if s.held? do
+        if s.park.held? do
           %{s | processing?: false}
         else
           # keep draining
@@ -357,27 +410,50 @@ defmodule Flezha.SDK.Entity do
   # it makes due go ahead of it on the queue, ascending — the drain comes back
   # to the value behind them. Anything else dispatches.
   defp admit(%State{} = s, %Fire{kind: kind, at: at} = fire) do
-    if Timers.contains?(s.timers.pending, kind, at), do: dispatch(s, fire), else: s
+    if Timers.contains?(s.timers.pending, kind, at), do: dispatch(s, fire, nil), else: s
   end
 
-  defp admit(%State{timers: %{clock: {:event_time, extract}} = timers} = s, value) do
+  defp admit(%State{} = s, %Close{opened_at: at}), do: Tier.close(s, at)
+
+  # A re-forwarded input the tier already made durable is a COMPLETED
+  # dispatch, never a re-run: the effect record that consumed it is on disk.
+  defp admit(%State{tier: %{floor: floor}} = s, %Input{offset: offset})
+       when is_integer(offset) and offset <= floor do
+    Counters.inc_dispatches(s.counters)
+    s
+  end
+
+  defp admit(%State{} = s, %Input{value: value, offset: offset}),
+    do: admit_value(s, value, offset)
+
+  defp admit(%State{} = s, value), do: admit_value(s, value, nil)
+
+  defp admit_value(%State{timers: %{clock: {:event_time, extract}} = timers} = s, value, offset) do
     case safe_extract(extract, value) do
       {:ok, event_time} ->
         high_water = max(timers.high_water || -1, event_time)
         s = %{s | timers: %{timers | high_water: high_water}}
 
         case Timers.due(timers.pending, :event_time, high_water) do
-          [] -> dispatch(s, value)
-          due -> requeue(s, Enum.map(due, &%Fire{kind: :event_time, at: &1}) ++ [value])
+          [] ->
+            dispatch(s, value, offset)
+
+          due ->
+            fires = Enum.map(due, &%Fire{kind: :event_time, at: &1})
+            requeue(s, fires ++ [rewrap(value, offset)])
         end
 
       # The ladder meets the raise and parks the value as any bad input.
       :error ->
-        dispatch(s, value)
+        dispatch(s, value, offset)
     end
   end
 
-  defp admit(%State{} = s, value), do: dispatch(s, value)
+  defp admit_value(%State{} = s, value, offset), do: dispatch(s, value, offset)
+
+  # A value going back on the queue keeps the offset it arrived with.
+  defp rewrap(value, nil), do: value
+  defp rewrap(value, offset), do: %Input{value: value, offset: offset}
 
   # Items at the head, in order; the size overshoots the capacity by internal
   # items only, bounded by the pending set.
@@ -398,66 +474,114 @@ defmodule Flezha.SDK.Entity do
   # ONE wedged Entity visible to the controller, so a dispatch that unwinds
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
-  defp dispatch(%State{} = s, item) do
+  defp dispatch(%State{} = s, item, offset) do
     identity = identity(s.operative_id, s.node_ref, s.entity_key)
     Counters.dispatch_started(s.counters, identity)
 
     try do
       case run_ladder(s, item, 1) do
-        {:ok, new_proc_state, emits, changes, timers} ->
-          complete(s, new_proc_state, emits, changes, timers)
+        {:ok, new_proc_state, facts} ->
+          complete(s, new_proc_state, facts, offset)
 
         {:park, error, attempts} ->
-          s |> park_firing(item) |> park(item, error, attempts)
+          s |> park_firing(item) |> park(item, error, attempts, offset)
       end
     after
       Counters.dispatch_finished(s.counters, identity)
     end
   end
 
+  defp complete(%State{tier: %{on?: true}} = s, new_proc_state, facts, offset),
+    do: settle_tier(s, new_proc_state, facts, offset)
+
   # The records leave first (flush-before-emit, and the outputs are stamped
   # with the seq the dispatch started at), then the timers are armed, then the
   # outputs leave: an output on the wire means its dispatch's timers are armed
   # and counted, for every reader.
-  defp complete(%State{} = s, new_proc_state, emits, changes, {pending, ops, tally}) do
+  defp complete(%State{} = s, new_proc_state, facts, _offset) do
+    {pending, ops, tally} = facts.timers
     Counters.inc_dispatches(s.counters)
     handout_seq = s.change_seq
     s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
-    s = s |> Records.ship(changes, ops) |> reflect(ops, tally)
-    flush_emits(s, emits, handout_seq)
+    s = s |> Records.ship(facts.changes, ops) |> reflect(ops, tally)
+    flush_emits(s, facts.emits, handout_seq, nil)
+    s
+  end
+
+  # Under the tier the invocation's whole effect is ONE record: its changes,
+  # the outputs it captured itself, the offset it consumed and its timer ops,
+  # so state, outputs and the offset can never tear. Only an inter-procedure
+  # emit still leaves through the router.
+  # Under the tier the invocation's whole effect is ONE record: its changes,
+  # the outputs it captured itself, the offset it consumed and its timer ops,
+  # so state, outputs and the offset can never tear. Only an inter-procedure
+  # emit still leaves through the router.
+  defp settle_tier(%State{} = s, new_proc_state, facts, offset) do
+    {pending, ops, tally} = facts.timers
+    Counters.inc_dispatches(s.counters)
+    handout_seq = s.change_seq
+    s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
+
+    {s, report} = Tier.settle(s, facts, ops, offset)
+    s = reflect(s, ops, tally)
+    if s.tier.edges?, do: flush_emits(s, facts.emits, handout_seq, offset, report)
     s
   end
 
   # A firing that exhausted its ladder still commits its removal, so a poison
-  # timer parks once instead of firing for ever.
-  defp park_firing(%State{} = s, %Fire{kind: kind, at: at}) do
+  # timer parks once instead of firing for ever. Under the tier the removal
+  # rides the park's own record instead, which is what makes it atomic.
+  defp park_firing(%State{tier: %{on?: true}} = s, _item), do: s
+
+  defp park_firing(%State{} = s, item) do
+    {s, ops, tally} = firing_removal(s, item)
+    if ops == [], do: s, else: s |> Records.ship([], ops) |> reflect(ops, tally)
+  end
+
+  # The op a parked firing commits: its own removal, op 0 of the session.
+  defp firing_removal(%State{} = s, %Fire{kind: kind, at: at}) do
     policy = Keyword.fetch!(s.ctx_opts, :timer_policy)
 
     {pending, ops, tally} =
       s.timers.pending |> Timers.session(policy, at, {kind, at}) |> Timers.commit()
 
-    s = %{s | timers: %{s.timers | pending: pending}}
-    s |> Records.ship([], ops) |> reflect(ops, tally)
+    {%{s | timers: %{s.timers | pending: pending}}, ops, tally}
   end
 
-  defp park_firing(%State{} = s, _value), do: s
+  defp firing_removal(%State{} = s, _value), do: {s, [], nil}
 
   # The clock is read inside the attempt: an extractor that raises on an input
-  # is that input failing, and it rides the ladder like any other failure.
+  # is that input failing, and it rides the ladder like any other failure. The
+  # ctx is bound before the call, so a raise inside `run/3` still reaches the
+  # arm that discards it — the ref is the only handle its dictionary slots
+  # have.
   defp run_ladder(%State{} = s, item, attempt) do
     outcome =
-      try do
-        ctx = Ctx.new(s.module, s.entity_key, clock_now(s, item), ctx_opts(s, item))
-        {:result, ctx, call(s, item, ctx)}
-      rescue
-        e -> {:raised, Exception.message(e)}
-      catch
-        kind, reason -> {:raised, "#{kind}: #{inspect(reason)}"}
+      with {:ok, ctx} <-
+             guarded(fn ->
+               Ctx.new(s.module, s.entity_key, clock_now(s, item), ctx_opts(s, item))
+             end),
+           {:ok, result} <- guarded(fn -> call(s, item, ctx) end, ctx) do
+        {:result, ctx, result}
       end
 
     case outcome do
       {:result, ctx, {:ok, new_state}} ->
-        {:ok, new_state, Ctx.take_emits(ctx), Ctx.take_changes(ctx), Ctx.take_timers(ctx)}
+        facts = %{
+          emits: Ctx.take_emits(ctx),
+          changes: Ctx.take_changes(ctx),
+          timers: Ctx.take_timers(ctx),
+          event_time: ctx.now_ms,
+          # A class with no checkpoint granularity never reads the flag, so
+          # `Ctx.checkpoint/1` on one is a no-op by construction.
+          checkpointed?: s.tier.checkpoint != nil and Ctx.checkpointed?(ctx)
+        }
+
+        # The takes clear what they take; the slots an invocation writes only
+        # when it uses them — the checkpoint flag, the stable-id ordinal — are
+        # cleared here, so nothing of this ref outlives the invocation.
+        Ctx.discard(ctx)
+        {:ok, new_state, facts}
 
       {:result, ctx, {:error, {:non_retryable, reason}}} ->
         Ctx.discard(ctx)
@@ -467,9 +591,21 @@ defmodule Flezha.SDK.Entity do
         Ctx.discard(ctx)
         retry_or_park(s, item, attempt, format_error(reason))
 
-      {:raised, message} ->
+      {:raised, ctx, message} ->
+        if ctx, do: Ctx.discard(ctx)
         retry_or_park(s, item, attempt, message)
     end
+  end
+
+  # Anything author code raises becomes `{:raised, ctx, message}` so the ladder
+  # can climb it and the ctx's slots still go. A ctx that never came back is
+  # `nil` and has written nothing.
+  defp guarded(fun, ctx \\ nil) do
+    {:ok, fun.()}
+  rescue
+    e -> {:raised, ctx, Exception.message(e)}
+  catch
+    kind, reason -> {:raised, ctx, "#{kind}: #{inspect(reason)}"}
   end
 
   # `on_timer/4` on a firing, `run/3` on an input; a firing on a procedure that
@@ -588,12 +724,21 @@ defmodule Flezha.SDK.Entity do
     min(Jitter.jitter(exp), @retry_backoff_cap_ms)
   end
 
-  defp park(%State{} = s, value, error, attempts) do
-    seq = s.park_seq
-    park_id = "#{State.label(s)}##{seq}"
+  # Under the tier a park IS a record: the entry, the offset it consumed and a
+  # parked firing's removal ride one frame, and nothing is held — the record is
+  # the durability, so there is no ack to wait for.
+  defp park(%State{tier: %{on?: true}} = s, value, error, attempts, offset) do
+    {s, ops, tally} = firing_removal(s, value)
+    dlq = Park.dlq_entry(park_channel(s), error, attempts, value)
+    s = Tier.park(s, dlq, ops, offset, clock_now(s, value))
+    s = if ops == [], do: s, else: reflect(s, ops, tally)
+    parked_event(s)
+  end
 
-    channel = s.input_channel || s.node_name || s.operative_id
-    body = Park.body(park_id, channel, error, attempts, value)
+  defp park(%State{} = s, value, error, attempts, _offset) do
+    seq = s.park.seq
+    park_id = "#{State.label(s)}##{seq}"
+    body = Park.body(park_id, park_channel(s), error, attempts, value)
 
     Park.ship(
       s.operative,
@@ -602,15 +747,21 @@ defmodule Flezha.SDK.Entity do
       body
     )
 
-    :telemetry.execute([:flezha, :sdk, :parked], %{count: 1}, %{operative_id: s.operative_id})
-
-    %{s | held?: true, park_id: park_id, park_seq: seq + 1}
+    parked_event(%{s | park: %{held?: true, id: park_id, seq: seq + 1}})
   end
 
-  defp flush_emits(_s, [], _handout_seq), do: :ok
+  defp park_channel(%State{} = s), do: s.input_channel || s.node_name || s.operative_id
 
-  defp flush_emits(%State{} = s, emits, handout_seq),
-    do: Inbox.emitted(s.operative, s.node_ref, s.entity_key, emits, handout_seq)
+  defp parked_event(%State{} = s) do
+    :telemetry.execute([:flezha, :sdk, :parked], %{count: 1}, %{operative_id: s.operative_id})
+    s
+  end
+
+  defp flush_emits(s, emits, handout_seq, offset, report \\ nil)
+  defp flush_emits(_s, [], _handout_seq, _offset, _report), do: :ok
+
+  defp flush_emits(%State{} = s, emits, handout_seq, offset, report),
+    do: Inbox.emitted(s.operative, s.node_ref, s.entity_key, emits, handout_seq, offset, report)
 
   # Two readers, one event: telemetry is the in-node handle, the counter is what
   # leaves the runner on the heartbeat — a drop nobody can see from outside the

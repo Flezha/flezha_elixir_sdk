@@ -3,8 +3,10 @@ defmodule Flezha.SDK.Channels do
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
   (`into`/`into_named`/`sink`/`sink_with`/`sealed`), per-edge knobs
-  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
-  identity on the sink the handle reaches). Handles carry their pending
+  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
+  identity on the sink the handle reaches) and the class-level tier
+  declarations (`effectively_once` and the three checkpoint options, which take
+  and answer the token itself). Handles carry their pending
   transform chain functionally; consumers write to a build accumulator kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
   builder's `pending`). Fan-out is handle reuse. Refusals accumulate — nothing
@@ -33,6 +35,7 @@ defmodule Flezha.SDK.Channels do
       sinks: [],
       knobs: %{},
       chains: %{},
+      tier: %{effectively_once: false, checkpoint: nil},
       issues: []
     })
 
@@ -44,6 +47,38 @@ defmodule Flezha.SDK.Channels do
     acc = Process.get(acc_key(ref))
     Process.delete(acc_key(ref))
     acc
+  end
+
+  # --- class-level declarations (the effectively-once tier) ---
+
+  @doc "Declare the effectively-once tier for the whole class."
+  def effectively_once(%__MODULE__{ref: ref} = c) do
+    update(ref, fn acc -> put_in(acc.tier.effectively_once, true) end)
+    c
+  end
+
+  @doc "Acknowledge inputs at checkpoint granularity rather than per input."
+  def checkpoint_ack(%__MODULE__{} = c), do: checkpoint_policy(c, & &1)
+
+  @doc "Close the staged interval every `n` inputs."
+  def checkpoint_every(%__MODULE__{} = c, n) when is_integer(n) and n >= 0,
+    do: checkpoint_policy(c, &%{&1 | every: n})
+
+  @doc "Hold the interval's outputs until it closes, and close it after `ms` at the latest."
+  def outputs_at_checkpoint(%__MODULE__{} = c, ms) when is_integer(ms) and ms >= 0,
+    do: checkpoint_policy(c, &%{&1 | outputs: :at_checkpoint, max_delay_ms: ms})
+
+  # Every checkpoint option turns the granularity on itself and amends the one
+  # policy, so the options compose in any order and none clears another's.
+  defp checkpoint_policy(%__MODULE__{ref: ref} = c, amend) do
+    update(ref, fn acc ->
+      put_in(
+        acc.tier.checkpoint,
+        amend.(acc.tier.checkpoint || %{every: nil, outputs: :as_produced, max_delay_ms: nil})
+      )
+    end)
+
+    c
   end
 
   # --- openers ---

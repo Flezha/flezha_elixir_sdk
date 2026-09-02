@@ -3,6 +3,11 @@ defmodule Flezha.SDK.Entity.State do
   One Entity's state, shared by its process (`Flezha.SDK.Entity`: the mailbox,
   the ladder, the park) and its durable half (`Flezha.SDK.Entity.Records`: the
   records, the slot, the restore and the snapshot).
+
+  Three map fields keep the struct flat (credo refuses a 32nd, which is the
+  Erlang flat-map boundary): everything timer-shaped is `timers`, everything
+  the park owns is `park`, and everything the effectively-once tier owns is
+  `tier`.
   """
 
   defstruct [
@@ -26,6 +31,21 @@ defmodule Flezha.SDK.Entity.State do
     # clock, the BEAM timer refs armed for processing time, and the event-time
     # high-water.
     timers: %{pending: %Flezha.SDK.Timers{}, clock: :wall, refs: %{}, high_water: nil},
+    # One field again, for the same reason: whether the class declares the
+    # effectively-once tier, its checkpoint policy, the node's sink routes the
+    # Entity captures its outputs through, whether it has an inter-procedure
+    # edge, the open interval, the consumed floor, the armed deadline and the
+    # records owed to an edge report.
+    tier: %{
+      on?: false,
+      checkpoint: nil,
+      sink_routes: [],
+      edges?: false,
+      staged: %Flezha.SDK.Entity.Interval{},
+      floor: -1,
+      deadline: nil,
+      owed: :queue.new()
+    },
     changeful?: false,
     persistent?: false,
     schema_version: 1,
@@ -36,9 +56,9 @@ defmodule Flezha.SDK.Entity.State do
     queue: :queue.new(),
     size: 0,
     processing?: false,
-    held?: false,
-    park_id: nil,
-    park_seq: 0,
+    # One field, so the struct stays flat: whether a park holds the queue, the
+    # ack-correlation id of the park that holds it and the next park's ordinal.
+    park: %{held?: false, id: nil, seq: 0},
     waiters: :queue.new()
   ]
 
