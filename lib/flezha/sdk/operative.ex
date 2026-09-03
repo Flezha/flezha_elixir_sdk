@@ -39,6 +39,11 @@ defmodule Flezha.SDK.Operative do
   @max_reap_interval_ms 30_000
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
+  # Outputs held while no stream will take them, drop-oldest past the cap. The
+  # knob is the one every SDK's reconnect hold reads, so one setting governs the
+  # wire whichever runtime produced the output.
+  @hold_cap_env "FLEZHA_RECONNECT_RING_CAPACITY"
+  @default_hold_cap 1_024
   # Evictions one sweep performs at most: the router is held while it runs,
   # so a burst of expiries drains over a few ticks rather than stalling it.
   @evict_budget 256
@@ -57,7 +62,8 @@ defmodule Flezha.SDK.Operative do
       cells: %{},
       entities: %{},
       dynamic: %{},
-      evicted: {:queue.new(), 0}
+      evicted: {:queue.new(), 0},
+      held: {:queue.new(), 0}
     ]
   end
 
@@ -132,12 +138,17 @@ defmodule Flezha.SDK.Operative do
     s
   end
 
-  defp reap_interval(ttl_ms) do
-    with val when is_binary(val) <- System.get_env(@reap_interval_env),
-         {ms, _} <- Integer.parse(val) do
-      max(ms, 1)
+  defp reap_interval(ttl_ms),
+    do: env_int(@reap_interval_env, ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1))
+
+  # A positive integer from the environment, else `default`. One reader, so a
+  # knob cannot mean something different depending on which one read it.
+  defp env_int(name, default) do
+    with val when is_binary(val) <- System.get_env(name),
+         {n, _} <- Integer.parse(val) do
+      max(n, 1)
     else
-      _ -> ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1)
+      _ -> default
     end
   end
 
@@ -293,7 +304,7 @@ defmodule Flezha.SDK.Operative do
         {_key, pid} <- keyed,
         do: send(pid, {:secondaries, secondaries})
 
-    {:noreply, %{s | secondaries: secondaries}}
+    {:noreply, replay_held(%{s | secondaries: secondaries})}
   end
 
   # The sweep runs here, so no push is routed while it runs: the drain gate.
@@ -338,11 +349,20 @@ defmodule Flezha.SDK.Operative do
     end)
   end
 
-  defp note_evicted(%State{evicted: {trace, n}} = s, key) do
+  defp note_evicted(%State{evicted: evicted} = s, key) do
     dynamic_event(s, :evicted)
-    {trace, n} = if n == @evicted_trace_cap, do: {:queue.drop(trace), n - 1}, else: {trace, n}
-    %{s | evicted: {:queue.in(key, trace), n + 1}}
+    {evicted, _shed} = push_capped(evicted, key, @evicted_trace_cap)
+    %{s | evicted: evicted}
   end
+
+  # A capped drop-oldest queue as `{queue, count}`. It answers whether the push
+  # shed the oldest entry; what a shed MEANS is the caller's — a forgotten
+  # eviction trace and a lost output are not the same event.
+  defp push_capped({queue, n}, item, cap) when n >= cap,
+    do: {{:queue.in(item, :queue.drop(queue)), n}, :shed}
+
+  defp push_capped({queue, n}, item, _cap),
+    do: {{:queue.in(item, queue), n + 1}, :kept}
 
   defp dynamic_event(%State{operative_id: oid}, event),
     do:
@@ -386,8 +406,7 @@ defmodule Flezha.SDK.Operative do
   defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
     stamp_with = if route.keyed, do: {s.operative_id, s.topology.node_modules}
     {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
-    emit_output(s, metadata, bytes)
-    {s, ordinal + 1}
+    {emit_output(s, metadata, bytes), ordinal + 1}
   end
 
   defp deliver(
@@ -651,29 +670,62 @@ defmodule Flezha.SDK.Operative do
 
   # Sink outputs ride a secondary stream directly (no router hop). The controller
   # routes io_out by payload-id = operative id, so any secondary carries it.
-  defp emit_output(%State{secondaries: []}, _meta, _bytes), do: :ok
+  # An output no stream will take is held for the next bound one rather than
+  # lost: the caller cannot learn of a send-side loss, so nothing here may
+  # discard a frame in silence.
+  defp emit_output(%State{secondaries: []} = s, meta, bytes), do: hold_output(s, meta, bytes)
 
-  defp emit_output(%State{secondaries: secondaries, operative_id: oid}, meta, bytes) do
+  defp emit_output(%State{secondaries: secondaries, operative_id: oid} = s, meta, bytes) do
     handle = Enum.at(secondaries, rem(:erlang.phash2(oid), length(secondaries)))
 
     case Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta) do
       :ok ->
-        :ok
+        s
 
-      # Discarding this answer is how a send-side loss becomes invisible. A
-      # client stream signals congestion by withholding its write's reply, so
+      # A client stream signals congestion by withholding its write's reply, so
       # the buffer never turns a frame away here; what does reach this arm is a
-      # transport that is gone, and the frame with it. The runner's close
-      # detection reconnects — this is what says a frame did not make it.
+      # transport that is gone. The runner's close detection reconnects, and the
+      # rebind replays what was held.
       {:error, reason} ->
         Logger.warning(
-          "[operative] output frame undelivered operative=#{oid} " <>
+          "[operative] output frame held for rebind operative=#{oid} " <>
             "channel=#{inspect(meta["channel"])} reason=#{inspect(reason)}"
         )
 
-        {:error, reason}
+        hold_output(s, meta, bytes)
     end
   end
+
+  # Drop-oldest at the cap, so a stream that never comes back cannot grow this
+  # past its cap. What it sheds is a real loss and is counted where every
+  # drop-oldest shed on this wire is counted — a silent one is what this whole
+  # path exists to stop.
+  defp hold_output(%State{held: held} = s, meta, bytes) do
+    {held, shed} = push_capped(held, {meta, bytes}, hold_cap())
+    if shed == :shed, do: Counters.inc_drops(s.counters, :drop_oldest)
+    %{s | held: held}
+  end
+
+  # A bound stream is what a held output was waiting for. Replay is in
+  # production order, and one that fails again re-enters the hold behind the
+  # rest — the same posture the FFI hosts' reconnect ring takes.
+  #
+  # "Records before the dispatch's output" is a property of one dispatch's ship
+  # order and is untouched here: `Records.ship/3` still returns before the emit
+  # is handed off. What a replay can outlive is the record's DELIVERY, because
+  # the Entity's record path holds nothing — so after a rebind an output can
+  # arrive whose record did not. `flz_core` has no such gap: records and framed
+  # outputs share one ring there.
+  defp replay_held(%State{secondaries: []} = s), do: s
+  defp replay_held(%State{held: {_queue, 0}} = s), do: s
+
+  defp replay_held(%State{held: {queue, _n}} = s) do
+    Enum.reduce(:queue.to_list(queue), %{s | held: {:queue.new(), 0}}, fn {meta, bytes}, acc ->
+      emit_output(acc, meta, bytes)
+    end)
+  end
+
+  defp hold_cap, do: env_int(@hold_cap_env, @default_hold_cap)
 
   defp knob(topo, node_ref, key, default),
     do: get_in(topo.node_knobs, [node_ref, key]) || default
