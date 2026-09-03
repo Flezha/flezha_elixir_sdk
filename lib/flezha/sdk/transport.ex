@@ -87,7 +87,8 @@ defmodule Flezha.SDK.Transport do
   def connect_sockets(:uds, runner_id, count, owner, _conn) do
     with {:ok, base} <- socket_base() do
       dial_pairs(count, fn type ->
-        Native.client_connect_uds(stream_socket_path(base, runner_id, type), owner)
+        with {:ok, path} <- Native.stream_socket_path(base, runner_id, type),
+             do: Native.client_connect_uds(path, owner)
       end)
     end
   end
@@ -152,9 +153,6 @@ defmodule Flezha.SDK.Transport do
   defp control_socket_path do
     with {:ok, base} <- socket_base(), do: {:ok, base <> "/runner_control_channel.sock"}
   end
-
-  defp stream_socket_path(base, runner_id, type),
-    do: base <> "/#{type}_stream_#{runner_id}.sock"
 
   defp ca_cert_path, do: System.get_env("FLEZHA_CA_CERT_PATH") || @default_ca_cert
 end
