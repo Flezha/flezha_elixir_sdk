@@ -4,11 +4,10 @@ defmodule Flezha.SDK.Entity.Clock do
   declared and the value that clock serves, the event-time high-water, and the
   BEAM timer refs a processing-time registration arms.
 
-  Split out of `Flezha.SDK.Entity` by mutation (charter §7) — every function
-  here writes `timers.clock`, `timers.refs` or `timers.high_water`, and the
-  process half keeps its mailbox, its queue and its ladder. This module aliases
-  `Counters`, `Procedure`, `Timers` and `State`, and **never names `Entity`**,
-  so the split forms no cycle. Its functions run in the Entity's own process,
+  Everything here writes `timers.clock`, `timers.refs` or `timers.high_water`;
+  the process half keeps its mailbox, its queue and its ladder. This module
+  aliases `Counters`, `Procedure`, `Timers` and `State`, and **never names
+  `Entity`**, so it forms no cycle. Its functions run in the Entity's own process,
   which is what makes `self()` in `arm/2` the Entity.
   """
 

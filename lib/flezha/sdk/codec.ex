@@ -109,6 +109,116 @@ defmodule Flezha.SDK.Codec do
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}
   end
 
+  @doc "The `ProcCommit` command tuple for one completed stage."
+  @spec proc_commit_command(
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          [binary()],
+          [
+            {non_neg_integer(), binary()}
+          ],
+          [map()],
+          boolean()
+        ) :: {atom(), struct()}
+  def proc_commit_command(
+        operative_id,
+        proc_idx,
+        iter,
+        entities_ran,
+        handoff,
+        outbox,
+        compensating
+      ) do
+    {:proc_commit,
+     %RunnerCommands.ProcCommit{
+       operative_id: operative_id,
+       proc_idx: proc_idx,
+       iter: iter,
+       entities_ran: entities_ran,
+       handoff: handoff_items(handoff),
+       outbox: Enum.map(outbox, &outbox_item/1),
+       compensating: compensating
+     }}
+  end
+
+  @doc "The `IterCommit` command tuple for one finished iteration."
+  @spec iter_commit_command(String.t(), non_neg_integer(), non_neg_integer(), [
+          {non_neg_integer(), binary()}
+        ]) :: {atom(), struct()}
+  def iter_commit_command(operative_id, iter, consumed_offset, handoff) do
+    {:iter_commit,
+     %RunnerCommands.IterCommit{
+       operative_id: operative_id,
+       iter: iter,
+       consumed_offset: consumed_offset,
+       handoff: handoff_items(handoff)
+     }}
+  end
+
+  @doc "The `IterPark` command tuple for a loop that found its inbox empty."
+  @spec iter_park_command(String.t(), non_neg_integer(), non_neg_integer()) :: {atom(), struct()}
+  def iter_park_command(operative_id, iter, wake_deadline_ms) do
+    {:iter_park,
+     %RunnerCommands.IterPark{
+       operative_id: operative_id,
+       iter: iter,
+       wake_deadline_ms: wake_deadline_ms
+     }}
+  end
+
+  @doc "The `WorkflowCompleted` command tuple for a terminated instance."
+  @spec workflow_completed_command(String.t(), String.t(), String.t(), binary()) ::
+          {atom(), struct()}
+  def workflow_completed_command(operative_id, status, error, result) do
+    {:workflow_completed,
+     %RunnerCommands.WorkflowCompleted{
+       operative_id: operative_id,
+       status: status,
+       error: error,
+       result: result
+     }}
+  end
+
+  @doc "The committed proc-journal a bind carried, as plain Elixir terms."
+  @spec journal_facts(struct() | nil) :: map() | nil
+  def journal_facts(nil), do: nil
+
+  def journal_facts(%RunnerCommands.ProcJournalState{} = j) do
+    %{
+      committed_proc_idxs: j.committed_proc_idxs,
+      iter: j.iter,
+      handoff: Enum.map(j.handoff, &{&1.channel_id, &1.payload}),
+      proc_handoffs:
+        Map.new(j.proc_handoffs, fn e ->
+          {e.proc_idx, Enum.map(e.handoff, &{&1.channel_id, &1.payload})}
+        end),
+      committed_procs: Enum.map(j.committed_procs, &committed_proc/1),
+      consumed_offset: j.consumed_offset,
+      parked: j.parked,
+      wake_deadline_ms: j.wake_deadline_ms,
+      rewind_undo: Enum.map(j.rewind_undo, &committed_proc/1)
+    }
+  end
+
+  defp committed_proc(%RunnerCommands.ProcCommittedProc{} = p),
+    do: %{proc_idx: p.proc_idx, iter: p.iter, entities_ran: p.entities_ran}
+
+  defp handoff_items(handoff) do
+    Enum.map(handoff, fn {channel_id, payload} ->
+      %RunnerCommands.ProcHandoffItem{channel_id: channel_id, payload: payload}
+    end)
+  end
+
+  defp outbox_item(%{entity_id: id, seq_in_proc: seq, channel: channel, payload: payload}) do
+    %RunnerCommands.ProcOutboxItem{
+      entity_id: id,
+      seq_in_proc: seq,
+      channel: channel,
+      payload: payload
+    }
+  end
+
   defp encode(message) do
     {:ok, iodata, _size} = Protox.encode(message)
     IO.iodata_to_binary(iodata)

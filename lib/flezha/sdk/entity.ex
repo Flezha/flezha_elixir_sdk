@@ -59,6 +59,24 @@ defmodule Flezha.SDK.Entity do
     defstruct [:opened_at]
   end
 
+  # A saga undo, on the queue like a firing is: `compensate/3` in place of
+  # `run/3`, over the outputs that Entity released. Best-effort — a hook that
+  # fails is logged and the plan moves on, so it never parks.
+  defmodule Undo do
+    @moduledoc false
+    defstruct [:outputs]
+  end
+
+  # A workflow stage's barrier, on the queue behind that stage's batch. It
+  # runs no author code: reaching it is the answer, because the queue is FIFO
+  # and every item before it has been dispatched. An invocation that emits
+  # nothing reports nothing, so a driver cannot count outputs to know its
+  # stage finished — it enqueues one of these and waits for the reply.
+  defmodule Barrier do
+    @moduledoc false
+    defstruct [:ref, :reply_to]
+  end
+
   # An input under the effectively-once tier: the value with the durable
   # offset the controller stamped on it, and `replay` — `:member` while it
   # waits for its slice to close, `:ordered` once the flush re-queued it in
@@ -76,6 +94,16 @@ defmodule Flezha.SDK.Entity do
 
   @doc "Enqueue under `:drop_nothing` — the caller waits until there is room."
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
+
+  @doc "Run this Entity's `compensate/3` over the outputs it released."
+  def compensate(pid, outputs), do: enqueue_block(pid, %Undo{outputs: outputs})
+
+  @doc """
+  Enqueue a barrier behind whatever this Entity already holds: `{:stage_done,
+  ref, entity_pid}` reaches `reply_to` once the queue has drained past it.
+  """
+  def barrier(pid, ref, reply_to),
+    do: enqueue_block(pid, %Barrier{ref: ref, reply_to: reply_to})
 
   @doc "Enqueue under a drop policy — non-blocking."
   def enqueue_drop(pid, value, policy), do: GenServer.cast(pid, {:enqueue_drop, value, policy})
@@ -176,6 +204,7 @@ defmodule Flezha.SDK.Entity do
       retry_backoff_ms: Keyword.fetch!(opts, :retry_backoff_ms),
       counters: Keyword.fetch!(opts, :counters),
       identity: identity,
+      park: %{%State{}.park | enabled?: Keyword.get(opts, :park_on_exhaustion, true)},
       slots: slots,
       credit: Keyword.get(opts, :credit),
       # The static ctx facts: the node's, from the Operative, and the timer
@@ -228,6 +257,11 @@ defmodule Flezha.SDK.Entity do
   def handle_call({:restore, header, snapshot, log, hint}, _from, %State{} = s) do
     case Records.restore(s, header, snapshot, log, hint) do
       {:ok, s, terminal, migrated} ->
+        # A workflow driver holds its first procedure until every Entity the
+        # bind owes has been rebuilt, so a resumed run reads persisted state
+        # instead of cold-starting. A stream Operative has nothing to hold and
+        # ignores this.
+        send(s.operative, {:restored, self()})
         {:reply, {:ok, terminal, migrated}, Clock.rearm(Tier.cancel_deadline(s))}
 
       {:error, reason} ->
@@ -412,6 +446,13 @@ defmodule Flezha.SDK.Entity do
 
   defp admit(%State{} = s, %Close{opened_at: at}), do: Tier.close(s, at)
 
+  defp admit(%State{} = s, %Undo{} = undo), do: dispatch(s, undo, nil)
+
+  defp admit(%State{} = s, %Barrier{ref: ref, reply_to: pid}) do
+    send(pid, {:stage_done, ref, self()})
+    s
+  end
+
   # Defence in depth, and no test distinguishes it: the slice's order is already
   # guaranteed by `Operative.push/6` pushing a member with `enqueue_block/2`, a
   # synchronous call, so the drain has buffered every member before the close
@@ -487,7 +528,7 @@ defmodule Flezha.SDK.Entity do
           complete(s, new_proc_state, facts, offset)
 
         {:park, error, attempts} ->
-          s |> park_firing(item) |> park(item, error, attempts, offset)
+          s |> park_firing(item) |> exhausted(item, error, attempts, offset)
       end
     after
       Counters.dispatch_finished(s.counters, identity)
@@ -613,6 +654,9 @@ defmodule Flezha.SDK.Entity do
 
   # `on_timer/4` on a firing, `run/3` on an input; a firing on a procedure that
   # exports no handler parks by name, without the retries a raise would climb.
+  defp call(%State{} = s, %Undo{outputs: outputs}, ctx),
+    do: s.module.compensate(outputs, s.proc_state, ctx)
+
   defp call(%State{timers: %{on_timer?: true}} = s, %Fire{kind: kind, at: at}, ctx),
     do: s.module.on_timer(at, kind, s.proc_state, ctx)
 
@@ -663,6 +707,17 @@ defmodule Flezha.SDK.Entity do
   # Under the tier a park IS a record: the entry, the offset it consumed and a
   # parked firing's removal ride one frame, and nothing is held — the record is
   # the durability, so there is no ack to wait for.
+  # A workflow stage's Entity does not park: its exhausted ladder fails the
+  # procedure, and the driver unwinds the run. A stream's Entity parks to the
+  # DLQ, which is the only behaviour that existed before workflows.
+  defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, _attempts, _offset) do
+    GenServer.cast(s.operative, {:stage_failed, s.node_ref, format_error(error)})
+    s
+  end
+
+  defp exhausted(%State{} = s, value, error, attempts, offset),
+    do: park(s, value, error, attempts, offset)
+
   defp park(%State{tier: %{on?: true}} = s, value, error, attempts, offset) do
     {s, ops, tally} = firing_removal(s, value)
     dlq = Park.dlq_entry(park_channel(s), error, attempts, value)

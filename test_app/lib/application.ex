@@ -23,6 +23,7 @@ defmodule ElixirRunner.Application do
 
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
     streams = ElixirFactories.all() ++ ElixirRunner.Factories.all()
+    workflows = ElixirRunner.Workflows.all() ++ ElixirRunner.WorkflowsLoop.all()
     # A runner-level registration, not a declaration: armed beside the streams.
     idle_observers = ElixirRunner.EntryIdleCounter.arm()
 
@@ -32,6 +33,7 @@ defmodule ElixirRunner.Application do
       Flezha.SDK.child_spec(
         namespace: namespace,
         streams: streams,
+        workflows: workflows,
         transport: transport,
         idle_observers: idle_observers
       )

@@ -167,6 +167,16 @@ defmodule Flezha.SDK.Record do
   end
 
   @doc """
+  The wire frame of a saga compensation marker. Presence is the whole signal,
+  so the body is empty and the identity rides the envelope — the same
+  headerless shape a correction takes. The payload id says which marker it is:
+  `compensation_intent` that a procedure completed forward and may need undo,
+  `compensation_done` that its hook already ran.
+  """
+  @spec compensation_frame(binary()) :: binary()
+  def compensation_frame(identity), do: Wire.encode_frame(identity, 0, <<0::128>>, <<>>)
+
+  @doc """
   Resolve a record header against the running procedure's `{schema, floor}`:
   the language before anything else, then the format, then the schema —
   `:decode` at the running version, `{:migrate, from}` between the floor and

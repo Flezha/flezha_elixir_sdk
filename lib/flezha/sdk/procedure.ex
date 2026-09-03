@@ -37,6 +37,14 @@ defmodule Flezha.SDK.Procedure do
   `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
   into; `max_timers_per_entity/0` (10_000) bounds an Entity's pending set.
+
+  Saga: `compensate/3` (the outputs the Entity released, the state, a ctx) is
+  the undo a workflow operative runs, in reverse completion order, when it
+  unwinds after partial progress. A procedure declaring none has nothing to
+  undo. A crash-resumed unwind reconstructs completed stages with EMPTY
+  outputs — a procedure's collected output was never durable — so a hook that
+  records an undo must do so unconditionally rather than from what it is
+  handed.
   """
 
   alias Flezha.SDK.Ctx
@@ -71,8 +79,10 @@ defmodule Flezha.SDK.Procedure do
               Ctx.t()
             ) :: run_result()
   @callback max_timers_per_entity() :: pos_integer()
+  @callback compensate(outputs :: [term()], state(), Ctx.t()) :: run_result()
 
-  @optional_callbacks entity_keys: 0,
+  @optional_callbacks compensate: 3,
+                      entity_keys: 0,
                       entities_for: 1,
                       mailbox_capacity: 0,
                       max_entities: 0,
@@ -99,6 +109,14 @@ defmodule Flezha.SDK.Procedure do
   @default_schema_version 1
   # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_ENTITY`.
   @default_max_timers_per_entity 10_000
+
+  @doc """
+  Whether this procedure declares a saga undo hook. A workflow that unwinds
+  runs `compensate/3` on every Entity whose procedure completed forward; a
+  procedure declaring none simply has nothing to undo.
+  """
+  @spec compensates?(module()) :: boolean()
+  def compensates?(module), do: exports?(module, :compensate, 3)
 
   @doc "Static entity keyset (`[]` unless the procedure overrides `entity_keys/0`)."
   def entity_keys(module) do

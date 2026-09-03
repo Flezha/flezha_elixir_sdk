@@ -32,10 +32,11 @@ defmodule Flezha.SDK.RunnerServer do
     Operative,
     Park,
     PersistentId,
-    Procedure,
     Transport
   }
 
+  alias Flezha.SDK.Declarations
+  alias Flezha.SDK.Workflow.{Driver, Spec}
   alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
@@ -83,6 +84,7 @@ defmodule Flezha.SDK.RunnerServer do
       secondaries: [],
       operatives: %{},
       parks: %{},
+      barriers: %{},
       idle: nil,
       reconnect_attempt: 0,
       disconnecting?: false,
@@ -308,6 +310,40 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
+  # The three casts a workflow driver sends upward, all of them built by
+  # `Flezha.SDK.Workflow.Commit` so the driver never names this module.
+  def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
+    reference_id = "wf-" <> Integer.to_string(System.unique_integer([:positive]))
+    ship_request(s, reference_id, command)
+    {:noreply, %{s | barriers: Map.put(s.barriers, reference_id, {driver, ref})}}
+  end
+
+  def handle_cast({:emit_output, _oid, _meta, _bytes}, %State{secondaries: []} = s) do
+    Logger.warning("[Flezha.SDK] workflow output dropped: no secondary stream is bound")
+    {:noreply, s}
+  end
+
+  def handle_cast({:emit_output, oid, meta, bytes}, %State{secondaries: secondaries} = s) do
+    handle = Enum.at(secondaries, rem(:erlang.phash2(oid), length(secondaries)))
+    _ = Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta)
+    {:noreply, s}
+  end
+
+  def handle_cast({:record, payload_id, _frame}, %State{secondaries: []} = s) do
+    Logger.warning("[Flezha.SDK] #{payload_id} dropped: no secondary stream is bound")
+    {:noreply, s}
+  end
+
+  def handle_cast({:record, payload_id, frame}, %State{secondaries: secondaries} = s) do
+    _ = Flezha.Transport.Stream.send_frame(Enum.at(secondaries, 0), payload_id, frame, %{})
+    {:noreply, s}
+  end
+
+  def handle_cast({:notify, command}, %State{} = s) do
+    ship_request(s, "wf-" <> Integer.to_string(System.unique_integer([:positive])), command)
+    {:noreply, s}
+  end
+
   def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
     send_park_frame(s, identity, body)
     ref = Process.send_after(self(), {:park_resend, body.park_id}, @park_resend_ms)
@@ -364,8 +400,28 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp dispatch({:workflow_stop, %{operative_id: oid}}, ref, s) do
-    Logger.warning("[Flezha.SDK] WorkflowStop for #{oid} — this runner advertises no workflow")
+    case Map.get(s.operatives, oid) do
+      {pid, _fid} -> Driver.stop_workflow(pid)
+      nil -> Logger.warning("[Flezha.SDK] WorkflowStop for unknown operative #{oid}")
+    end
+
     reply_ok(s, ref)
+  end
+
+  # A barrier ack rides the reference_id of the commit it answers, which is
+  # what names the driver that shipped it. Nothing is replied to: the ack is
+  # itself a reply.
+  defp dispatch({tag, %{error: error}}, ref, %State{} = s)
+       when tag in [:proc_commit_response, :iter_commit_response] do
+    case Map.pop(s.barriers, ref) do
+      {{driver, barrier_ref}, barriers} ->
+        send(driver, {:barrier_ack, barrier_ref, error})
+        {:noreply, %{s | barriers: barriers}}
+
+      {nil, _} ->
+        Logger.debug("[Flezha.SDK] barrier ack for an unknown reference #{ref}")
+        {:noreply, s}
+    end
   end
 
   # A terminal disconnect is the rung of the controller's convergence ladder
@@ -438,71 +494,72 @@ defmodule Flezha.SDK.RunnerServer do
     topo = Map.get(s.topologies, add.factory_id)
 
     cond do
-      kind == "workflow" ->
-        {:error, "workflow kind is not supported by the Elixir stream SDK", s}
-
       is_nil(topo) ->
         {:error, "unknown factory #{add.factory_id}", s}
+
+      # The kind the controller placed under and the class registered under
+      # this id must agree: a mismatch would drive a stream topology through
+      # the workflow driver, or the reverse, and neither has the other's shape.
+      kind == "workflow" ->
+        start_workflow(s, add, topo)
+
+      match?(%Spec{}, topo) ->
+        {:error, "factory #{add.factory_id} is a workflow class; kind was #{inspect(kind)}", s}
 
       KeyGroup.partitioned?(range) and topo.keyless? ->
         {:error, "PartitionsWithoutKeyedProcedure: a partition_count >= 2 class needs a key_by",
          s}
 
       true ->
-        {:ok, op_pid} =
-          Operative.start_link(
-            operative_id: add.operative_id,
-            topology: topo,
-            cells: EntryInput.cells_for(topo.entries),
-            range: range,
-            counters: s.counters,
-            runner: self(),
-            secondaries: s.secondaries,
-            credit: s.credit
-          )
-
-        :ets.insert(s.registry, {add.operative_id, op_pid})
-        seed_init_values(op_pid, add)
-
-        {:ok,
-         %{s | operatives: Map.put(s.operatives, add.operative_id, {op_pid, add.factory_id})},
-         declarations(topo)}
+        start_stream(s, add, topo, range)
     end
+  end
+
+  defp start_stream(%State{} = s, add, topo, range) do
+    {:ok, op_pid} =
+      Operative.start_link(
+        operative_id: add.operative_id,
+        topology: topo,
+        cells: EntryInput.cells_for(topo.entries),
+        range: range,
+        counters: s.counters,
+        runner: self(),
+        secondaries: s.secondaries,
+        credit: s.credit
+      )
+
+    :ets.insert(s.registry, {add.operative_id, op_pid})
+    seed_init_values(op_pid, add)
+
+    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {op_pid, add.factory_id})},
+     Declarations.for(topo)}
   end
 
   # What the class declares to the controller: partitionability only when
   # refusable, the compaction threshold only when it differs from the default,
-  # the tier and its granularity when declared, and both correction keys
-  # whenever a window is — an undeclared beyond-window fate reaches the
-  # controller as the default rather than as an absence, as it does in every
-  # other SDK. The cadence, the outputs posture and the delay stay SDK-side.
-  @doc false
-  def declarations(topo) do
-    keyed = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}
-    threshold = topo.compact_after_bytes
+  defp start_workflow(%State{} = s, add, %Spec{} = spec) do
+    {:ok, pid} =
+      Driver.start_link(
+        operative_id: add.operative_id,
+        spec: spec,
+        args: add.init_values || "",
+        journal: Codec.journal_facts(add.proc_journal),
+        owed_inbox: add.inbox_tail_count || 0,
+        resume_entity_count: add.resume_entity_count || 0,
+        counters: s.counters,
+        runner: self(),
+        secondaries: s.secondaries,
+        credit: s.credit
+      )
 
-    compacted =
-      if threshold && threshold != Procedure.default_compact_after_bytes(),
-        do: Map.put(keyed, "compact_after_bytes", Integer.to_string(threshold)),
-        else: keyed
+    :ets.insert(s.registry, {add.operative_id, pid})
 
-    tiered =
-      if topo.effectively_once?,
-        do: Map.put(compacted, "effectively_once", "true"),
-        else: compacted
-
-    acked = if topo.checkpoint, do: Map.put(tiered, "ack_granularity", "checkpoint"), else: tiered
-
-    corrected(acked, topo.correction)
+    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {pid, add.factory_id})},
+     Declarations.for(spec)}
   end
 
-  defp corrected(declarations, nil), do: declarations
-
-  defp corrected(declarations, %{window_ms: window_ms, beyond_window: beyond_window}) do
-    declarations
-    |> Map.put("correction_window_ms", Integer.to_string(window_ms))
-    |> Map.put("beyond_window_policy", Atom.to_string(beyond_window))
-  end
+  defp start_workflow(%State{} = s, add, _topology),
+    do: {:error, "factory #{add.factory_id} is a stream class; kind was \"workflow\"", s}
 
   defp seed_init_values(op_pid, add) do
     case Commands.apply_json(op_pid, add.operative_id, add.init_values) do
@@ -634,7 +691,12 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp ship_update_factories(%State{} = s) do
     ref = "uf-" <> Integer.to_string(System.unique_integer([:positive]))
-    command = Codec.update_factories_command(s.factories)
+    ship_request(s, ref, Codec.update_factories_command(s.factories))
+  end
+
+  defp ship_request(%State{control_handle: nil}, _ref, _command), do: :ok
+
+  defp ship_request(%State{} = s, ref, command) do
     bin = Codec.encode_request(ref, command)
     Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, %{})
   end

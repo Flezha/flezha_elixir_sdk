@@ -24,8 +24,8 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Entity, EntryInput, KeyGroup, Park, Procedure}
-  alias Flezha.SDK.Operative.Routing
+  alias Flezha.SDK.{Counters, Entity, EntryInput, KeyGroup, Park, Procedure, Topology}
+  alias Flezha.SDK.Operative.{Inbox, Routing}
 
   @default_retry_max 3
   @default_retry_backoff_ms 50
@@ -154,7 +154,7 @@ defmodule Flezha.SDK.Operative do
 
   @impl true
   def handle_call({:lookup, procedure, key, materialise?}, _from, %State{topology: topo} = s) do
-    with {:ok, node_ref} <- node_of(topo, procedure),
+    with {:ok, node_ref} <- Topology.node_of(topo, procedure),
          {:ok, slot_key} <- slot_key(s, node_ref, key) do
       case {get_in(s.entities, [node_ref, slot_key]), materialise?} do
         {nil, false} -> {:reply, {:error, missing(s, node_ref, slot_key)}, s}
@@ -255,13 +255,7 @@ defmodule Flezha.SDK.Operative do
         )
       end)
 
-    # Every push of this invocation has been admitted — an `enqueue_block` that
-    # returned is a push the consumer holds — so the record it produced may
-    # become durable now.
-    case report do
-      {entity, ref} -> send(entity, {:edges_delivered, ref})
-      nil -> :ok
-    end
+    Inbox.delivered(report)
 
     {:noreply, s}
   end
@@ -577,13 +571,6 @@ defmodule Flezha.SDK.Operative do
       keyed_sink?: keyed != [],
       key_required?: key == nil and Enum.any?(keyed, &is_nil(&1.key_by))
     ]
-  end
-
-  defp node_of(topo, procedure) do
-    case Enum.find(topo.node_modules, fn {_ref, m} -> m.name() == procedure end) do
-      {ref, _module} -> {:ok, ref}
-      nil -> {:error, :procedure_not_found}
-    end
   end
 
   # The key an Entity is registered under for its node's mode: none for a

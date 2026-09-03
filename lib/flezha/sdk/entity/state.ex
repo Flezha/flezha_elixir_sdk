@@ -6,7 +6,8 @@ defmodule Flezha.SDK.Entity.State do
 
   Three map fields keep the struct flat (credo refuses a 32nd, which is the
   Erlang flat-map boundary): everything timer-shaped is `timers`, everything
-  the park owns is `park`, and everything the effectively-once tier owns is
+  the park owns is `park` (its policy included), and everything the
+  effectively-once tier owns is
   `tier`.
   """
 
@@ -61,7 +62,9 @@ defmodule Flezha.SDK.Entity.State do
     processing?: false,
     # One field, so the struct stays flat: whether a park holds the queue, the
     # ack-correlation id of the park that holds it and the next park's ordinal.
-    park: %{held?: false, id: nil, seq: 0},
+    # `enabled?` is false for a workflow stage's Entity: an exhausted ladder
+    # there fails the procedure rather than parking the input to the DLQ.
+    park: %{held?: false, id: nil, seq: 0, enabled?: true},
     waiters: :queue.new()
   ]
 

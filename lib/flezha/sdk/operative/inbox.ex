@@ -23,4 +23,12 @@ defmodule Flezha.SDK.Operative.Inbox do
   """
   def emitted(pid, node_ref, entity_key, emits, handout_seq, offset, report),
     do: GenServer.cast(pid, {:emitted, node_ref, entity_key, emits, handout_seq, offset, report})
+
+  @doc """
+  Release the effect record an Entity is holding for the invocation just
+  routed: every push it produced has been admitted, so the record may become
+  durable. A `nil` report is an invocation that owed nothing.
+  """
+  def delivered(nil), do: :ok
+  def delivered({entity, ref}), do: send(entity, {:edges_delivered, ref})
 end

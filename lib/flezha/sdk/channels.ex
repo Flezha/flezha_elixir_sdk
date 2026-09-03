@@ -162,8 +162,14 @@ defmodule Flezha.SDK.Channels do
     consume_chain(ref, s)
 
     update(ref, fn acc ->
-      if Enum.any?(acc.sinks, &(&1.plugin == plugin)) do
-        add_issue(acc, {:DuplicatePluginSink, plugin})
+      # One sink per channel AND plugin. Neither half alone is the duplicate:
+      # a channel may reach several plugins (a keyed wire beside a plain one),
+      # and a plugin may be fed by several channels (how a chain reports every
+      # stage to one place, each with its own encoder). Wiring the SAME channel
+      # to the SAME plugin twice is the duplicate — two identical routes, every
+      # value delivered twice.
+      if Enum.any?(acc.sinks, &(&1.from == s.source and &1.plugin == plugin)) do
+        add_issue(acc, {:DuplicatePluginSink, channel_name(acc, s.source), plugin})
       else
         {transform, key_by} = fuse(s.chain)
 
@@ -245,6 +251,19 @@ defmodule Flezha.SDK.Channels do
 
   # --- fusion: one closure per edge ---
 
+  @doc """
+  The channel a source is named by on the wire: an entry's own name, a node's
+  `named/2` name, else its procedure's. One rule, read by the builder's own
+  refusals and by the compiled routes.
+  """
+  @spec channel_name(map(), {:entry, String.t()} | {:node, reference()}) :: String.t()
+  def channel_name(_acc, {:entry, name}), do: name
+
+  def channel_name(acc, {:node, ref}) do
+    %{module: module, name: name} = Map.fetch!(acc.nodes, ref)
+    name || module.name()
+  end
+
   @doc false
   def fuse(chain) do
     {steps, key_by} =
@@ -283,12 +302,47 @@ defmodule Flezha.SDK.Channels do
     node_ref = resolve_node(ref, module, name)
 
     update(ref, fn acc ->
-      {transform, key_by} = fuse(s.chain)
-      edge = %{from: s.source, to: node_ref, transform: transform, key_by: key_by}
-      %{acc | edges: [edge | acc.edges]} |> apply_knobs(node_ref, s)
+      acc |> attach_consumer(s, node_ref) |> apply_knobs(node_ref, s)
     end)
 
     %Stream{builder: ref, source: {:node, node_ref}}
+  end
+
+  # One consumer edge per (channel, procedure). Re-declaring one where either
+  # side carries a transform or a key is refused: the edge keeps a single fused
+  # closure, so the second declaration would otherwise be dropped and every
+  # value delivered under the first one's transform and key. Carrying neither
+  # is the repeated-`into` fan-in, which leaves the one edge as it stands.
+  defp attach_consumer(acc, %Stream{chain: chain, source: from} = s, node_ref) do
+    declares = chain != []
+
+    case Enum.find(acc.edges, &(&1.from == from and &1.to == node_ref)) do
+      %{declares: existing} when existing or declares ->
+        add_issue(acc, {:EdgeAlreadyWired, describe(from), node_label(acc, node_ref)})
+
+      %{} ->
+        acc
+
+      nil ->
+        {transform, key_by} = fuse(s.chain)
+
+        edge = %{
+          from: from,
+          to: node_ref,
+          transform: transform,
+          key_by: key_by,
+          declares: declares
+        }
+
+        %{acc | edges: [edge | acc.edges]}
+    end
+  end
+
+  defp node_label(acc, node_ref) do
+    case Map.get(acc.nodes, node_ref) do
+      %{name: name} when is_binary(name) -> name
+      %{module: module} -> inspect(module)
+    end
   end
 
   # A consumer edge's mailbox/ladder knobs attach to the target node. Fan-in
@@ -316,7 +370,7 @@ defmodule Flezha.SDK.Channels do
       case Map.get(acc.node_by_module, module) do
         nil ->
           acc
-          |> put_in([:nodes, node_ref], %{module: module, name: nil})
+          |> put_in([:nodes, node_ref], %{module: module, name: nil, seq: map_size(acc.nodes)})
           |> put_in([:node_by_module, module], node_ref)
 
         _existing ->
@@ -334,7 +388,7 @@ defmodule Flezha.SDK.Channels do
       case Map.get(acc.node_names, name) do
         nil ->
           acc
-          |> put_in([:nodes, node_ref], %{module: module, name: name})
+          |> put_in([:nodes, node_ref], %{module: module, name: name, seq: map_size(acc.nodes)})
           |> put_in([:node_names, name], node_ref)
 
         _existing ->

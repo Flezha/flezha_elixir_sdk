@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless procedure → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Procedure, StreamOperative}
+  alias Flezha.SDK.{Channels, Graph, Procedure, StreamOperative}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -21,10 +21,10 @@ defmodule Flezha.SDK.Topology do
             node_mode: %{},
             node_name: %{},
             node_channel: %{},
+            node_seq: %{},
             node_knobs: %{},
             routes: %{},
             order: [],
-            sink_serializers: %{},
             keyless?: false,
             persistence_enabled?: true,
             compact_after_bytes: nil,
@@ -34,12 +34,18 @@ defmodule Flezha.SDK.Topology do
 
   @type t :: %__MODULE__{}
 
-  @spec build(module()) :: {:ok, t()} | {:error, {:invalid_topology, [term()]}}
-  def build(module) do
+  @doc """
+  Compile `module`'s declaration into a topology. `declare` names the callback
+  that authors it: `:channels` for a stream class, `:procedures` for a workflow
+  one — the two surfaces author on the same builder, so they compile through
+  the same function.
+  """
+  @spec build(module(), atom()) :: {:ok, t()} | {:error, {:invalid_topology, [term()]}}
+  def build(module, declare \\ :channels) do
     c = Channels.new()
 
     try do
-      _ = module.channels(c)
+      _ = apply(module, declare, [c])
       acc = Channels.take(c)
       compile(module, acc)
     rescue
@@ -64,10 +70,10 @@ defmodule Flezha.SDK.Topology do
          node_mode: node_mode,
          node_name: node_names(acc),
          node_channel: node_channels(acc),
+         node_seq: node_seqs(acc),
          node_knobs: acc.knobs,
          routes: routes,
          order: Map.keys(acc.nodes),
-         sink_serializers: sink_serializers(acc),
          keyless?: keyless?(acc, node_mode),
          persistence_enabled?: StreamOperative.persistence_enabled?(module),
          compact_after_bytes: compact_after_bytes(acc),
@@ -97,7 +103,7 @@ defmodule Flezha.SDK.Topology do
         keyed: s.keyed,
         # The channel a frame off this route is named by: a static property of
         # the route's source, resolved once here rather than per output.
-        channel: source_channel(acc, s.from)
+        channel: Channels.channel_name(acc, s.from)
       }
 
       Map.update(m, s.from, [route], &[route | &1])
@@ -231,7 +237,7 @@ defmodule Flezha.SDK.Topology do
     Enum.reduce(acc.sinks, is, fn sink, is ->
       if sink.keyed,
         do: is,
-        else: [{:UnkeyedChannelUnderEffectivelyOnce, source_channel(acc, sink.from)} | is]
+        else: [{:UnkeyedChannelUnderEffectivelyOnce, Channels.channel_name(acc, sink.from)} | is]
     end)
   end
 
@@ -241,21 +247,15 @@ defmodule Flezha.SDK.Topology do
     Enum.reduce(acc.edges, is, fn edge, is ->
       case get_in(acc.knobs, [edge.to, :on_full]) do
         policy when policy in [:drop_newest, :drop_oldest] ->
-          [{:DroppingPolicyUnderEffectivelyOnce, source_channel(acc, edge.from), policy} | is]
+          [
+            {:DroppingPolicyUnderEffectivelyOnce, Channels.channel_name(acc, edge.from), policy}
+            | is
+          ]
 
         _ ->
           is
       end
     end)
-  end
-
-  # The channel a route's source is named by on the wire: an entry's own name,
-  # a node's `named/2` name or its procedure's.
-  defp source_channel(_acc, {:entry, name}), do: name
-
-  defp source_channel(acc, {:node, ref}) do
-    %{module: module, name: name} = Map.fetch!(acc.nodes, ref)
-    name || module.name()
   end
 
   # A changeful procedure's records are keyed by its `name/0`, so two nodes of
@@ -338,36 +338,24 @@ defmodule Flezha.SDK.Topology do
 
   # A cycle among procedure nodes (entry sources are roots).
   defp check_cycles(acc, routes, is) do
-    adj =
-      Enum.reduce(routes, %{}, fn
-        {{:node, from}, rs}, m ->
-          tos = for %{to: {:node, to}} <- rs, do: to
-          Map.put(m, from, tos)
+    walk = Graph.walk(node_seqs(acc), node_edges(routes))
+    if walk.on_cycle, do: [{:Cycle, "procedure graph"} | is], else: is
+  end
 
-        {_entry, _rs}, m ->
-          m
-      end)
-
-    nodes = Map.keys(acc.nodes)
-
-    if Enum.any?(nodes, &cyclic?(&1, adj, MapSet.new(), MapSet.new())) do
-      [{:Cycle, "procedure graph"} | is]
-    else
-      is
+  @doc "The node running the procedure `name/0` answers, or why there is none."
+  @spec node_of(t(), String.t()) :: {:ok, reference()} | {:error, :procedure_not_found}
+  def node_of(%__MODULE__{node_modules: modules}, procedure) do
+    case Enum.find(modules, fn {_ref, m} -> m.name() == procedure end) do
+      {ref, _module} -> {:ok, ref}
+      nil -> {:error, :procedure_not_found}
     end
   end
 
-  defp cyclic?(node, adj, visiting, _done) do
-    if MapSet.member?(visiting, node) do
-      true
-    else
-      visiting = MapSet.put(visiting, node)
-      Enum.any?(Map.get(adj, node, []), &cyclic?(&1, adj, visiting, MapSet.new()))
-    end
+  @doc false
+  # The producer -> consumer pairs among nodes; a route into a sink is not one.
+  def node_edges(routes) do
+    for {{:node, from}, rs} <- routes, %{to: {:node, to}} <- rs, do: {from, to}
   end
-
-  defp sink_serializers(acc),
-    do: Map.new(acc.sinks, fn s -> {s.plugin, s.serializer} end)
 
   # The smallest threshold across the class's changeful procedures — what the
   # class declares when it differs from the default; nil when nothing journals.
@@ -380,6 +368,7 @@ defmodule Flezha.SDK.Topology do
   end
 
   defp node_modules(acc), do: Map.new(acc.nodes, fn {ref, %{module: m}} -> {ref, m} end)
+  defp node_seqs(acc), do: Map.new(acc.nodes, fn {ref, %{seq: n}} -> {ref, n} end)
   defp node_names(acc), do: Map.new(acc.nodes, fn {ref, %{name: n}} -> {ref, n} end)
 
   # The channel a node's outputs are named by on the wire: `named/2`'s name,

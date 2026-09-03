@@ -36,6 +36,7 @@ defmodule Flezha.SDK.Commands do
     off_loop(respond, fn ->
       case entity(s, cmd.entity_id, materialise: true) do
         {:ok, pid} ->
+          note_compensation(s, cmd)
           restore(pid, cmd, respond)
 
         {:error, :bad_entity_id} ->
@@ -195,6 +196,31 @@ defmodule Flezha.SDK.Commands do
       {:error, reason} ->
         respond.("error", ["restore_init_state: #{reason}"], response(cmd, 0), %{})
     end
+  end
+
+  # The saga markers the controller persisted for this Entity ride the restore
+  # frame: `intent` that its procedure completed forward and may need undo,
+  # `done` that its compensation already ran. They are instance-scoped, so
+  # they go to the operative rather than to the Entity — a workflow driver
+  # reads them to finish an unwind the crash interrupted, and a stream
+  # operative ignores the cast.
+  defp note_compensation(s, cmd) do
+    intent = Map.get(cmd, :has_compensation_intent, false)
+    done = Map.get(cmd, :has_compensation_done, false)
+    if intent or done, do: ship_markers(s, cmd, intent, done), else: :ok
+  end
+
+  defp ship_markers(s, cmd, intent, done) do
+    with {:ok, {operative_id, _procedure, _key}} <- Wire.decode_entity_id(cmd.entity_id),
+         {:ok, op} <- operative(s, operative_id) do
+      # A call, not a cast: the driver decides whether to resume an unwind when
+      # the last restore lands, and a marker racing that decision would let a
+      # crash mid-rollback resume forward instead. Only a workflow class ever
+      # gets here — both flags are always false for a stream operative.
+      GenServer.call(op, {:compensation_markers, cmd.entity_id, intent, done})
+    end
+
+    :ok
   end
 
   defp response(cmd, terminal),
