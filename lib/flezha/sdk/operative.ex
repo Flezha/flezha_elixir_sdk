@@ -24,7 +24,18 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Entity, EntryInput, KeyGroup, Park, Procedure, Topology}
+  alias Flezha.SDK.{
+    Counters,
+    Entity,
+    EntryInput,
+    Hold,
+    KeyGroup,
+    Knob,
+    Park,
+    Procedure,
+    Topology
+  }
+
   alias Flezha.SDK.Operative.{Inbox, Routing}
 
   @default_retry_max 3
@@ -39,11 +50,6 @@ defmodule Flezha.SDK.Operative do
   @max_reap_interval_ms 30_000
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
-  # Outputs held while no stream will take them, drop-oldest past the cap. The
-  # knob is the one every SDK's reconnect hold reads, so one setting governs the
-  # wire whichever runtime produced the output.
-  @hold_cap_env "FLEZHA_RECONNECT_RING_CAPACITY"
-  @default_hold_cap 1_024
   # Evictions one sweep performs at most: the router is held while it runs,
   # so a burst of expiries drains over a few ticks rather than stalling it.
   @evict_budget 256
@@ -62,8 +68,8 @@ defmodule Flezha.SDK.Operative do
       cells: %{},
       entities: %{},
       dynamic: %{},
-      evicted: {:queue.new(), 0},
-      held: {:queue.new(), 0}
+      evicted: nil,
+      held: nil
     ]
   end
 
@@ -112,7 +118,11 @@ defmodule Flezha.SDK.Operative do
       # The slot survives the Entity: what a persistent Entity last shipped,
       # for the replacement of one killed untrappably.
       slots: :ets.new(:flezha_sdk_slots, [:public, :set]),
-      dynamic: dynamic_knobs(topology)
+      dynamic: dynamic_knobs(topology),
+      # Outputs no stream will take, and the keys a sweep evicted: one
+      # structure, two caps.
+      held: Hold.new(),
+      evicted: Hold.new(@evicted_trace_cap)
     }
 
     {:ok, state |> prewarm() |> schedule_reap()}
@@ -139,18 +149,7 @@ defmodule Flezha.SDK.Operative do
   end
 
   defp reap_interval(ttl_ms),
-    do: env_int(@reap_interval_env, ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1))
-
-  # A positive integer from the environment, else `default`. One reader, so a
-  # knob cannot mean something different depending on which one read it.
-  defp env_int(name, default) do
-    with val when is_binary(val) <- System.get_env(name),
-         {n, _} <- Integer.parse(val) do
-      max(n, 1)
-    else
-      _ -> default
-    end
-  end
+    do: Knob.int(@reap_interval_env, ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1))
 
   @impl true
   def handle_call({:lookup, procedure, key, materialise?}, _from, %State{topology: topo} = s) do
@@ -185,8 +184,8 @@ defmodule Flezha.SDK.Operative do
   end
 
   # Evicted and never-existed serve the same absence; the diagnosis differs.
-  defp missing(%State{topology: topo, evicted: {trace, _n}}, node_ref, key) do
-    if topo.node_mode[node_ref] == :dynamic and :queue.member(key, trace),
+  defp missing(%State{topology: topo} = s, node_ref, key) do
+    if topo.node_mode[node_ref] == :dynamic and Hold.member?(s.evicted, key),
       do: :entity_evicted,
       else: :entity_not_found
   end
@@ -293,10 +292,12 @@ defmodule Flezha.SDK.Operative do
     {:noreply, s}
   end
 
+  # Each Entity rebinds and replays its held records BEFORE this replays an
+  # output of the same dispatch, which is why the rebind is a call: a send only
+  # orders the mailbox, and the guarantee is about the order two processes
+  # write to the wire.
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    for {_ref, keyed} <- s.entities,
-        {_key, pid} <- keyed,
-        do: send(pid, {:secondaries, secondaries})
+    for {_ref, keyed} <- s.entities, {_key, pid} <- keyed, do: Entity.rebind(pid, secondaries)
 
     {:noreply, replay_held(%{s | secondaries: secondaries})}
   end
@@ -345,18 +346,8 @@ defmodule Flezha.SDK.Operative do
 
   defp note_evicted(%State{evicted: evicted} = s, key) do
     dynamic_event(s, :evicted)
-    {evicted, _shed} = push_capped(evicted, key, @evicted_trace_cap)
-    %{s | evicted: evicted}
+    %{s | evicted: Hold.push(evicted, key)}
   end
-
-  # A capped drop-oldest queue as `{queue, count}`. It answers whether the push
-  # shed the oldest entry; what a shed MEANS is the caller's — a forgotten
-  # eviction trace and a lost output are not the same event.
-  defp push_capped({queue, n}, item, cap) when n >= cap,
-    do: {{:queue.in(item, :queue.drop(queue)), n}, :shed}
-
-  defp push_capped({queue, n}, item, _cap),
-    do: {{:queue.in(item, queue), n + 1}, :kept}
 
   defp dynamic_event(%State{operative_id: oid}, event),
     do:
@@ -683,36 +674,26 @@ defmodule Flezha.SDK.Operative do
     end
   end
 
-  # Drop-oldest at the cap, so a stream that never comes back cannot grow this
-  # past its cap. What it sheds is a real loss and is counted where every
-  # drop-oldest shed on this wire is counted — a silent one is what this whole
-  # path exists to stop.
-  defp hold_output(%State{held: held} = s, meta, bytes) do
-    {held, shed} = push_capped(held, {meta, bytes}, hold_cap())
-    if shed == :shed, do: Counters.inc_drops(s.counters, :drop_oldest)
-    %{s | held: held}
-  end
+  defp hold_output(%State{held: held} = s, meta, bytes),
+    do: %{s | held: Hold.keep(held, {meta, bytes}, s.counters)}
 
   # A bound stream is what a held output was waiting for. Replay is in
   # production order, and one that fails again re-enters the hold behind the
   # rest — the same posture the FFI hosts' reconnect ring takes.
   #
-  # "Records before the dispatch's output" is a property of one dispatch's ship
-  # order and is untouched here: `Records.ship/3` still returns before the emit
-  # is handed off. What a replay can outlive is the record's DELIVERY, because
-  # the Entity's record path holds nothing — so after a rebind an output can
-  # arrive whose record did not. `flz_core` has no such gap: records and framed
-  # outputs share one ring there.
+  # It runs AFTER every Entity has rebound, and that is what keeps a dispatch's
+  # records ahead of its output across a replay: the records are held in the
+  # Entity, the output here, and `Entity.rebind/2` returns only once that
+  # Entity's own hold is on the stream.
   defp replay_held(%State{secondaries: []} = s), do: s
-  defp replay_held(%State{held: {_queue, 0}} = s), do: s
 
-  defp replay_held(%State{held: {queue, _n}} = s) do
-    Enum.reduce(:queue.to_list(queue), %{s | held: {:queue.new(), 0}}, fn {meta, bytes}, acc ->
+  defp replay_held(%State{} = s) do
+    {items, empty} = Hold.drain(s.held)
+
+    Enum.reduce(items, %{s | held: empty}, fn {meta, bytes}, acc ->
       emit_output(acc, meta, bytes)
     end)
   end
-
-  defp hold_cap, do: env_int(@hold_cap_env, @default_hold_cap)
 
   defp knob(topo, node_ref, key, default),
     do: get_in(topo.node_knobs, [node_ref, key]) || default

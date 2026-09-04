@@ -4,11 +4,13 @@ defmodule Flezha.SDK.Entity.State do
   the ladder, the park) and its durable half (`Flezha.SDK.Entity.Records`: the
   records, the slot, the restore and the snapshot).
 
-  Three map fields keep the struct flat (credo refuses a 32nd, which is the
-  Erlang flat-map boundary): everything timer-shaped is `timers`, everything
-  the park owns is `park` (its policy included), and everything the
-  effectively-once tier owns is
-  `tier`.
+  Four map fields keep the struct flat. A struct's keys are its fields plus
+  `__struct__`, and 32 keys is the Erlang flat-map boundary, so 31 fields is the
+  last shape that stays flat; `correction_window_test.exs` pins the count.
+  Everything timer-shaped is `timers`, everything the park owns is `park` (its
+  policy included), everything the effectively-once tier owns is `tier`, and
+  everything the state stream owns is `stream`. A new field joins one of the
+  four rather than the top level.
   """
 
   defstruct [
@@ -55,7 +57,11 @@ defmodule Flezha.SDK.Entity.State do
     schema_version: 1,
     change_seq: 0,
     last_input_ms: 0,
-    secondary: nil,
+    # One field again: the secondary this Entity writes its records to, chosen
+    # by identity, and the records no stream would take, kept for the next
+    # bound one. `held` is seeded in `Flezha.SDK.Entity.init/1`, because its
+    # cap is read from the environment.
+    stream: %{handle: nil, held: nil},
     proc_state: nil,
     queue: :queue.new(),
     size: 0,

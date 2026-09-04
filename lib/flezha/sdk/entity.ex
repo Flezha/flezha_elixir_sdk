@@ -15,10 +15,11 @@ defmodule Flezha.SDK.Entity do
   `entity_state_change` frame per recorded change at the next seq on one
   secondary stream, before the dispatch's outputs leave, then writes its
   `{state, seq}` into the Operative's slot table so a replacement started
-  after an untrappable kill continues on the same seq line. It answers a
-  restore (fold, re-arm), a compaction (the snapshot after its records), a
-  live read and a state apply, each in mailbox order so no dispatch
-  interleaves. With the class's persistence off the seq advances and nothing
+  after an untrappable kill continues on the same seq line. A frame no stream
+  will take is held and replayed by `rebind/2`, so "before the outputs leave"
+  survives a reconnect as well. It answers a restore (fold, re-arm), a
+  compaction (the snapshot after its records), a live read and a state apply,
+  each in mailbox order so no dispatch interleaves. With the class's persistence off the seq advances and nothing
   ships. Its outputs reach the Operative with their metadata, their keys and
   the seq the dispatch started at — what a keyed sink's stamps read.
 
@@ -36,7 +37,7 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Ctx, Jitter, Park, Procedure, Timers}
+  alias Flezha.SDK.{Counters, Ctx, Hold, Jitter, Park, Procedure, Timers}
   alias Flezha.SDK.Entity.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
 
@@ -175,6 +176,19 @@ defmodule Flezha.SDK.Entity do
   def identity(operative_id, node_ref, entity_key),
     do: {operative_id, node_ref, entity_key}
 
+  @doc """
+  Bind the Entity onto fresh secondaries and replay the records it held while
+  there was none. Synchronous on purpose: the caller replays this Entity's
+  OUTPUTS after it returns, and a dispatch's records have to reach the wire
+  first. A gone Entity has nothing to rebind and answers for itself.
+  """
+  @spec rebind(pid(), [term()]) :: :ok
+  def rebind(pid, secondaries) do
+    GenServer.call(pid, {:rebind, secondaries}, :infinity)
+  catch
+    :exit, _gone -> :ok
+  end
+
   # --- server ---
 
   @impl true
@@ -186,7 +200,7 @@ defmodule Flezha.SDK.Entity do
     changeful? = Procedure.changeful?(module)
     tier = Map.merge(%State{}.tier, Keyword.get(opts, :tier, %{}))
     slots = Keyword.get(opts, :slots)
-    held = Records.seed(slots, identity, module, entity_key)
+    slot = Records.seed(slots, identity, module, entity_key)
     operative = Keyword.fetch!(opts, :operative)
     Process.monitor(operative)
 
@@ -211,18 +225,19 @@ defmodule Flezha.SDK.Entity do
       # policy this procedure declares.
       ctx_opts:
         [timer_policy: Procedure.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
-      timers: Clock.seed(module, held),
+      timers: Clock.seed(module, slot),
       changeful?: changeful?,
       tier: tier,
       persistent?: persists?(changeful?, tier, opts),
       schema_version: Procedure.schema_version(module),
-      proc_state: held.state,
-      change_seq: held.seq,
-      last_input_ms: now_ms()
+      proc_state: slot.state,
+      change_seq: slot.seq,
+      last_input_ms: now_ms(),
+      stream: %{%State{}.stream | held: Hold.new()}
     }
 
-    state = seed_tier(state, held)
-    {:ok, state |> Records.put_secondaries(Keyword.get(opts, :secondaries, [])) |> Clock.rearm()}
+    state = seed_tier(state, slot)
+    {:ok, state |> Records.rebind(Keyword.get(opts, :secondaries, [])) |> Clock.rearm()}
   end
 
   # Off the tier a record stream exists only to carry changes, so a changeless
@@ -292,6 +307,9 @@ defmodule Flezha.SDK.Entity do
     {:stop, :normal, :evicted, s}
   end
 
+  def handle_call({:rebind, secondaries}, _from, %State{} = s),
+    do: {:reply, :ok, Records.rebind(s, secondaries)}
+
   def handle_call({:apply_state, json}, _from, %State{} = s) do
     {:reply, :ok,
      Records.write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
@@ -318,9 +336,6 @@ defmodule Flezha.SDK.Entity do
 
   @impl true
   def handle_info(:process, %State{} = s), do: {:noreply, process_next(s)}
-
-  def handle_info({:secondaries, secondaries}, %State{} = s),
-    do: {:noreply, Records.put_secondaries(s, secondaries)}
 
   def handle_info({:park_released, park_id}, %State{park: %{id: park_id}} = s) do
     {:noreply, process_next(%{s | park: %{s.park | held?: false, id: nil}})}

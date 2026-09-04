@@ -24,7 +24,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   require Logger
 
-  alias Flezha.SDK.{Channels, Topology}
+  alias Flezha.SDK.{Channels, Entity, Topology}
   alias Flezha.SDK.Operative.{Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
   alias Flezha.SDK.Workflow.Ctx, as: WorkflowCtx
@@ -288,7 +288,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   def handle_info({:restored, _entity}, %State{} = s), do: settle(resume_bound(s))
 
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    Enum.each(all_entities(s), &send(&1, {:secondaries, secondaries}))
+    Enum.each(all_entities(s), &Entity.rebind(&1, secondaries))
     {:noreply, %{s | secondaries: secondaries}}
   end
 

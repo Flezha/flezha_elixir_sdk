@@ -56,7 +56,7 @@ defmodule Flezha.SDK.Entity.Tier do
       # stream there is nobody to ask, so it falls back to the behaviour of a
       # class that declared no window at all.
       :correctable ->
-        if s.secondary do
+        if s.stream.handle do
           Records.request_correction(s, event_time)
           :withhold
         else
