@@ -104,6 +104,16 @@ defmodule Flezha.SDK.Transport do
     end)
   end
 
+  @doc """
+  Which of `secondaries` a key's frames go on. One stream per key, so every
+  writer of them picks the same one and their order on the wire is the order
+  they were written: an Entity and the Operative replaying what that Entity
+  handed on when it stopped agree by computing this, never by comparing notes.
+  """
+  @spec secondary_for([term(), ...], term()) :: term()
+  def secondary_for([_ | _] = secondaries, key),
+    do: Enum.at(secondaries, rem(:erlang.phash2(key), length(secondaries)))
+
   # --- helpers ---
 
   defp dial_pairs(count, dial) do

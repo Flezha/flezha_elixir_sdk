@@ -27,6 +27,7 @@ defmodule Flezha.SDK.RunnerServer do
     Entity,
     EntryIdle,
     EntryInput,
+    Hold,
     Jitter,
     KeyGroup,
     Operative,
@@ -86,6 +87,7 @@ defmodule Flezha.SDK.RunnerServer do
       parks: %{},
       barriers: %{},
       idle: nil,
+      held: nil,
       reconnect_attempt: 0,
       disconnecting?: false,
       stopped?: false
@@ -162,7 +164,10 @@ defmodule Flezha.SDK.RunnerServer do
       credit: credit,
       topologies: Keyword.fetch!(opts, :topologies),
       factories: factories,
-      payload: handshake_payload(namespace, factories, stable_id)
+      payload: handshake_payload(namespace, factories, stable_id),
+      # The workflow driver's writes that no stream would take: this process
+      # owns the wire they were meant for, so it is what keeps them.
+      held: Hold.new()
     }
   end
 
@@ -318,26 +323,11 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, %{s | barriers: Map.put(s.barriers, reference_id, {driver, ref})}}
   end
 
-  def handle_cast({:emit_output, _oid, _meta, _bytes}, %State{secondaries: []} = s) do
-    Logger.warning("[Flezha.SDK] workflow output dropped: no secondary stream is bound")
-    {:noreply, s}
-  end
+  def handle_cast({:emit_output, _oid, _meta, _bytes} = write, %State{} = s),
+    do: {:noreply, ship_write(s, write)}
 
-  def handle_cast({:emit_output, oid, meta, bytes}, %State{secondaries: secondaries} = s) do
-    handle = Enum.at(secondaries, rem(:erlang.phash2(oid), length(secondaries)))
-    _ = Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta)
-    {:noreply, s}
-  end
-
-  def handle_cast({:record, payload_id, _frame}, %State{secondaries: []} = s) do
-    Logger.warning("[Flezha.SDK] #{payload_id} dropped: no secondary stream is bound")
-    {:noreply, s}
-  end
-
-  def handle_cast({:record, payload_id, frame}, %State{secondaries: secondaries} = s) do
-    _ = Flezha.Transport.Stream.send_frame(Enum.at(secondaries, 0), payload_id, frame, %{})
-    {:noreply, s}
-  end
+  def handle_cast({:record, _payload_id, _frame} = write, %State{} = s),
+    do: {:noreply, ship_write(s, write)}
 
   def handle_cast({:notify, command}, %State{} = s) do
     ship_request(s, "wf-" <> Integer.to_string(System.unique_integer([:positive])), command)
@@ -604,12 +594,17 @@ defmodule Flezha.SDK.RunnerServer do
             pid
           end)
 
+        # What this process held goes out before the operatives are told the
+        # wire is back, so a staged workflow output cannot be overtaken by the
+        # frames a resumed operative writes.
+        s = replay_held(%{s | primaries: readers, secondaries: secondaries})
+
         # Push the fresh secondaries to any operatives that survived a reconnect.
         Enum.each(s.operatives, fn {_oid, {pid, _f}} ->
           if Process.alive?(pid), do: send(pid, {:secondaries, secondaries})
         end)
 
-        {:ok, %{s | primaries: readers, secondaries: secondaries}}
+        {:ok, s}
 
       {:error, reason} ->
         {:error, reason}
@@ -622,12 +617,45 @@ defmodule Flezha.SDK.RunnerServer do
     %{s | primaries: [], secondaries: []}
   end
 
+  # --- the workflow driver's writes ---
+
+  # The driver has no wire of its own: it casts its outputs and its records
+  # here, so a frame no stream will take is held here too and replayed on the
+  # next bound one. Nothing about a write reaches the driver, so a drop here
+  # would be a loss no caller could learn of.
+  defp ship_write(%State{secondaries: []} = s, write), do: hold_write(s, write)
+
+  defp ship_write(%State{} = s, write) do
+    case write_frame(s, write) do
+      :ok -> s
+      {:error, _reason} -> hold_write(s, write)
+    end
+  end
+
+  defp write_frame(%State{secondaries: secondaries}, {:emit_output, oid, meta, bytes}) do
+    handle = Transport.secondary_for(secondaries, oid)
+    Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta)
+  end
+
+  defp write_frame(%State{secondaries: secondaries}, {:record, payload_id, frame}),
+    do: Flezha.Transport.Stream.send_frame(Enum.at(secondaries, 0), payload_id, frame, %{})
+
+  defp hold_write(%State{held: held} = s, write),
+    do: %{s | held: Hold.keep(held, write, s.counters)}
+
+  # In the order the driver wrote them; one refused again re-enters the hold
+  # behind the rest, as every replay on this wire does.
+  defp replay_held(%State{held: held} = s) do
+    {items, empty} = Hold.drain(held)
+    Enum.reduce(items, %{s | held: empty}, &ship_write(&2, &1))
+  end
+
   # --- parking ---
 
   defp send_park_frame(%State{secondaries: []}, _identity, _body), do: :ok
 
   defp send_park_frame(%State{secondaries: secondaries}, identity, body) do
-    handle = Enum.at(secondaries, rem(:erlang.phash2(body.park_id), length(secondaries)))
+    handle = Transport.secondary_for(secondaries, body.park_id)
     frame = Park.frame(identity, 0, body)
     Flezha.Transport.Stream.send_frame(handle, "park_payload", frame, %{})
   end

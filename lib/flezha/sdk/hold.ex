@@ -2,12 +2,15 @@ defmodule Flezha.SDK.Hold do
   @moduledoc """
   A bounded drop-oldest FIFO, and the reconnect hold built on it.
 
-  Two processes write to a secondary stream — the Operative ships an operative's
-  plugin-bound outputs, each of its Entities ships that Entity's change records —
-  and both keep what no stream will take until one binds, so the queue, the cap
-  and the shed are shared here rather than written twice. The cap rides the
-  queue: `FLEZHA_RECONNECT_RING_CAPACITY` is read once, when the holder starts,
-  and the knob then means the same thing to every holder on one wire.
+  Three kinds of process write to a secondary stream — the runner relays the
+  workflow driver's outputs and records, the Operative ships an operative's
+  plugin-bound outputs, each of its Entities ships that Entity's change records
+  — and every one of them keeps what no stream will take until one binds, so the
+  queue, the cap and the shed are shared here rather than written four times.
+  The Operative holds twice: its own outputs, and what an Entity that stopped
+  handed on, which has to be replayed before them. The cap rides the queue:
+  `FLEZHA_RECONNECT_RING_CAPACITY` is read once, when the holder starts, and the
+  knob then means the same thing to every holder on one wire.
 
   The Operative's evicted-key trace is the same structure at its own cap and
   uses `push/2` alone, because what a shed *means* is the caller's: a forgotten

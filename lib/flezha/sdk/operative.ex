@@ -18,7 +18,10 @@ defmodule Flezha.SDK.Operative do
   Entity whether it is idle — the drain gate — and an idle one evicts itself
   destructively before the next push can mint its successor. Evicted keys are
   remembered, bounded, so a live read can say "evicted" rather than "never
-  existed".
+  existed". What that Entity could not ship — the records it still held, then
+  its delete — it hands here on the way out, and a rebind replays those before
+  it rebinds the live Entities or replays its own outputs, so a dead Entity's
+  delete cannot arrive behind its replacement's first record.
   """
 
   use GenServer
@@ -33,7 +36,8 @@ defmodule Flezha.SDK.Operative do
     Knob,
     Park,
     Procedure,
-    Topology
+    Topology,
+    Transport
   }
 
   alias Flezha.SDK.Operative.{Inbox, Routing}
@@ -69,7 +73,8 @@ defmodule Flezha.SDK.Operative do
       entities: %{},
       dynamic: %{},
       evicted: nil,
-      held: nil
+      held: nil,
+      handed: nil
     ]
   end
 
@@ -119,9 +124,12 @@ defmodule Flezha.SDK.Operative do
       # for the replacement of one killed untrappably.
       slots: :ets.new(:flezha_sdk_slots, [:public, :set]),
       dynamic: dynamic_knobs(topology),
-      # Outputs no stream will take, and the keys a sweep evicted: one
-      # structure, two caps.
+      # Outputs no stream will take, the frames an Entity that stopped handed
+      # on, and the keys a sweep evicted: one structure, three holds. The
+      # handoff cannot share `held`: it arrives after outputs it has to
+      # precede, and one FIFO cannot say that.
       held: Hold.new(),
+      handed: Hold.new(),
       evicted: Hold.new(@evicted_trace_cap)
     }
 
@@ -295,11 +303,25 @@ defmodule Flezha.SDK.Operative do
   # Each Entity rebinds and replays its held records BEFORE this replays an
   # output of the same dispatch, which is why the rebind is a call: a send only
   # orders the mailbox, and the guarantee is about the order two processes
-  # write to the wire.
+  # write to the wire. What a stopped Entity handed on goes ahead of both: its
+  # delete has to reach the controller before a replacement's first record.
   def handle_info({:secondaries, secondaries}, %State{} = s) do
+    s = replay_handed(%{s | secondaries: secondaries})
     for {_ref, keyed} <- s.entities, {_key, pid} <- keyed, do: Entity.rebind(pid, secondaries)
 
-    {:noreply, replay_held(%{s | secondaries: secondaries})}
+    {:noreply, replay_held(s)}
+  end
+
+  # An Entity that stopped in an orderly way hands on what no stream would
+  # take: the records it still held, then the delete it owes. A hold that dies
+  # with the process that owned it is not a hold, and this process outlives it.
+  def handle_info({:handed, identity, frames}, %State{} = s) do
+    handed =
+      Enum.reduce(frames, s.handed, fn {payload_id, frame}, acc ->
+        Hold.keep(acc, {identity, payload_id, frame}, s.counters)
+      end)
+
+    {:noreply, replay_handed(%{s | handed: handed})}
   end
 
   # The sweep runs here, so no push is routed while it runs: the drain gate.
@@ -654,7 +676,7 @@ defmodule Flezha.SDK.Operative do
   defp emit_output(%State{secondaries: []} = s, meta, bytes), do: hold_output(s, meta, bytes)
 
   defp emit_output(%State{secondaries: secondaries, operative_id: oid} = s, meta, bytes) do
-    handle = Enum.at(secondaries, rem(:erlang.phash2(oid), length(secondaries)))
+    handle = Transport.secondary_for(secondaries, oid)
 
     case Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta) do
       :ok ->
@@ -693,6 +715,26 @@ defmodule Flezha.SDK.Operative do
     Enum.reduce(items, %{s | held: empty}, fn {meta, bytes}, acc ->
       emit_output(acc, meta, bytes)
     end)
+  end
+
+  # The frames of Entities that are gone, on the stream each one's identity
+  # chooses — the stream that Entity wrote to and its replacement will bind to,
+  # so the order between the two is the wire's own. One that fails again
+  # re-enters the hold behind the rest, as every replay on this wire does.
+  defp replay_handed(%State{secondaries: []} = s), do: s
+
+  defp replay_handed(%State{} = s) do
+    {items, empty} = Hold.drain(s.handed)
+    Enum.reduce(items, %{s | handed: empty}, &write_handed(&2, &1))
+  end
+
+  defp write_handed(%State{secondaries: secondaries} = s, {identity, payload_id, frame} = item) do
+    handle = Transport.secondary_for(secondaries, identity)
+
+    case Flezha.Transport.Stream.send_frame(handle, payload_id, frame, %{}) do
+      :ok -> s
+      {:error, _reason} -> %{s | handed: Hold.keep(s.handed, item, s.counters)}
+    end
   end
 
   defp knob(topo, node_ref, key, default),

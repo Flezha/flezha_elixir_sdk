@@ -17,7 +17,9 @@ defmodule Flezha.SDK.Entity do
   `{state, seq}` into the Operative's slot table so a replacement started
   after an untrappable kill continues on the same seq line. A frame no stream
   will take is held and replayed by `rebind/2`, so "before the outputs leave"
-  survives a reconnect as well. It answers a restore (fold, re-arm), a
+  survives a reconnect as well; an eviction hands what is still held, and the
+  delete it owes, to the Operative, because a hold that dies with the process
+  that owned it is not a hold. It answers a restore (fold, re-arm), a
   compaction (the snapshot after its records), a live read and a state apply,
   each in mailbox order so no dispatch interleaves. With the class's persistence off the seq advances and nothing
   ships. Its outputs reach the Operative with their metadata, their keys and
@@ -158,7 +160,9 @@ defmodule Flezha.SDK.Entity do
 
   @doc """
   Evict an Entity the caller proved idle: it ships `delete_entity_state` when
-  it persists, drops its slot so a successor is a cold start, and stops.
+  it persists, drops its slot so a successor is a cold start, and stops. What
+  no stream would take goes to the Operative before the reply, so the caller
+  knows the handoff is queued there by the time it sees `:evicted`.
   """
   @spec evict(pid()) :: :evicted | :gone
   def evict(pid) do

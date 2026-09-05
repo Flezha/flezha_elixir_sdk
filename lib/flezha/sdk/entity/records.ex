@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Entity.Records do
 
   require Logger
 
-  alias Flezha.SDK.{Credit, Hold, Record, Timers}
+  alias Flezha.SDK.{Credit, Hold, Record, Timers, Transport}
   alias Flezha.SDK.Entity.{Interval, State}
   alias Flezha.Transport.Stream, as: TransportStream
 
@@ -79,11 +79,16 @@ defmodule Flezha.SDK.Entity.Records do
 
   # Destructive: the delete follows the records on the same stream from the
   # same process, and the slot goes so a successor starts from `init_state/1`
-  # rather than from what this Entity last shipped.
-  @doc "What an eviction leaves behind: the delete frame when persistent, no slot."
+  # rather than from what this Entity last shipped. A hold that dies with the
+  # process that owned it is not a hold, so what no stream would take — the
+  # records still held, then the delete — passes to the Operative, which
+  # outlives this Entity and replays it on the next bound stream.
+  @doc "What an eviction leaves behind: the delete when persistent, no slot, and no lost frame."
   @spec delete(State.t()) :: :ok
   def delete(%State{} = s) do
-    if s.persistent?, do: send_delete(s)
+    {items, _empty} = Hold.drain(s.stream.held)
+    held = Enum.map(items, fn {_seq, payload_id, frame} -> {payload_id, frame} end)
+    hand_off(s, held ++ owed_delete(s, held))
     if s.slots, do: :ets.delete(s.slots, s.identity)
     :ok
   end
@@ -285,20 +290,26 @@ defmodule Flezha.SDK.Entity.Records do
   defp hold_record(%State{stream: stream} = s, item),
     do: %{s | stream: %{stream | held: Hold.keep(stream.held, item, s.counters)}}
 
-  # Fire-and-forget, outside the credit window, as the shared core's own is.
-  defp send_delete(%State{stream: %{handle: nil}} = s),
-    do:
-      Logger.warning("[Flezha.SDK] #{State.label(s)} evicted with no state stream (reconnecting)")
+  # Fire-and-forget, outside the credit window, as the shared core's own is. It
+  # goes on the wire only when nothing is held ahead of it: a delete that
+  # overtook this Entity's own records would tell the controller to forget
+  # state it has not been told about yet.
+  defp owed_delete(%State{persistent?: false}, _ahead), do: []
 
-  defp send_delete(%State{} = s) do
-    case TransportStream.send_frame(s.stream.handle, "delete_entity_state", s.identity, %{}) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Flezha.SDK] #{State.label(s)} delete undelivered: #{inspect(reason)}")
+  defp owed_delete(%State{stream: %{handle: handle}} = s, []) when handle != nil do
+    case TransportStream.send_frame(handle, "delete_entity_state", s.identity, %{}) do
+      :ok -> []
+      {:error, _reason} -> [{"delete_entity_state", s.identity}]
     end
   end
+
+  defp owed_delete(%State{} = s, _ahead), do: [{"delete_entity_state", s.identity}]
+
+  # The identity rides with the frames: the Operative writes them on the stream
+  # that identity chooses — the one a replacement Entity will bind to — so this
+  # Entity's last frames stay ahead of its replacement's first.
+  defp hand_off(%State{}, []), do: :ok
+  defp hand_off(%State{} = s, frames), do: send(s.operative, {:handed, s.identity, frames})
 
   # A replacement for an Entity killed untrappably continues from what its
   # predecessor last shipped; a first Entity starts from `init_state/1`. The
@@ -353,7 +364,7 @@ defmodule Flezha.SDK.Entity.Records do
     do: %{s | stream: %{stream | handle: nil}}
 
   def rebind(%State{stream: stream} = s, secondaries) do
-    handle = Enum.at(secondaries, rem(:erlang.phash2(s.identity), length(secondaries)))
+    handle = Transport.secondary_for(secondaries, s.identity)
     replay_held(%{s | stream: %{stream | handle: handle}})
   end
 
