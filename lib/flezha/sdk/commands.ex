@@ -18,12 +18,12 @@ defmodule Flezha.SDK.Commands do
 
   require Logger
 
+  alias Flezha.Config.Durations
   alias Flezha.SDK.{Codec, Credit, Entity, Operative}
   alias Flezha.State.Wire
 
   # A serialise's wait for a mid-dispatch Entity, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
-  @serialize_wait_ms 5_000
   @change_seq_key "flz.change_seq"
   @whole %{procedure: nil, entity_key: nil}
 
@@ -166,7 +166,7 @@ defmodule Flezha.SDK.Commands do
       operatives
       |> Map.keys()
       |> Enum.map(fn oid -> Task.async(fn -> {oid, state_json(s, oid, @whole)} end) end)
-      |> Task.yield_many(@serialize_wait_ms + 1_000)
+      |> Task.yield_many(Durations.get(:sdk_serialize_yield_ms))
       |> Enum.flat_map(fn {task, result} ->
         ship(handle, result || Task.shutdown(task, :brutal_kill))
       end)
@@ -305,7 +305,7 @@ defmodule Flezha.SDK.Commands do
         {:error, missing(op, name, key)}
 
       {^key, pid} ->
-        case Entity.read(pid, @serialize_wait_ms) do
+        case Entity.read(pid, Durations.get(:sdk_serialize_wait_ms)) do
           {:ok, state, seq} ->
             {:ok, %{key => state}, [seq]}
 
@@ -320,7 +320,7 @@ defmodule Flezha.SDK.Commands do
 
   # In a walk a failing Entity is logged and omitted.
   defp read(pid, name, key) do
-    case Entity.read(pid, @serialize_wait_ms) do
+    case Entity.read(pid, Durations.get(:sdk_serialize_wait_ms)) do
       {:ok, state, seq} ->
         {:ok, state, seq}
 

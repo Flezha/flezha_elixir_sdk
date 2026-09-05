@@ -18,6 +18,9 @@ defmodule Flezha.SDK.RunnerServer do
   use GenServer
   require Logger
 
+  alias Flezha.Config.Durations
+  alias Flezha.Config.Backoff
+
   alias Flezha.SDK.{
     Codec,
     Commands,
@@ -41,14 +44,7 @@ defmodule Flezha.SDK.RunnerServer do
   alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
-  @hb_default_ms 10_000
-  @control_keepalive_ms 15_000
-  @park_resend_ms 2_000
   @park_warn_every 5
-  @reconnect_cap_ms 30_000
-  # Per-operative ack wait on a graceful stop, run in parallel — the shared
-  # core's `ACK_TIMEOUT`.
-  @shutdown_ack_ms 2_000
   @persistence_commands [
     :restore_init_state,
     :compact_entity,
@@ -293,7 +289,13 @@ defmodule Flezha.SDK.RunnerServer do
         if rem(n + 1, @park_warn_every) == 0,
           do: Logger.warning("[Flezha.SDK] park #{park_id} unacked after #{n + 1} resends")
 
-        ref = Process.send_after(self(), {:park_resend, park_id}, @park_resend_ms)
+        ref =
+          Process.send_after(
+            self(),
+            {:park_resend, park_id},
+            Backoff.arm(:park_resend, n + 1, park_id)
+          )
+
         {:noreply, %{s | parks: Map.put(s.parks, park_id, %{park | resends: n + 1, timer: ref})}}
     end
   end
@@ -336,7 +338,13 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
     send_park_frame(s, identity, body)
-    ref = Process.send_after(self(), {:park_resend, body.park_id}, @park_resend_ms)
+
+    ref =
+      Process.send_after(
+        self(),
+        {:park_resend, body.park_id},
+        Backoff.arm(:park_resend, 1, body.park_id)
+      )
 
     park = %{entity: entity_pid, identity: identity, body: body, resends: 0, timer: ref}
     {:noreply, %{s | parks: Map.put(s.parks, body.park_id, park)}}
@@ -346,7 +354,8 @@ defmodule Flezha.SDK.RunnerServer do
   # `RunnerDisconnect` — ships every operative's state before the connection
   # goes, so a reconnect-resume is loss-free.
   @impl true
-  def terminate(_reason, %State{} = s), do: Commands.shutdown(s, @shutdown_ack_ms)
+  def terminate(_reason, %State{} = s),
+    do: Commands.shutdown(s, Durations.get(:sdk_shutdown_ack_ms))
 
   # --- command dispatch ---
 
@@ -679,16 +688,12 @@ defmodule Flezha.SDK.RunnerServer do
     # The credit session died with the stream; the controller re-offers one.
     Credit.disarm(s.credit)
     s = teardown_streams(s)
-    Process.sleep(reconnect_backoff(n))
+    Backoff.wait(:sdk_reconnect, n + 1, s.stable_id)
 
     case do_connect(%{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil}) do
-      {:ok, s} -> {:noreply, s}
+      {:ok, s} -> {:noreply, %{s | reconnect_attempt: Backoff.reset(:sdk_reconnect, s.stable_id)}}
       {:error, r} -> reconnect(s, "retry: #{inspect(r)}")
     end
-  end
-
-  defp reconnect_backoff(n) do
-    Jitter.jitter(min(100 * Bitwise.bsl(1, min(n, 8)), @reconnect_cap_ms))
   end
 
   # --- connect + helpers ---
@@ -764,11 +769,11 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp schedule_heartbeat do
-    base = String.to_integer(System.get_env("FLEZHA_DATA_HEARTBEAT_MS") || "#{@hb_default_ms}")
     # Jitter into [base/2, base] (the cross-SDK heartbeat contract).
-    Process.send_after(self(), :data_heartbeat, Jitter.jitter_within(base))
+    interval = Jitter.jitter_within(Durations.env(:data_heartbeat_ms))
+    Process.send_after(self(), :data_heartbeat, interval)
   end
 
   defp schedule_keepalive,
-    do: Process.send_after(self(), :control_keepalive, @control_keepalive_ms)
+    do: Process.send_after(self(), :control_keepalive, Durations.get(:control_keepalive_ms))
 end

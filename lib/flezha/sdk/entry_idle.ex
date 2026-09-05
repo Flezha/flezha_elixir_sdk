@@ -20,10 +20,8 @@ defmodule Flezha.SDK.EntryIdle do
   use GenServer
   require Logger
 
+  alias Flezha.Config.Durations
   alias Flezha.SDK.EntryInput
-
-  @tick_min_ms 250
-  @tick_max_ms 1_000
 
   defmodule Watch do
     @moduledoc false
@@ -63,7 +61,11 @@ defmodule Flezha.SDK.EntryIdle do
   """
   @spec tick_period_ms(pos_integer()) :: pos_integer()
   def tick_period_ms(threshold_ms),
-    do: threshold_ms |> div(4) |> max(@tick_min_ms) |> min(@tick_max_ms)
+    do:
+      threshold_ms
+      |> div(4)
+      |> max(Durations.get(:entry_idle_tick_min_ms))
+      |> min(Durations.get(:entry_idle_tick_max_ms))
 
   @doc """
   Advance a watch's latch to `now_nanos`: the watch, and the boundary it

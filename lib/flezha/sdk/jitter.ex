@@ -1,12 +1,9 @@
 defmodule Flezha.SDK.Jitter do
   @moduledoc """
-  Shared backoff jitter for the SDK's retry ladder, reconnect loop, and heartbeat
-  timer, so the jitter shape lives in one place.
+  The heartbeat timer's interval jitter. A retry ladder's jitter is the backoff
+  table's one rule (`Flezha.Config.Backoff.jitter/2`); this is a cadence,
+  not a retry, and spreads over a different band.
   """
-
-  @doc "Uniform in `[value/2, value * 3/2)` — the retry-ladder / reconnect ±50% jitter."
-  @spec jitter(non_neg_integer()) :: non_neg_integer()
-  def jitter(value), do: div(value, 2) + :rand.uniform(max(value, 1))
 
   @doc "Uniform in `[value/2, value]` — the heartbeat interval jitter."
   @spec jitter_within(non_neg_integer()) :: non_neg_integer()

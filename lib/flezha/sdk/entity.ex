@@ -39,13 +39,10 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Ctx, Hold, Jitter, Park, Procedure, Timers}
+  alias Flezha.Config.Backoff
+  alias Flezha.SDK.{Counters, Ctx, Hold, Park, Procedure, Timers}
   alias Flezha.SDK.Entity.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
-
-  @retry_backoff_cap_ms 5_000
-  # A due message that finds no room comes back this much later, never drops.
-  @wake_retry_backoff_ms 5
 
   # A due timer: on the queue beside the inputs, dispatched through the same
   # ladder with `on_timer/4` in place of `run/3`.
@@ -353,7 +350,13 @@ defmodule Flezha.SDK.Entity do
   # that finds no room comes back later rather than dropping.
   def handle_info({:timer_due, at}, %State{size: size, capacity: capacity} = s)
       when size >= capacity do
-    Process.send_after(self(), {:timer_due, at}, @wake_retry_backoff_ms)
+    # A due message that finds no room comes back later, never drops.
+    Process.send_after(
+      self(),
+      {:timer_due, at},
+      Backoff.arm(:entity_wake_retry, 1, s.operative_id)
+    )
+
     {:noreply, s}
   end
 
@@ -713,14 +716,8 @@ defmodule Flezha.SDK.Entity do
       attempt: attempt
     })
 
-    Process.sleep(backoff(s.retry_backoff_ms, attempt))
+    Backoff.wait(:sdk_retry, attempt, s.operative_id, base: s.retry_backoff_ms)
     run_ladder(s, value, attempt + 1)
-  end
-
-  # exp = base * 2^(attempt-1), capped at 5s, jittered uniform in [exp/2, exp*1.5).
-  defp backoff(base_ms, attempt) do
-    exp = min(base_ms * Bitwise.bsl(1, min(attempt - 1, 16)), @retry_backoff_cap_ms)
-    min(Jitter.jitter(exp), @retry_backoff_cap_ms)
   end
 
   # Under the tier a park IS a record: the entry, the offset it consumed and a

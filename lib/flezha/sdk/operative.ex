@@ -27,6 +27,9 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
+  alias Flezha.Config.Durations
+  alias Flezha.Config.Backoff
+
   alias Flezha.SDK.{
     Counters,
     Entity,
@@ -43,15 +46,12 @@ defmodule Flezha.SDK.Operative do
   alias Flezha.SDK.Operative.{Inbox, Routing}
 
   @default_retry_max 3
-  @default_retry_backoff_ms 50
   # What an entry input carries into routing: no metadata, no key, no Entity,
   # and the durable offset the controller stamped under the tier.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
   # How long a sweep waits on one Entity's idle probe before moving on.
-  @idle_probe_ms 50
   # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
   @reap_interval_env "FLEZHA_REAP_INTERVAL_MS"
-  @max_reap_interval_ms 30_000
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
   # Evictions one sweep performs at most: the router is held while it runs,
@@ -157,7 +157,11 @@ defmodule Flezha.SDK.Operative do
   end
 
   defp reap_interval(ttl_ms),
-    do: Knob.int(@reap_interval_env, ttl_ms |> div(4) |> min(@max_reap_interval_ms) |> max(1))
+    do:
+      Knob.int(
+        @reap_interval_env,
+        ttl_ms |> div(4) |> min(Durations.get(:sdk_max_reap_interval_ms)) |> max(1)
+      )
 
   @impl true
   def handle_call({:lookup, procedure, key, materialise?}, _from, %State{topology: topo} = s) do
@@ -360,9 +364,10 @@ defmodule Flezha.SDK.Operative do
         {acc, 0}
 
       {key, pid}, {acc, left} ->
-        if Entity.idle_for?(pid, ttl_ms, @idle_probe_ms) and Entity.evict(pid) == :evicted,
-          do: {note_evicted(forget_entity(acc, node_ref, key), key), left - 1},
-          else: {acc, left}
+        if Entity.idle_for?(pid, ttl_ms, Durations.get(:sdk_idle_probe_ms)) and
+             Entity.evict(pid) == :evicted,
+           do: {note_evicted(forget_entity(acc, node_ref, key), key), left - 1},
+           else: {acc, left}
     end)
   end
 
@@ -545,7 +550,7 @@ defmodule Flezha.SDK.Operative do
       capacity: Procedure.mailbox_capacity(module),
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
-      retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, @default_retry_backoff_ms),
+      retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, Backoff.ladder(:sdk_retry).base),
       counters: s.counters,
       secondaries: s.secondaries,
       slots: s.slots,
