@@ -9,11 +9,10 @@ defmodule Flezha.SDK.Transport do
   Rust, Java or Node runner resolves, asked for rather than re-derived here.
   """
 
+  alias Flezha.SDK.Knob
   alias Flezha.Transport.Local
   alias Flezha.Transport.Native
   alias Flezha.Transport.Server, as: TransportServer
-
-  @default_ca_cert "app_data/certs/ca.pem"
 
   @doc """
   Connect the control channel. `owner` receives inbound control frames. Returns
@@ -164,5 +163,5 @@ defmodule Flezha.SDK.Transport do
     with {:ok, base} <- socket_base(), do: {:ok, base <> "/runner_control_channel.sock"}
   end
 
-  defp ca_cert_path, do: System.get_env("FLEZHA_CA_CERT_PATH") || @default_ca_cert
+  defp ca_cert_path, do: Knob.get(:ca_cert_path)
 end

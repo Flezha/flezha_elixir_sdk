@@ -48,6 +48,7 @@ defmodule Flezha.SDK.Procedure do
   """
 
   alias Flezha.SDK.Ctx
+  alias Flezha.SDK.Knob
 
   @type state :: term()
   @type run_result ::
@@ -102,7 +103,6 @@ defmodule Flezha.SDK.Procedure do
   @default_mailbox_capacity 1024
   @max_mailbox_capacity 1_048_576
   @default_max_entities 100_000
-  @env_mailbox_capacity "FLEZHA_MAILBOX_CAPACITY"
   # In lockstep with `flz_core::persistence::DEFAULT_COMPACT_AFTER_BYTES` and
   # the controller's `:default_compact_after_bytes`.
   @default_compact_after_bytes 8 * 1024 * 1024
@@ -135,10 +135,7 @@ defmodule Flezha.SDK.Procedure do
     if exports?(module, :mailbox_capacity, 0) do
       validate_capacity!(module.mailbox_capacity(), module)
     else
-      case System.get_env(@env_mailbox_capacity) do
-        nil -> @default_mailbox_capacity
-        val -> validate_capacity!(parse_capacity(val), module)
-      end
+      validate_capacity!(Knob.get(:mailbox_capacity), module)
     end
   end
 
@@ -253,13 +250,6 @@ defmodule Flezha.SDK.Procedure do
       :ok -> cap
       {:MailboxCapacityZero, _} -> @default_mailbox_capacity
       {:MailboxCapacityTooLarge, _} -> @max_mailbox_capacity
-    end
-  end
-
-  defp parse_capacity(val) do
-    case Integer.parse(val) do
-      {n, ""} -> n
-      _ -> @default_mailbox_capacity
     end
   end
 end

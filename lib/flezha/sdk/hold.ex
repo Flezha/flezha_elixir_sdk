@@ -21,8 +21,6 @@ defmodule Flezha.SDK.Hold do
 
   # The knob every SDK's reconnect hold reads, so one setting governs the wire
   # whichever runtime produced the frame.
-  @cap_env "FLEZHA_RECONNECT_RING_CAPACITY"
-  @default_cap 1_024
 
   @type t :: {:queue.queue(), non_neg_integer(), pos_integer()}
 
@@ -32,7 +30,7 @@ defmodule Flezha.SDK.Hold do
 
   @doc "The reconnect hold's cap: `FLEZHA_RECONNECT_RING_CAPACITY`, else 1024."
   @spec cap() :: pos_integer()
-  def cap, do: Knob.int(@cap_env, @default_cap)
+  def cap, do: Knob.get(:reconnect_ring_capacity)
 
   @doc "Push `item`; at the cap the oldest goes, so the hold cannot outgrow it."
   @spec push(t(), term()) :: t()

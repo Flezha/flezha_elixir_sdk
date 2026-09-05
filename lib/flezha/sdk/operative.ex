@@ -51,7 +51,6 @@ defmodule Flezha.SDK.Operative do
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
   # How long a sweep waits on one Entity's idle probe before moving on.
   # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
-  @reap_interval_env "FLEZHA_REAP_INTERVAL_MS"
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
   # Evictions one sweep performs at most: the router is held while it runs,
@@ -158,8 +157,8 @@ defmodule Flezha.SDK.Operative do
 
   defp reap_interval(ttl_ms),
     do:
-      Knob.int(
-        @reap_interval_env,
+      Knob.get(
+        :reap_interval_ms,
         ttl_ms |> div(4) |> min(Durations.get(:sdk_max_reap_interval_ms)) |> max(1)
       )
 

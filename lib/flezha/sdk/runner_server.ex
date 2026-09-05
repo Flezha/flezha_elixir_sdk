@@ -21,6 +21,8 @@ defmodule Flezha.SDK.RunnerServer do
   alias Flezha.Config.Durations
   alias Flezha.Config.Backoff
 
+  alias Flezha.SDK.Knob
+
   alias Flezha.SDK.{
     Codec,
     Commands,
@@ -770,7 +772,7 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp schedule_heartbeat do
     # Jitter into [base/2, base] (the cross-SDK heartbeat contract).
-    interval = Jitter.jitter_within(Durations.env(:data_heartbeat_ms))
+    interval = Jitter.jitter_within(Knob.get(:data_heartbeat_ms))
     Process.send_after(self(), :data_heartbeat, interval)
   end
 

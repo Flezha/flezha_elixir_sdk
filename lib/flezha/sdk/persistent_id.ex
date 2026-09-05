@@ -9,10 +9,9 @@ defmodule Flezha.SDK.PersistentId do
   refusal to start. Byte-compatible with the Rust `persistent_id.rs` contract.
   """
 
-  require Logger
+  alias Flezha.SDK.Knob
 
-  @env_path "FLEZHA_RUNNER_ID_PATH"
-  @default_path "/var/lib/flezha-runner/id"
+  require Logger
   @fnv64_offset 0xCBF29CE484222325
   @fnv64_prime 0x00000100000001B3
   @mask64 0xFFFFFFFFFFFFFFFF
@@ -107,5 +106,5 @@ defmodule Flezha.SDK.PersistentId do
 
   defp rand6, do: for(_ <- 1..6, into: "", do: <<Enum.random(@alphabet)>>)
 
-  defp path, do: System.get_env(@env_path, @default_path)
+  defp path, do: Knob.get(:runner_id_path)
 end
