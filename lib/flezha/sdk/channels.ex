@@ -4,13 +4,24 @@ defmodule Flezha.SDK.Channels do
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
   (`into`/`into_named`/`sink`/`sink_with`/`sealed`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
-  identity on the sink the handle reaches) and the class-level tier
+  identity on the plugin wire the handle reaches) and the class-level tier
   declarations (`effectively_once`, the three checkpoint options and the two
-  correction options, which take and answer the token itself). Handles carry their pending
-  transform chain functionally; consumers write to a build accumulator kept in
-  the process dictionary for the duration of `channels/1` (the twin of the Rust
-  builder's `pending`). Fan-out is handle reuse. Refusals accumulate — nothing
-  raises; `Flezha.SDK.Topology.build/1` returns `{:error, {:invalid_topology, _}}`.
+  correction options, which take and answer the token itself). Fan-out is
+  handle reuse.
+
+  This builder RECORDS; it does not judge. Every fluent call appends one link
+  to the chain its handle carries — a transform, a key, a plugin sink, an edge
+  into a procedure — and the record is kept in the process dictionary for the
+  duration of `channels/1` (the twin of the Rust builder's `pending`).
+  `Flezha.SDK.Topology.build/2` then judges the finished record in the three
+  stages `flz_core::host::register::check` judges its own: the chain rules,
+  the derivation, then the topology and class facts. The Elixir SDK inherits
+  nothing from `flz_core`, so this is a re-expression of those rules, measured
+  against `test/fixtures/reference_topologies.txt` like every other SDK's.
+
+  The two refusals that stay here are the ones the surface itself makes:
+  `keyed` and `named` on an entry handle name a fact an entry channel has no
+  end for, and neither reaches the record.
   """
 
   alias Flezha.SDK.Stream
@@ -20,7 +31,18 @@ defmodule Flezha.SDK.Channels do
 
   @type t :: %__MODULE__{ref: reference()}
 
-  # --- build lifecycle (used by Topology.build/1) ---
+  @typedoc """
+  One link of a chain, in the order the author called it. A transform and a
+  key carry the closure the derivation fuses; a terminator carries what the
+  edge or the plugin wire it closes on needs.
+  """
+  @type link ::
+          {:map | :filter | :flat_map | :key, (term() -> term())}
+          | :keyed
+          | {:sink, String.t(), (term() -> binary())}
+          | {:into, reference()}
+
+  # --- build lifecycle (used by Topology.build/2) ---
 
   @doc false
   def new do
@@ -28,13 +50,12 @@ defmodule Flezha.SDK.Channels do
 
     Process.put(acc_key(ref), %{
       entries: %{},
+      entry_order: [],
       nodes: %{},
       node_by_module: %{},
       node_names: %{},
-      edges: [],
-      sinks: [],
-      knobs: %{},
       chains: %{},
+      chain_seq: 0,
       tier: %{effectively_once: false, checkpoint: nil, correction: nil},
       issues: []
     })
@@ -46,7 +67,22 @@ defmodule Flezha.SDK.Channels do
   def take(%__MODULE__{ref: ref}) do
     acc = Process.get(acc_key(ref))
     Process.delete(acc_key(ref))
-    acc
+
+    %{
+      acc
+      | entry_order: Enum.reverse(acc.entry_order),
+        issues: Enum.reverse(acc.issues),
+        chains: settled_chains(acc.chains)
+    }
+  end
+
+  # The record the check reads: every chain in declaration order, each one's
+  # links in the order they were called.
+  defp settled_chains(chains) do
+    chains
+    |> Map.values()
+    |> Enum.sort_by(& &1.seq)
+    |> Enum.map(&%{&1 | links: Enum.reverse(&1.links)})
   end
 
   # --- class-level declarations (the effectively-once tier) ---
@@ -68,8 +104,12 @@ defmodule Flezha.SDK.Channels do
   def outputs_at_checkpoint(%__MODULE__{} = c, ms) when is_integer(ms) and ms >= 0,
     do: checkpoint_policy(c, &%{&1 | outputs: :at_checkpoint, max_delay_ms: ms})
 
-  # Every checkpoint option turns the granularity on itself and amends the one
-  # policy, so the options compose in any order and none clears another's.
+  # The one Elixir site that implies checkpoint granularity: ANY checkpoint key
+  # raises the policy, so the three options compose in any order and none
+  # clears another's. This is the re-expression of the core's derivation, where
+  # `checkpoint_ack`, `checkpoint_every`, `checkpoint_outputs` and
+  # `checkpoint_max_delay_ms` are written raw and the granularity is implied
+  # from any one of them.
   defp checkpoint_policy(%__MODULE__{ref: ref} = c, amend) do
     update(ref, fn acc ->
       put_in(
@@ -115,11 +155,11 @@ defmodule Flezha.SDK.Channels do
   def input_with(%__MODULE__{ref: ref}, name, parser)
       when is_binary(name) and is_function(parser, 1) do
     update(ref, fn acc ->
-      if Map.has_key?(acc.entries, name) do
-        add_issue(acc, {:DuplicateChannel, name})
-      else
-        put_in(acc.entries[name], %{parser: parser})
-      end
+      %{
+        acc
+        | entries: Map.put_new(acc.entries, name, %{parser: parser}),
+          entry_order: [name | acc.entry_order]
+      }
     end)
 
     %Stream{builder: ref, source: {:entry, name}}
@@ -127,21 +167,10 @@ defmodule Flezha.SDK.Channels do
 
   # --- edge transforms (fused into one closure per consumer edge) ---
 
-  def map(%Stream{} = s, f) when is_function(f, 1), do: push_chain(s, {:map, f})
-  def filter(%Stream{} = s, f) when is_function(f, 1), do: push_chain(s, {:filter, f})
-  def flat_map(%Stream{} = s, f) when is_function(f, 1), do: push_chain(s, {:flat_map, f})
-
-  def key_by(%Stream{keyed: true} = s, _f) do
-    refuse(s, {:DuplicateKeyBy, describe(s.source)})
-  end
-
-  def key_by(%Stream{terminal: true} = s, _f) do
-    refuse(s, {:TransformAfterTerminal, describe(s.source)})
-  end
-
-  def key_by(%Stream{} = s, f) when is_function(f, 1) do
-    %{track_chain(s) | chain: s.chain ++ [{:key, f}], keyed: true}
-  end
+  def map(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:map, f})
+  def filter(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:filter, f})
+  def flat_map(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:flat_map, f})
+  def key_by(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:key, f})
 
   # --- consumers ---
 
@@ -156,82 +185,47 @@ defmodule Flezha.SDK.Channels do
   def sink(%Stream{} = s, plugin) when is_binary(plugin),
     do: sink_with(s, plugin, &default_serialize/1)
 
-  @doc "Terminal plugin sink with a custom serializer. Returns the handle (hybrid)."
-  def sink_with(%Stream{builder: ref} = s, plugin, serializer)
+  @doc """
+  Terminal plugin sink with a custom serializer. Returns the handle, so a
+  channel carrying a sink AND a consumer (the hybrid shape) is one pipeline.
+  """
+  def sink_with(%Stream{} = s, plugin, serializer)
       when is_binary(plugin) and is_function(serializer, 1) do
-    consume_chain(ref, s)
-
-    update(ref, fn acc ->
-      # One sink per channel AND plugin. Neither half alone is the duplicate:
-      # a channel may reach several plugins (a keyed wire beside a plain one),
-      # and a plugin may be fed by several channels (how a chain reports every
-      # stage to one place, each with its own encoder). Wiring the SAME channel
-      # to the SAME plugin twice is the duplicate — two identical routes, every
-      # value delivered twice.
-      if Enum.any?(acc.sinks, &(&1.from == s.source and &1.plugin == plugin)) do
-        add_issue(acc, {:DuplicatePluginSink, channel_name(acc, s.source), plugin})
-      else
-        {transform, key_by} = fuse(s.chain)
-
-        %{
-          acc
-          | sinks: [
-              %{
-                from: s.source,
-                plugin: plugin,
-                serializer: serializer,
-                transform: transform,
-                key_by: key_by,
-                keyed: s.keyed_sink
-              }
-              | acc.sinks
-            ]
-        }
-      end
-    end)
-
-    %{s | terminal: true, chain: [], keyed: false, keyed_sink: false, chain_id: nil}
+    %{link(s, {:sink, plugin, serializer}) | chain_id: nil}
   end
 
   @doc """
-  Declare output identity on the sink this handle reaches — the reference's
-  `keyed()`: its frames carry `flz.entity`, `flz.seq` and `flz.key`. Refused on
-  an entry handle, and on one that reaches a procedure before any sink.
+  Declare output identity on the plugin wire this handle reaches — the
+  reference's `keyed()`: its frames carry `flz.entity`, `flz.seq` and
+  `flz.key`. Refused on an entry handle, which has no output of its own to
+  stamp; a chain declared keyed that reaches no `sink` is refused by the check
+  as `KeyedChannelWithoutPluginWire`.
   """
-  def keyed(%Stream{source: {:entry, _}} = s), do: refuse(s, {:KeyedOnEntry, describe(s.source)})
-  def keyed(%Stream{} = s), do: %{s | keyed_sink: true}
+  def keyed(%Stream{source: {:entry, name}} = s), do: refuse(s, {:KeyedOnEntry, name})
 
-  @doc "Name the source procedure node."
-  def named(%Stream{source: {:entry, _}} = s, _name),
-    do: refuse(s, {:NamedOnEntry, describe(s.source)})
+  def keyed(%Stream{} = s), do: link(s, :keyed)
+
+  @doc "Name the source procedure node, and with it the channel it produces."
+  def named(%Stream{source: {:entry, name}} = s, _name),
+    do: refuse(s, {:NamedOnEntry, name})
 
   def named(%Stream{source: {:node, node_ref}, builder: ref} = s, name) when is_binary(name) do
-    update(ref, fn acc ->
-      if Map.get(acc.node_names, name) in [nil, node_ref] do
-        acc
-        |> put_in([:node_names, name], node_ref)
-        |> put_in([:nodes, node_ref, :name], name)
-      else
-        add_issue(acc, {:NodeIdentityCollision, name})
-      end
-    end)
-
+    update(ref, fn acc -> claim_name(acc, name, node_ref) end)
     s
   end
 
   @doc "Type-level terminator; adds no topology."
-  def sealed(%Stream{} = s), do: %{s | terminal: true}
+  def sealed(%Stream{} = s), do: s
 
-  # --- per-edge knobs (ride the handle; applied to the target node at into) ---
+  # --- per-edge knobs (ride the chain; applied to the edges it closes) ---
 
   def on_full(%Stream{} = s, policy) when policy in [:drop_nothing, :drop_newest, :drop_oldest],
-    do: %{s | on_full: policy}
+    do: knob(s, :on_full, policy)
 
-  def retry_max(%Stream{} = s, 0), do: refuse(s, {:RetryMaxZero, describe(s.source)})
-  def retry_max(%Stream{} = s, n) when is_integer(n) and n > 0, do: %{s | retry_max: n}
+  def retry_max(%Stream{} = s, n) when is_integer(n) and n >= 0, do: knob(s, :retry_max, n)
 
   def retry_backoff_ms(%Stream{} = s, ms) when is_integer(ms) and ms >= 0,
-    do: %{s | retry_backoff_ms: ms}
+    do: knob(s, :retry_backoff_ms, ms)
 
   # --- default codecs ---
 
@@ -253,8 +247,9 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The channel a source is named by on the wire: an entry's own name, a node's
-  `named/2` name, else its procedure's. One rule, read by the builder's own
-  refusals and by the compiled routes.
+  `named/2` name, else its procedure's. One rule, read by the check's refusals
+  and by the compiled routes, so the `named` override is applied once for
+  every terminator the channel carries.
   """
   @spec channel_name(map(), {:entry, String.t()} | {:node, reference()}) :: String.t()
   def channel_name(_acc, {:entry, name}), do: name
@@ -289,149 +284,120 @@ defmodule Flezha.SDK.Channels do
 
   # --- internals ---
 
-  defp do_into(%Stream{keyed_sink: true} = s, module, name),
-    do:
-      do_into(
-        refuse(%{s | keyed_sink: false}, {:KeyedInterProcedureChannel, describe(s.source)}),
-        module,
-        name
-      )
-
   defp do_into(%Stream{builder: ref} = s, module, name) do
-    consume_chain(ref, s)
     node_ref = resolve_node(ref, module, name)
-
-    update(ref, fn acc ->
-      acc |> attach_consumer(s, node_ref) |> apply_knobs(node_ref, s)
-    end)
-
+    _ = link(s, {:into, node_ref})
     %Stream{builder: ref, source: {:node, node_ref}}
   end
 
-  # One consumer edge per (channel, procedure). Re-declaring one where either
-  # side carries a transform or a key is refused: the edge keeps a single fused
-  # closure, so the second declaration would otherwise be dropped and every
-  # value delivered under the first one's transform and key. Carrying neither
-  # is the repeated-`into` fan-in, which leaves the one edge as it stands.
-  defp attach_consumer(acc, %Stream{chain: chain, source: from} = s, node_ref) do
-    declares = chain != []
-
-    case Enum.find(acc.edges, &(&1.from == from and &1.to == node_ref)) do
-      %{declares: existing} when existing or declares ->
-        add_issue(acc, {:EdgeAlreadyWired, describe(from), node_label(acc, node_ref)})
-
-      %{} ->
-        acc
-
-      nil ->
-        {transform, key_by} = fuse(s.chain)
-
-        edge = %{
-          from: from,
-          to: node_ref,
-          transform: transform,
-          key_by: key_by,
-          declares: declares
-        }
-
-        %{acc | edges: [edge | acc.edges]}
-    end
-  end
-
-  defp node_label(acc, node_ref) do
-    case Map.get(acc.nodes, node_ref) do
-      %{name: name} when is_binary(name) -> name
-      %{module: module} -> inspect(module)
-    end
-  end
-
-  # A consumer edge's mailbox/ladder knobs attach to the target node. Fan-in
-  # keeps the first non-nil for each knob.
-  defp apply_knobs(acc, node_ref, %Stream{} = s) do
-    knobs =
-      %{}
-      |> maybe_put(:on_full, s.on_full)
-      |> maybe_put(:retry_max, s.retry_max)
-      |> maybe_put(:retry_backoff_ms, s.retry_backoff_ms)
-
-    existing = Map.get(acc.knobs, node_ref, %{})
-    %{acc | knobs: Map.put(acc.knobs, node_ref, Map.merge(knobs, existing))}
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, val), do: Map.put(map, key, val)
-
-  # Unnamed mentions of one module unify to a single node (fan-in). Named nodes
-  # are distinct per name; a name reused for a different module collides.
+  # Unnamed mentions of one module unify to a single node (fan-in). A named
+  # node is distinct per name; a name already claimed by another node still
+  # creates one, so the record carries both claims and the check names the
+  # collision.
   defp resolve_node(ref, module, nil) do
-    node_ref = make_ref()
-
-    update(ref, fn acc ->
+    resolve(ref, fn acc ->
       case Map.get(acc.node_by_module, module) do
         nil ->
-          acc
-          |> put_in([:nodes, node_ref], %{module: module, name: nil, seq: map_size(acc.nodes)})
-          |> put_in([:node_by_module, module], node_ref)
+          node_ref = make_ref()
 
-        _existing ->
-          acc
+          {acc
+           |> put_node(node_ref, module, nil)
+           |> put_in([:node_by_module, module], node_ref), node_ref}
+
+        existing ->
+          {acc, existing}
       end
     end)
-
-    Process.get(acc_key(ref)).node_by_module[module]
   end
 
   defp resolve_node(ref, module, name) do
-    node_ref = make_ref()
+    resolve(ref, fn acc ->
+      claimed = Map.get(acc.node_names, name)
+      node_ref = make_ref()
 
-    update(ref, fn acc ->
-      case Map.get(acc.node_names, name) do
-        nil ->
-          acc
-          |> put_in([:nodes, node_ref], %{module: module, name: name, seq: map_size(acc.nodes)})
-          |> put_in([:node_names, name], node_ref)
+      cond do
+        claimed && Map.fetch!(acc.nodes, claimed).module == module ->
+          {acc, claimed}
 
-        _existing ->
-          add_issue(acc, {:NodeIdentityCollision, name})
+        claimed ->
+          {put_node(acc, node_ref, module, name), node_ref}
+
+        true ->
+          {acc |> put_node(node_ref, module, name) |> put_in([:node_names, name], node_ref),
+           node_ref}
       end
     end)
-
-    Process.get(acc_key(ref)).node_names[name] || node_ref
   end
 
-  defp push_chain(%Stream{keyed: true} = s, _step),
-    do: refuse(s, {:TransformAfterKeyBy, describe(s.source)})
+  defp put_node(acc, node_ref, module, name),
+    do: put_in(acc, [:nodes, node_ref], %{module: module, name: name, seq: map_size(acc.nodes)})
 
-  defp push_chain(%Stream{terminal: true} = s, _step),
-    do: refuse(s, {:TransformAfterTerminal, describe(s.source)})
+  # `named/2` on a node whose name another node already claims writes the name
+  # anyway: two nodes then answer to it and the check names the collision.
+  defp claim_name(acc, name, node_ref) do
+    acc = put_in(acc, [:nodes, node_ref, :name], name)
 
-  defp push_chain(%Stream{} = s, step), do: %{track_chain(s) | chain: s.chain ++ [step]}
+    if Map.has_key?(acc.node_names, name),
+      do: acc,
+      else: put_in(acc, [:node_names, name], node_ref)
+  end
 
-  # Register this handle's chain so an unconsumed one surfaces as DanglingTransformChain.
-  defp track_chain(%Stream{chain_id: nil, builder: ref} = s) do
+  defp link(%Stream{builder: ref} = s, link) do
+    s = track_chain(s)
+    update(ref, fn acc -> update_in(acc.chains[s.chain_id].links, &[link | &1]) end)
+    s
+  end
+
+  # A knob rides the chain it was declared on and reaches the edges that chain
+  # closes; the first declaration of a knob on one chain wins.
+  defp knob(%Stream{builder: ref} = s, key, value) do
+    s = track_chain(s)
+
+    update(ref, fn acc ->
+      update_in(acc.chains[s.chain_id].knobs, &Map.put_new(&1, key, value))
+    end)
+
+    s
+  end
+
+  # A handle with no chain of its own opens one; reusing a handle that has one
+  # extends it, which is how a fan-out shares its transforms.
+  defp track_chain(%Stream{chain_id: nil, builder: ref, source: source} = s) do
     cid = make_ref()
-    update(ref, fn acc -> put_in(acc.chains[cid], describe(s.source)) end)
+
+    update(ref, fn acc ->
+      %{
+        acc
+        | chains:
+            Map.put(acc.chains, cid, %{
+              channel: source,
+              seq: acc.chain_seq,
+              links: [],
+              knobs: %{}
+            }),
+          chain_seq: acc.chain_seq + 1
+      }
+    end)
+
     %{s | chain_id: cid}
   end
 
   defp track_chain(%Stream{} = s), do: s
 
-  defp consume_chain(_ref, %Stream{chain_id: nil}), do: :ok
-
-  defp consume_chain(ref, %Stream{chain_id: cid}),
-    do: update(ref, fn acc -> %{acc | chains: Map.delete(acc.chains, cid)} end)
-
   defp refuse(%Stream{builder: ref} = s, issue) do
-    update(ref, fn acc -> add_issue(acc, issue) end)
+    update(ref, fn acc -> %{acc | issues: [issue | acc.issues]} end)
     s
   end
 
-  defp add_issue(acc, issue), do: %{acc | issues: [issue | acc.issues]}
-
-  defp describe({:entry, name}), do: name
-  defp describe({:node, ref}), do: inspect(ref)
-
   defp update(ref, fun), do: Process.put(acc_key(ref), fun.(Process.get(acc_key(ref))))
+
+  # The one write that also answers: node resolution has to hand the caller the
+  # ref it settled on, and that ref is only known inside the update.
+  defp resolve(ref, fun) do
+    {acc, node_ref} = fun.(Process.get(acc_key(ref)))
+    Process.put(acc_key(ref), acc)
+    node_ref
+  end
 
   defp acc_key(ref), do: {__MODULE__, ref}
 end

@@ -1,36 +1,19 @@
 defmodule Flezha.SDK.Stream do
   @moduledoc """
-  A builder-scoped stream handle. Carries the source node it flows from, the
-  pending edge transforms accumulated on it (fused into one closure per consumer
-  edge at build time), and whether the sink it reaches is declared keyed. Immutable: reusing a handle in two `into`/`sink` calls
-  fans out. Valid only inside `channels/1`.
+  A builder-scoped stream handle. Carries the channel it flows from and the
+  chain it is currently appending links to; the links themselves live in the
+  builder's record, so the handle is a cursor and nothing more. Immutable:
+  reusing a handle in two `into`/`sink` calls fans out, and a handle with no
+  chain yet opens a fresh one. Valid only inside `channels/1`.
   """
 
   @enforce_keys [:builder, :source]
-  defstruct [
-    :builder,
-    :source,
-    chain: [],
-    keyed: false,
-    keyed_sink: false,
-    terminal: false,
-    chain_id: nil,
-    on_full: nil,
-    retry_max: nil,
-    retry_backoff_ms: nil
-  ]
+  defstruct [:builder, :source, chain_id: nil]
 
   @type source :: {:entry, String.t()} | {:node, reference()}
   @type t :: %__MODULE__{
           builder: reference(),
           source: source(),
-          chain: [term()],
-          keyed: boolean(),
-          keyed_sink: boolean(),
-          terminal: boolean(),
-          chain_id: reference() | nil,
-          on_full: :drop_nothing | :drop_newest | :drop_oldest | nil,
-          retry_max: pos_integer() | nil,
-          retry_backoff_ms: non_neg_integer() | nil
+          chain_id: reference() | nil
         }
 end

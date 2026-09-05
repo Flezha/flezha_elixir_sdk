@@ -29,6 +29,10 @@
     "env": {}
   },
   "toolchain": "elixir --version",
+  "topology_surfaces": [
+    "workflow",
+    "sync_durability"
+  ],
   "deferred": [],
   "fixtures": {
     "runner_lifecycle": [
