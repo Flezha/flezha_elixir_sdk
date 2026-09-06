@@ -12,9 +12,8 @@ defmodule Flezha.SDK.Entity.Records do
 
   require Logger
 
-  alias Flezha.SDK.{Credit, Hold, Record, Timers, Transport}
+  alias Flezha.SDK.{Hold, Record, Timers}
   alias Flezha.SDK.Entity.{Interval, State}
-  alias Flezha.Transport.Stream, as: TransportStream
 
   @doc """
   Rebuild the state from a `RestoreInitState`; `{:ok, state, terminal, migrated}`.
@@ -61,21 +60,32 @@ defmodule Flezha.SDK.Entity.Records do
   # same stream from the same process. The pending timers are re-stated ABOVE
   # that seq afterwards: the snapshot's body holds the state alone, and the
   # truncation it authorises would otherwise take the timers with it.
-  @doc "Ship the state as an `entity_state_snapshot`; `{:ok, state, snapshot_seq, body_size}`."
+  @doc """
+  Ship the state as an `entity_state_snapshot`; `{:ok, state, snapshot_seq,
+  body_size}`. A refused write is answered to the caller — the controller
+  retries compaction — and the frame is still held for the next bound stream.
+  """
   @spec snapshot(State.t()) ::
-          {:ok, State.t(), non_neg_integer(), non_neg_integer()} | {:error, String.t()}
-  def snapshot(%State{changeful?: true, stream: %{handle: handle}} = s) when handle != nil do
+          {:ok, State.t(), non_neg_integer(), non_neg_integer()}
+          | {:error, State.t(), String.t()}
+  def snapshot(%State{changeful?: false} = s),
+    do: {:error, s, "#{State.label(s)} has no state stream"}
+
+  def snapshot(%State{} = s) do
     seq = max(s.change_seq - 1, 0)
     body = Record.encode_body(s.proc_state)
     frame = Record.frame(s.identity, seq, body, s.schema_version)
+    {verdict, hold} = Hold.write("entity_state_snapshot", s.stream, {frame, %{}})
+    # The re-statement follows the snapshot whichever answer the wire gave, so
+    # a held pair replays in the order that keeps the timers above the seq the
+    # truncation is authorised to.
+    s = restate_timers(%{s | stream: hold})
 
-    case TransportStream.send_frame(handle, "entity_state_snapshot", frame, %{}) do
-      :ok -> {:ok, restate_timers(s), seq, byte_size(body)}
-      {:error, reason} -> {:error, inspect(reason)}
+    case verdict do
+      :ok -> {:ok, s, seq, byte_size(body)}
+      {:held, reason} -> {:error, s, inspect(reason)}
     end
   end
-
-  def snapshot(%State{} = s), do: {:error, "#{State.label(s)} has no state stream"}
 
   # Destructive: the delete follows the records on the same stream from the
   # same process, and the slot goes so a successor starts from `init_state/1`
@@ -86,8 +96,10 @@ defmodule Flezha.SDK.Entity.Records do
   @doc "What an eviction leaves behind: the delete when persistent, no slot, and no lost frame."
   @spec delete(State.t()) :: :ok
   def delete(%State{} = s) do
-    {items, _empty} = Hold.drain(s.stream.held)
-    held = Enum.map(items, fn {_seq, payload_id, frame} -> {payload_id, frame} end)
+    {items, _empty} = Hold.drain(s.stream)
+    # The route goes with the Entity: the Operative writes what it takes over
+    # on the stream this identity chooses, never on the one this hold used.
+    held = Enum.map(items, fn {key, body, meta, _route} -> {key, body, meta} end)
     hand_off(s, held ++ owed_delete(s, held))
     if s.slots, do: :ets.delete(s.slots, s.identity)
     :ok
@@ -111,7 +123,7 @@ defmodule Flezha.SDK.Entity.Records do
   defp ship_change(%State{persistent?: false} = s, _seq, _change), do: s
 
   defp ship_change(%State{} = s, seq, change),
-    do: send_record(s, seq, "entity_state_change", change_frame(s, seq, change))
+    do: send_record(s, "entity_state_change", change_frame(s, seq, change))
 
   @doc """
   The tier's ship: fold one invocation into the staged interval, then — when
@@ -164,8 +176,8 @@ defmodule Flezha.SDK.Entity.Records do
   @spec release(State.t(), reference()) :: State.t()
   def release(%State{tier: tier} = s, ref) do
     case :queue.out(tier.owed) do
-      {{:value, {^ref, seq, frame}}, rest} ->
-        s = send_record(s, seq, "entity_effect_record", frame)
+      {{:value, {^ref, _seq, frame}}, rest} ->
+        s = send_record(s, "entity_effect_record", frame)
         %{s | tier: %{s.tier | owed: rest}}
 
       _other ->
@@ -187,11 +199,11 @@ defmodule Flezha.SDK.Entity.Records do
   def request_correction(%State{} = s, target_event_time) do
     frame = Record.correction_frame(s.identity, target_event_time)
 
-    case write_record(s, "correction_request", frame) do
-      :ok ->
+    case Hold.write("correction_request", s.stream, {frame, %{}}) do
+      {:ok, _hold} ->
         :ok
 
-      {:error, reason} ->
+      {{:error, reason}, _hold} ->
         Logger.warning(
           "[Flezha.SDK] #{State.label(s)} correction request undelivered: #{inspect(reason)}"
         )
@@ -212,8 +224,8 @@ defmodule Flezha.SDK.Entity.Records do
   # offset is never durable ahead of the output it produced. Never its queue:
   # the router may be blocked pushing INTO this Entity, and an Entity that
   # stopped draining to wait for that router would be half of a cycle.
-  defp hold_or_ship(%State{} = s, seq, frame, nil),
-    do: send_record(s, seq, "entity_effect_record", frame)
+  defp hold_or_ship(%State{} = s, _seq, frame, nil),
+    do: send_record(s, "entity_effect_record", frame)
 
   defp hold_or_ship(%State{tier: tier} = s, seq, frame, ref),
     do: %{s | tier: %{tier | owed: :queue.in({ref, seq, frame}, tier.owed)}}
@@ -245,7 +257,7 @@ defmodule Flezha.SDK.Entity.Records do
 
   defp ship_ops(%State{} = s, seq, ops) do
     frame = Record.timer_ops_frame(s.identity, seq, ops, s.schema_version)
-    {send_record(s, seq, "entity_state_change", frame), seq + 1}
+    {send_record(s, "entity_state_change", frame), seq + 1}
   end
 
   defp restate_timers(%State{timers: %{pending: pending}} = s) do
@@ -257,38 +269,14 @@ defmodule Flezha.SDK.Entity.Records do
     end
   end
 
-  # Between a close and its reconnect there is no stream: the record is held
-  # for the next bound one rather than lost, and the seq it carries keeps the
-  # replay in the order the changes were made.
-  defp send_record(%State{stream: %{handle: nil}} = s, seq, payload_id, frame),
-    do: hold_record(s, {seq, payload_id, frame})
-
-  defp send_record(%State{} = s, seq, payload_id, frame) do
-    case write_record(s, payload_id, frame) do
-      :ok ->
-        s
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Flezha.SDK] #{State.label(s)} record seq #{seq} held for rebind: #{inspect(reason)}"
-        )
-
-        hold_record(s, {seq, payload_id, frame})
-    end
+  # Between a close and its reconnect there is no stream: the class holds the
+  # record for the next bound one, and the drain replays it in the order the
+  # changes were made. Parking on an exhausted credit window happens here, in
+  # the Entity, and the router's push behind it waits — the emit-path park.
+  defp send_record(%State{} = s, payload_id, frame) do
+    {_verdict, hold} = Hold.write(payload_id, s.stream, {frame, %{}})
+    %{s | stream: hold}
   end
-
-  # Debit-on-send: parks here, in the Entity, when the window is exhausted —
-  # and the router's push behind it waits, which is the emit-path park. The
-  # debit rides the WRITE and never the hold: a held frame is on no wire, and
-  # the reconnect that has to precede its replay disarms the window anyway, so
-  # a replayed frame debits a different session rather than the same one twice.
-  defp write_record(%State{} = s, payload_id, frame) do
-    Credit.acquire(s.credit, byte_size(frame))
-    TransportStream.send_frame(s.stream.handle, payload_id, frame, %{})
-  end
-
-  defp hold_record(%State{stream: stream} = s, item),
-    do: %{s | stream: %{stream | held: Hold.keep(stream.held, item, s.counters)}}
 
   # Fire-and-forget, outside the credit window, as the shared core's own is. It
   # goes on the wire only when nothing is held ahead of it: a delete that
@@ -296,14 +284,14 @@ defmodule Flezha.SDK.Entity.Records do
   # state it has not been told about yet.
   defp owed_delete(%State{persistent?: false}, _ahead), do: []
 
-  defp owed_delete(%State{stream: %{handle: handle}} = s, []) when handle != nil do
-    case TransportStream.send_frame(handle, "delete_entity_state", s.identity, %{}) do
-      :ok -> []
-      {:error, _reason} -> [{"delete_entity_state", s.identity}]
+  defp owed_delete(%State{} = s, []) do
+    case Hold.write("delete_entity_state", s.stream, {s.identity, %{}}) do
+      {:ok, _hold} -> []
+      {{:held, _reason}, _hold} -> [{"delete_entity_state", s.identity, %{}}]
     end
   end
 
-  defp owed_delete(%State{} = s, _ahead), do: [{"delete_entity_state", s.identity}]
+  defp owed_delete(%State{} = s, _ahead), do: [{"delete_entity_state", s.identity, %{}}]
 
   # The identity rides with the frames: the Operative writes them on the stream
   # that identity chooses — the one a replacement Entity will bind to — so this
@@ -360,23 +348,13 @@ defmodule Flezha.SDK.Entity.Records do
   snapshot stay in order because one process writes them to one stream.
   """
   @spec rebind(State.t(), [term()]) :: State.t()
-  def rebind(%State{stream: stream} = s, []),
-    do: %{s | stream: %{stream | handle: nil}}
+  def rebind(%State{} = s, []), do: %{s | stream: Hold.bind(s.stream, [])}
 
-  def rebind(%State{stream: stream} = s, secondaries) do
-    handle = Transport.secondary_for(secondaries, s.identity)
-    replay_held(%{s | stream: %{stream | handle: handle}})
-  end
-
-  # A bound stream is what a held record was waiting for. The drain is one pass
-  # in the order the records were written, so `change_seq` is never inverted;
-  # one that fails again re-enters the hold behind the rest instead of being
-  # retried on the spot.
-  defp replay_held(%State{stream: stream} = s) do
-    {items, empty} = Hold.drain(stream.held)
-
-    Enum.reduce(items, %{s | stream: %{stream | held: empty}}, fn {seq, payload_id, frame}, acc ->
-      send_record(acc, seq, payload_id, frame)
-    end)
+  # A bound stream is what a held record was waiting for, and the replay is one
+  # pass in the order the records were written, so `change_seq` is never
+  # inverted.
+  def rebind(%State{} = s, secondaries) do
+    handle = Hold.secondary_for(secondaries, s.identity)
+    %{s | stream: s.stream |> Hold.bind([handle]) |> Hold.replay()}
   end
 end

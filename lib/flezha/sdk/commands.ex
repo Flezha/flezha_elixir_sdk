@@ -19,7 +19,7 @@ defmodule Flezha.SDK.Commands do
   require Logger
 
   alias Flezha.Config.Durations
-  alias Flezha.SDK.{Codec, Credit, Entity, Operative}
+  alias Flezha.SDK.{Codec, Credit, Entity, Hold, Operative}
   alias Flezha.State.Wire
 
   # A serialise's wait for a mid-dispatch Entity, and the serialise bound of a
@@ -161,18 +161,20 @@ defmodule Flezha.SDK.Commands do
   def shutdown(%{control_handle: nil}, _ack_ms), do: :ok
   def shutdown(%{operatives: operatives}, _ack_ms) when map_size(operatives) == 0, do: :ok
 
-  def shutdown(%{control_handle: handle, operatives: operatives} = s, ack_ms) do
-    pending =
+  def shutdown(%{control: control, control_handle: handle, operatives: operatives} = s, ack_ms) do
+    {pending, _hold} =
       operatives
       |> Map.keys()
       |> Enum.map(fn oid -> Task.async(fn -> {oid, state_json(s, oid, @whole)} end) end)
       |> Task.yield_many(Durations.get(:sdk_serialize_yield_ms))
-      |> Enum.flat_map(fn {task, result} ->
-        ship(handle, result || Task.shutdown(task, :brutal_kill))
+      |> Enum.map_reduce(Hold.bind(control, [handle]), fn {task, result}, hold ->
+        ship(hold, result || Task.shutdown(task, :brutal_kill))
       end)
-      |> Map.new()
 
-    await_acks(pending, System.monotonic_time(:millisecond) + ack_ms)
+    await_acks(
+      pending |> List.flatten() |> Map.new(),
+      System.monotonic_time(:millisecond) + ack_ms
+    )
   end
 
   # --- restore, compaction ---
@@ -427,36 +429,28 @@ defmodule Flezha.SDK.Commands do
 
   # --- shutdown ---
 
-  defp ship(handle, {:ok, {operative_id, {:ok, json, _seq}}}) do
+  # The operative's final state is what makes a reconnect-resume loss-free, so a
+  # refused write is held for the next bound stream, never printed and dropped.
+  # Only what reached the wire is waited on: an ack cannot answer a held frame.
+  defp ship(hold, {:ok, {operative_id, {:ok, json, _seq}}}) do
     ref = "shutdown-#{operative_id}-#{System.unique_integer([:positive])}"
     command = Codec.shutdown_notification_command(operative_id, json)
+    frame = Codec.encode_request(ref, command)
 
-    case Flezha.Transport.Stream.send_frame(
-           handle,
-           "control_command",
-           Codec.encode_request(ref, command),
-           %{}
-         ) do
-      :ok ->
-        [{ref, operative_id}]
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Flezha.SDK] RunnerShutdownNotification for #{operative_id} not written: #{inspect(reason)}"
-        )
-
-        []
+    case Hold.write({"control_command", elem(command, 0)}, hold, {frame, %{}}) do
+      {:ok, hold} -> {[{ref, operative_id}], hold}
+      {{:held, _reason}, hold} -> {[], hold}
     end
   end
 
-  defp ship(_handle, {:ok, {operative_id, {:error, reason}}}) do
+  defp ship(hold, {:ok, {operative_id, {:error, reason}}}) do
     Logger.warning("[Flezha.SDK] shutdown could not serialize #{operative_id}: #{reason}")
-    []
+    {[], hold}
   end
 
-  defp ship(_handle, other) do
+  defp ship(hold, other) do
     Logger.warning("[Flezha.SDK] shutdown serialize did not answer: #{inspect(other)}")
-    []
+    {[], hold}
   end
 
   defp await_acks(pending, _deadline) when map_size(pending) == 0, do: :ok

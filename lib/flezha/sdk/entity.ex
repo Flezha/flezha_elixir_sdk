@@ -203,6 +203,8 @@ defmodule Flezha.SDK.Entity do
     slots = Keyword.get(opts, :slots)
     slot = Records.seed(slots, identity, module, entity_key)
     operative = Keyword.fetch!(opts, :operative)
+    counters = Keyword.fetch!(opts, :counters)
+    credit = Keyword.get(opts, :credit)
     Process.monitor(operative)
 
     state = %State{
@@ -217,11 +219,11 @@ defmodule Flezha.SDK.Entity do
       policy: Keyword.fetch!(opts, :policy),
       retry_max: Keyword.fetch!(opts, :retry_max),
       retry_backoff_ms: Keyword.fetch!(opts, :retry_backoff_ms),
-      counters: Keyword.fetch!(opts, :counters),
+      counters: counters,
       identity: identity,
       park: %{%State{}.park | enabled?: Keyword.get(opts, :park_on_exhaustion, true)},
       slots: slots,
-      credit: Keyword.get(opts, :credit),
+      credit: credit,
       # The static ctx facts: the node's, from the Operative, and the timer
       # policy this procedure declares.
       ctx_opts:
@@ -234,7 +236,7 @@ defmodule Flezha.SDK.Entity do
       proc_state: slot.state,
       change_seq: slot.seq,
       last_input_ms: now_ms(),
-      stream: %{%State{}.stream | held: Hold.new()}
+      stream: Hold.new(counters: counters, credit: credit)
     }
 
     state = seed_tier(state, slot)
@@ -285,10 +287,12 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
+  # The refused snapshot answers with the state too: the frame it held lives
+  # there, and replying with the state from before the write would drop it.
   def handle_call(:snapshot, _from, %State{} = s) do
     case Records.snapshot(s) do
       {:ok, s, seq, size} -> {:reply, {:ok, seq, size}, s}
-      {:error, reason} -> {:reply, {:error, reason}, s}
+      {:error, s, reason} -> {:reply, {:error, reason}, s}
     end
   end
 

@@ -39,8 +39,7 @@ defmodule Flezha.SDK.Operative do
     Knob,
     Park,
     Procedure,
-    Topology,
-    Transport
+    Topology
   }
 
   alias Flezha.SDK.Operative.{Inbox, Routing}
@@ -127,9 +126,9 @@ defmodule Flezha.SDK.Operative do
       # on, and the keys a sweep evicted: one structure, three holds. The
       # handoff cannot share `held`: it arrives after outputs it has to
       # precede, and one FIFO cannot say that.
-      held: Hold.new(),
-      handed: Hold.new(),
-      evicted: Hold.new(@evicted_trace_cap)
+      held: Hold.new(counters: Keyword.fetch!(opts, :counters)),
+      handed: Hold.new(counters: Keyword.fetch!(opts, :counters)),
+      evicted: Hold.new(cap: @evicted_trace_cap)
     }
 
     {:ok, state |> prewarm() |> schedule_reap()}
@@ -309,10 +308,11 @@ defmodule Flezha.SDK.Operative do
   # write to the wire. What a stopped Entity handed on goes ahead of both: its
   # delete has to reach the controller before a replacement's first record.
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    s = replay_handed(%{s | secondaries: secondaries})
+    s = %{s | secondaries: secondaries}
+    s = %{s | handed: s |> wire(s.handed) |> Hold.replay()}
     for {_ref, keyed} <- s.entities, {_key, pid} <- keyed, do: Entity.rebind(pid, secondaries)
 
-    {:noreply, replay_held(s)}
+    {:noreply, %{s | held: s |> wire(s.held) |> Hold.replay()}}
   end
 
   # An Entity that stopped in an orderly way hands on what no stream would
@@ -320,11 +320,12 @@ defmodule Flezha.SDK.Operative do
   # with the process that owned it is not a hold, and this process outlives it.
   def handle_info({:handed, identity, frames}, %State{} = s) do
     handed =
-      Enum.reduce(frames, s.handed, fn {payload_id, frame}, acc ->
-        Hold.keep(acc, {identity, payload_id, frame}, s.counters)
+      Enum.reduce(frames, wire(s, s.handed), fn {key, body, meta}, acc ->
+        {_verdict, acc} = Hold.write(key, acc, {body, meta, identity})
+        acc
       end)
 
-    {:noreply, replay_handed(%{s | handed: handed})}
+    {:noreply, %{s | handed: handed}}
   end
 
   # The sweep runs here, so no push is routed while it runs: the drain gate.
@@ -677,69 +678,18 @@ defmodule Flezha.SDK.Operative do
   # An output no stream will take is held for the next bound one rather than
   # lost: the caller cannot learn of a send-side loss, so nothing here may
   # discard a frame in silence.
-  defp emit_output(%State{secondaries: []} = s, meta, bytes), do: hold_output(s, meta, bytes)
-
-  defp emit_output(%State{secondaries: secondaries, operative_id: oid} = s, meta, bytes) do
-    handle = Transport.secondary_for(secondaries, oid)
-
-    case Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta) do
-      :ok ->
-        s
-
-      # A client stream signals congestion by withholding its write's reply, so
-      # the buffer never turns a frame away here; what does reach this arm is a
-      # transport that is gone. The runner's close detection reconnects, and the
-      # rebind replays what was held.
-      {:error, reason} ->
-        Logger.warning(
-          "[operative] output frame held for rebind operative=#{oid} " <>
-            "channel=#{inspect(meta["channel"])} reason=#{inspect(reason)}"
-        )
-
-        hold_output(s, meta, bytes)
-    end
+  # A client stream signals congestion by withholding its write's reply, so the
+  # buffer never turns a frame away here; what does reach the class's held arm
+  # is a transport that is gone. The runner's close detection reconnects, and
+  # the rebind replays what was held.
+  defp emit_output(%State{operative_id: oid} = s, meta, bytes) do
+    {_verdict, held} = Hold.write({:output, oid}, wire(s, s.held), {bytes, meta})
+    %{s | held: held}
   end
 
-  defp hold_output(%State{held: held} = s, meta, bytes),
-    do: %{s | held: Hold.keep(held, {meta, bytes}, s.counters)}
-
-  # A bound stream is what a held output was waiting for. Replay is in
-  # production order, and one that fails again re-enters the hold behind the
-  # rest — the same posture the FFI hosts' reconnect ring takes.
-  #
-  # It runs AFTER every Entity has rebound, and that is what keeps a dispatch's
-  # records ahead of its output across a replay: the records are held in the
-  # Entity, the output here, and `Entity.rebind/2` returns only once that
-  # Entity's own hold is on the stream.
-  defp replay_held(%State{secondaries: []} = s), do: s
-
-  defp replay_held(%State{} = s) do
-    {items, empty} = Hold.drain(s.held)
-
-    Enum.reduce(items, %{s | held: empty}, fn {meta, bytes}, acc ->
-      emit_output(acc, meta, bytes)
-    end)
-  end
-
-  # The frames of Entities that are gone, on the stream each one's identity
-  # chooses — the stream that Entity wrote to and its replacement will bind to,
-  # so the order between the two is the wire's own. One that fails again
-  # re-enters the hold behind the rest, as every replay on this wire does.
-  defp replay_handed(%State{secondaries: []} = s), do: s
-
-  defp replay_handed(%State{} = s) do
-    {items, empty} = Hold.drain(s.handed)
-    Enum.reduce(items, %{s | handed: empty}, &write_handed(&2, &1))
-  end
-
-  defp write_handed(%State{secondaries: secondaries} = s, {identity, payload_id, frame} = item) do
-    handle = Transport.secondary_for(secondaries, identity)
-
-    case Flezha.Transport.Stream.send_frame(handle, payload_id, frame, %{}) do
-      :ok -> s
-      {:error, _reason} -> %{s | handed: Hold.keep(s.handed, item, s.counters)}
-    end
-  end
+  # The hold, on the streams bound right now. `secondaries` is the one source
+  # of truth for what is bound, so no hold can hold a stale stream.
+  defp wire(%State{secondaries: secondaries}, hold), do: Hold.bind(hold, secondaries)
 
   defp knob(topo, node_ref, key, default),
     do: get_in(topo.node_knobs, [node_ref, key]) || default

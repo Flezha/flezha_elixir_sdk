@@ -86,6 +86,7 @@ defmodule Flezha.SDK.RunnerServer do
       barriers: %{},
       idle: nil,
       held: nil,
+      control: nil,
       reconnect_attempt: 0,
       disconnecting?: false,
       stopped?: false
@@ -163,9 +164,12 @@ defmodule Flezha.SDK.RunnerServer do
       topologies: Keyword.fetch!(opts, :topologies),
       factories: factories,
       payload: handshake_payload(namespace, factories, stable_id),
-      # The workflow driver's writes that no stream would take: this process
-      # owns the wire they were meant for, so it is what keeps them.
-      held: Hold.new()
+      # One hold per wire this process writes to: the secondaries carry the
+      # workflow driver's writes, the parks and the heartbeat, the control
+      # channel carries the commands. A hold that dies with the wire it was
+      # meant for is not a hold, so both outlive every reconnect.
+      held: Hold.new(counters: counters),
+      control: Hold.new(counters: counters)
     }
   end
 
@@ -259,12 +263,16 @@ defmodule Flezha.SDK.RunnerServer do
       "pending_push_oldest_ms" => Integer.to_string(pending_oldest_ms)
     }
 
-    Enum.each(s.secondaries, fn h ->
-      Flezha.Transport.Stream.send_frame(h, "data_heartbeat", <<>>, meta)
-    end)
-
+    {verdict, held} = Hold.write("data_heartbeat", wire(s), {<<>>, meta})
+    s = %{s | held: held}
     schedule_heartbeat()
-    {:noreply, s}
+
+    # A heartbeat owes nobody delivery, so it is never held; a run of them that
+    # reached no bound secondary is the only signal an idle runner gives that
+    # its wire is gone, and the class answers it with the ladder.
+    if verdict == :reconnect,
+      do: reconnect(s, "no secondary took the data heartbeat"),
+      else: {:noreply, s}
   end
 
   def handle_info(:control_keepalive, %State{control_handle: nil} = s) do
@@ -273,7 +281,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   def handle_info(:control_keepalive, %State{} = s) do
-    Flezha.Transport.Stream.send_frame(s.control_handle, "control_ping", <<>>, %{})
+    Hold.write("control_ping", control(s), {<<>>, %{}})
     schedule_keepalive()
     {:noreply, s}
   end
@@ -286,7 +294,7 @@ defmodule Flezha.SDK.RunnerServer do
         {:noreply, s}
 
       %{identity: identity, body: body, resends: n} = park ->
-        send_park_frame(s, identity, body)
+        s = send_park_frame(s, identity, body)
 
         if rem(n + 1, @park_warn_every) == 0,
           do: Logger.warning("[Flezha.SDK] park #{park_id} unacked after #{n + 1} resends")
@@ -339,7 +347,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
-    send_park_frame(s, identity, body)
+    s = send_park_frame(s, identity, body)
 
     ref =
       Process.send_after(
@@ -356,8 +364,10 @@ defmodule Flezha.SDK.RunnerServer do
   # `RunnerDisconnect` — ships every operative's state before the connection
   # goes, so a reconnect-resume is loss-free.
   @impl true
-  def terminate(_reason, %State{} = s),
-    do: Commands.shutdown(s, Durations.get(:sdk_shutdown_ack_ms))
+  def terminate(_reason, %State{} = s) do
+    Commands.shutdown(s, Durations.get(:sdk_shutdown_ack_ms))
+    :ok
+  end
 
   # --- command dispatch ---
 
@@ -608,7 +618,8 @@ defmodule Flezha.SDK.RunnerServer do
         # What this process held goes out before the operatives are told the
         # wire is back, so a staged workflow output cannot be overtaken by the
         # frames a resumed operative writes.
-        s = replay_held(%{s | primaries: readers, secondaries: secondaries})
+        s = %{s | primaries: readers, secondaries: secondaries}
+        s = %{s | held: s |> wire() |> Hold.replay()}
 
         # Push the fresh secondaries to any operatives that survived a reconnect.
         Enum.each(s.operatives, fn {_oid, {pid, _f}} ->
@@ -634,42 +645,29 @@ defmodule Flezha.SDK.RunnerServer do
   # here, so a frame no stream will take is held here too and replayed on the
   # next bound one. Nothing about a write reaches the driver, so a drop here
   # would be a loss no caller could learn of.
-  defp ship_write(%State{secondaries: []} = s, write), do: hold_write(s, write)
+  defp ship_write(%State{} = s, {:emit_output, oid, meta, bytes}),
+    do: put_held(s, Hold.write({:output, oid}, wire(s), {bytes, meta}))
 
-  defp ship_write(%State{} = s, write) do
-    case write_frame(s, write) do
-      :ok -> s
-      {:error, _reason} -> hold_write(s, write)
-    end
-  end
-
-  defp write_frame(%State{secondaries: secondaries}, {:emit_output, oid, meta, bytes}) do
-    handle = Transport.secondary_for(secondaries, oid)
-    Flezha.Transport.Stream.send_frame(handle, oid, bytes, meta)
-  end
-
-  defp write_frame(%State{secondaries: secondaries}, {:record, payload_id, frame}),
-    do: Flezha.Transport.Stream.send_frame(Enum.at(secondaries, 0), payload_id, frame, %{})
-
-  defp hold_write(%State{held: held} = s, write),
-    do: %{s | held: Hold.keep(held, write, s.counters)}
-
-  # In the order the driver wrote them; one refused again re-enters the hold
-  # behind the rest, as every replay on this wire does.
-  defp replay_held(%State{held: held} = s) do
-    {items, empty} = Hold.drain(held)
-    Enum.reduce(items, %{s | held: empty}, &ship_write(&2, &1))
-  end
+  defp ship_write(%State{} = s, {:record, payload_id, frame}),
+    do: put_held(s, Hold.write(payload_id, wire(s), {frame, %{}}))
 
   # --- parking ---
 
-  defp send_park_frame(%State{secondaries: []}, _identity, _body), do: :ok
-
-  defp send_park_frame(%State{secondaries: secondaries}, identity, body) do
-    handle = Transport.secondary_for(secondaries, body.park_id)
+  # An unacked frame and an unwritten one are different facts: the class holds
+  # what the wire refused, and the resend ladder above answers what the wire
+  # took and nobody acted on.
+  defp send_park_frame(%State{} = s, identity, body) do
     frame = Park.frame(identity, 0, body)
-    Flezha.Transport.Stream.send_frame(handle, "park_payload", frame, %{})
+    put_held(s, Hold.write("park_payload", wire(s), {frame, %{}, body.park_id}))
   end
+
+  # The holds, on the streams bound right now. `secondaries` and
+  # `control_handle` stay the one source of truth for what is bound, so no
+  # hold can carry a stale stream across a reconnect.
+  defp wire(%State{} = s), do: Hold.bind(s.held, s.secondaries)
+  defp control(%State{} = s), do: Hold.bind(s.control, List.wrap(s.control_handle))
+
+  defp put_held(%State{} = s, {_verdict, held}), do: %{s | held: held}
 
   defp release_park(%State{} = s, park_id) do
     case Map.pop(s.parks, park_id) do
@@ -731,9 +729,12 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp ship_request(%State{control_handle: nil}, _ref, _command), do: :ok
 
+  # The frame's own `Command` variant is the second key its class is read from:
+  # a shutdown state ship is durable, every other variant a control frame.
   defp ship_request(%State{} = s, ref, command) do
     bin = Codec.encode_request(ref, command)
-    Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, %{})
+    {verdict, _hold} = Hold.write({"control_command", elem(command, 0)}, control(s), {bin, %{}})
+    verdict
   end
 
   defp reply_ok(s, ref) do
@@ -748,7 +749,8 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp reply(%State{} = s, ref, status, errors, raw, metadata) do
     bin = Codec.encode_response(ref, status, errors, raw)
-    Flezha.Transport.Stream.send_frame(s.control_handle, "control_command", bin, metadata)
+    {verdict, _hold} = Hold.write({"control_command", :response}, control(s), {bin, metadata})
+    verdict
   end
 
   # The idle process starts with the first registration and is linked here, so

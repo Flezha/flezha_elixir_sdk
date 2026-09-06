@@ -9,7 +9,7 @@ defmodule Flezha.SDK.Transport do
   Rust, Java or Node runner resolves, asked for rather than re-derived here.
   """
 
-  alias Flezha.SDK.Knob
+  alias Flezha.SDK.{Hold, Knob}
   alias Flezha.Transport.Local
   alias Flezha.Transport.Native
   alias Flezha.Transport.Server, as: TransportServer
@@ -103,16 +103,6 @@ defmodule Flezha.SDK.Transport do
     end)
   end
 
-  @doc """
-  Which of `secondaries` a key's frames go on. One stream per key, so every
-  writer of them picks the same one and their order on the wire is the order
-  they were written: an Entity and the Operative replaying what that Entity
-  handed on when it stopped agree by computing this, never by comparing notes.
-  """
-  @spec secondary_for([term(), ...], term()) :: term()
-  def secondary_for([_ | _] = secondaries, key),
-    do: Enum.at(secondaries, rem(:erlang.phash2(key), length(secondaries)))
-
   # --- helpers ---
 
   defp dial_pairs(count, dial) do
@@ -132,7 +122,11 @@ defmodule Flezha.SDK.Transport do
 
   defp send_handshake(handle, payload) do
     json = Jason.encode!(payload)
-    Flezha.Transport.Stream.send_frame(handle, "connect_control_channel", json, %{})
+
+    {verdict, _hold} =
+      Hold.write("connect_control_channel", Hold.new(streams: [handle]), {json, %{}})
+
+    verdict
   end
 
   # Each entry in turn; the accumulator carries the last failure so a list that

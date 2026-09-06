@@ -57,11 +57,11 @@ defmodule Flezha.SDK.Entity.State do
     schema_version: 1,
     change_seq: 0,
     last_input_ms: 0,
-    # One field again: the secondary this Entity writes its records to, chosen
-    # by identity, and the records no stream would take, kept for the next
-    # bound one. `held` is seeded in `Flezha.SDK.Entity.init/1`, because its
+    # This Entity's write seam: the secondary it writes its records to, chosen
+    # by identity, the records no stream would take, and the credit window they
+    # are debited against. Seeded in `Flezha.SDK.Entity.init/1`, because its
     # cap is read from the environment.
-    stream: %{handle: nil, held: nil},
+    stream: nil,
     proc_state: nil,
     queue: :queue.new(),
     size: 0,

@@ -16,6 +16,7 @@ defmodule Flezha.SDK.Entity.Tier do
   """
 
   alias Flezha.SDK.Entity.{Interval, Records, State}
+  alias Flezha.SDK.Hold
   alias Flezha.SDK.Operative.Routing
 
   # The end of a replayed slice, taken from the Entity's own queue in mailbox
@@ -56,7 +57,7 @@ defmodule Flezha.SDK.Entity.Tier do
       # stream there is nobody to ask, so it falls back to the behaviour of a
       # class that declared no window at all.
       :correctable ->
-        if s.stream.handle do
+        if Hold.bound?(s.stream) do
           Records.request_correction(s, event_time)
           :withhold
         else
