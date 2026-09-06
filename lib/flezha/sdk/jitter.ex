@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Jitter do
   @moduledoc """
   The heartbeat timer's interval jitter. A retry ladder's jitter is the backoff
-  table's one rule (`Flezha.Config.Backoff.jitter/2`); this is a cadence,
-  not a retry, and spreads over a different band.
+  table's own rule, applied where `Flezha.SDK.Knob` waits a ladder; this is a
+  cadence, not a retry, and spreads over a different band.
   """
 
   @doc "Uniform in `[value/2, value]` — the heartbeat interval jitter."

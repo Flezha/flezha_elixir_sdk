@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Entity.Records do
 
   require Logger
 
-  alias Flezha.SDK.{Hold, Record, Timers}
+  alias Flezha.SDK.{Counters, Hold, Record, Timers}
   alias Flezha.SDK.Entity.{Interval, State}
 
   @doc """
@@ -29,7 +29,14 @@ defmodule Flezha.SDK.Entity.Records do
         timers = %{s.timers | pending: restored.timers, high_water: restored.high_water}
         # The slice goes with the interval: a restore re-seats the Entity on a
         # past in which no buffered member was seen, and the controller
-        # re-forwards the slice from the rewound watermark.
+        # re-forwards the slice from the rewound watermark. What goes is
+        # counted, because a discard no runtime reports is a discard an
+        # operator cannot tell from an idle Entity.
+        Counters.add_restore_discarded_inputs(
+          s.counters,
+          Interval.inputs(s.tier.staged) + length(s.tier.slice)
+        )
+
         tier = %{
           s.tier
           | staged: Interval.clear(s.tier.staged),

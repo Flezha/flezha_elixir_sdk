@@ -57,6 +57,13 @@ defmodule Flezha.SDK.Entity.Interval do
 
   @type t :: %__MODULE__{}
 
+  @doc """
+  How many inputs the open interval has taken. A restore discards them whole,
+  and this is the count it reports.
+  """
+  @spec inputs(t()) :: non_neg_integer()
+  def inputs(%__MODULE__{inputs: n}), do: n
+
   @doc "Fold one invocation in; the record it ships, or nil when an open interval swallowed it."
   @spec fold(t(), policy() | nil, effects(), non_neg_integer()) :: {shipped() | nil, t()}
   def fold(%__MODULE__{} = staged, nil, effects, _now_ms) do

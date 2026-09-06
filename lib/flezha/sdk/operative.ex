@@ -27,9 +27,6 @@ defmodule Flezha.SDK.Operative do
   use GenServer
   require Logger
 
-  alias Flezha.Config.Durations
-  alias Flezha.Config.Backoff
-
   alias Flezha.SDK.{
     Counters,
     Entity,
@@ -158,7 +155,7 @@ defmodule Flezha.SDK.Operative do
     do:
       Knob.get(
         :reap_interval_ms,
-        ttl_ms |> div(4) |> min(Durations.get(:sdk_max_reap_interval_ms)) |> max(1)
+        ttl_ms |> div(4) |> min(Knob.get(:sdk_max_reap_interval_ms)) |> max(1)
       )
 
   @impl true
@@ -364,7 +361,7 @@ defmodule Flezha.SDK.Operative do
         {acc, 0}
 
       {key, pid}, {acc, left} ->
-        if Entity.idle_for?(pid, ttl_ms, Durations.get(:sdk_idle_probe_ms)) and
+        if Entity.idle_for?(pid, ttl_ms, Knob.get(:sdk_idle_probe_ms)) and
              Entity.evict(pid) == :evicted,
            do: {note_evicted(forget_entity(acc, node_ref, key), key), left - 1},
            else: {acc, left}
@@ -550,7 +547,7 @@ defmodule Flezha.SDK.Operative do
       capacity: Procedure.mailbox_capacity(module),
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
-      retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, Backoff.ladder(:sdk_retry).base),
+      retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, Knob.ladder(:sdk_retry).base),
       counters: s.counters,
       secondaries: s.secondaries,
       slots: s.slots,

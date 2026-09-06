@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Knob do
   @moduledoc """
-  The Elixir SDK's reader of the one names table.
+  The Elixir SDK's reader of the one names table, and of the ladders beside it.
 
   A runner is its own OS process, so it reads the environment rather than the
   controller's application env — but it reads the same rows: the variable a name
@@ -10,9 +10,17 @@ defmodule Flezha.SDK.Knob do
 
   A value that does not parse — a pool size of `"0"`, a flag spelled `"maybe"` —
   reads as the default, which is what every other SDK's reader answers too.
+
+  A wait before a retry is a declared row too, so the SDK's four ladders are
+  armed and waited from here rather than from arithmetic of its own. Both halves
+  live in one module because that is what the packaging boundary asks for: this
+  is the single SDK file that names the controller's configuration, so the hex
+  extraction swaps it and leaves the rest of the SDK alone
+  (`scripts/check-sdk-boundary.sh`).
   """
 
   alias Flezha.Config
+  alias Flezha.Config.Backoff
   alias Flezha.Config.Environment
   alias Flezha.Config.Keys
 
@@ -36,4 +44,20 @@ defmodule Flezha.SDK.Knob do
       _ -> fallback
     end
   end
+
+  @doc "The row `ladder` declares, for a site that takes one of its bounds as a default."
+  @spec ladder(Backoff.ladder()) :: Backoff.row()
+  defdelegate ladder(ladder), to: Backoff
+
+  @doc "The wait before `attempt` against `target`, announced — for a site that arms a timer."
+  @spec arm(Backoff.ladder(), pos_integer(), term(), keyword()) :: non_neg_integer()
+  defdelegate arm(ladder, attempt, target, opts \\ []), to: Backoff
+
+  @doc "`arm/4` and the sleep, for a site that retries in place."
+  @spec wait(Backoff.ladder(), pos_integer(), term(), keyword()) :: :ok
+  defdelegate wait(ladder, attempt, target, opts \\ []), to: Backoff
+
+  @doc "Announce that `target` succeeded on `ladder`; answers the attempt count a reset leaves."
+  @spec reset(Backoff.ladder(), term()) :: 0
+  defdelegate reset(ladder, target), to: Backoff
 end

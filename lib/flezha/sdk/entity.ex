@@ -39,8 +39,7 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.Config.Backoff
-  alias Flezha.SDK.{Counters, Ctx, Hold, Park, Procedure, Timers}
+  alias Flezha.SDK.{Counters, Ctx, Hold, Knob, Park, Procedure, Timers}
   alias Flezha.SDK.Entity.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
 
@@ -358,7 +357,7 @@ defmodule Flezha.SDK.Entity do
     Process.send_after(
       self(),
       {:timer_due, at},
-      Backoff.arm(:entity_wake_retry, 1, s.operative_id)
+      Knob.arm(:entity_wake_retry, 1, s.operative_id)
     )
 
     {:noreply, s}
@@ -720,7 +719,7 @@ defmodule Flezha.SDK.Entity do
       attempt: attempt
     })
 
-    Backoff.wait(:sdk_retry, attempt, s.operative_id, base: s.retry_backoff_ms)
+    Knob.wait(:sdk_retry, attempt, s.operative_id, base: s.retry_backoff_ms)
     run_ladder(s, value, attempt + 1)
   end
 

@@ -19,23 +19,18 @@ defmodule Flezha.SDK.Record do
   """
 
   alias Flezha.SDK.{Codec, Procedure, Timers}
+  alias Flezha.State.RecordFrame
   alias Flezha.State.Wire
 
-  # Allocated in `flz_core::header`, the table of record.
-  @format_id_etf 7
-  @format_id_timer_ops 3
-  @format_id_effect_record 2
-  @header_size 16
-  @lang_names %{
-    0 => "unspecified",
-    1 => "rust",
-    2 => "java",
-    3 => "elixir",
-    4 => "node",
-    5 => "ruby",
-    6 => "php",
-    7 => "python"
-  }
+  # Allocated in `flz_core::header` and mirrored once, in the frame seam.
+  @format_id_etf RecordFrame.format_id(:etf)
+  @format_id_timer_ops RecordFrame.format_id(:timer_ops)
+  @format_id_effect_record RecordFrame.format_id(:effect_record)
+
+  # A change log arrives as bytes shipped whole, never as a file an append may
+  # have torn, so a refusal names the payload rather than a path.
+  @change_log_name "change log"
+  @change_log {:payload, @change_log_name}
 
   @typedoc """
   What a restore rebuilt: the state, the pending timers, the highest input-log
@@ -62,15 +57,10 @@ defmodule Flezha.SDK.Record do
   @spec effect_record_format_id() :: pos_integer()
   def effect_record_format_id, do: @format_id_effect_record
 
-  @spec header_size() :: pos_integer()
-  def header_size, do: @header_size
-
   @doc "The header for `body`, stamped at `schema_version`: language, version, schema, format, zeros, crc."
   @spec header(binary(), pos_integer(), pos_integer()) :: <<_::128>>
-  def header(body, schema_version, format \\ @format_id_etf) when is_binary(body) do
-    <<Codec.sdk_lang(), sdk_version()::32-big, schema_version::32-big, format, 0, 0,
-      :erlang.crc32(body)::32-big>>
-  end
+  def header(body, schema_version, format \\ @format_id_etf) when is_binary(body),
+    do: RecordFrame.encode_header(Codec.sdk_lang(), sdk_version(), schema_version, format, body)
 
   @doc "`(major <<< 16) ||| (minor <<< 8) ||| patch`, each clamped at 255 — the core's own encoding."
   @spec sdk_version() :: non_neg_integer()
@@ -157,9 +147,9 @@ defmodule Flezha.SDK.Record do
 
     with {:ok, state, migrated} <-
            restore_snapshot(module, entity_key, snapshot_header, snapshot_bytes, versions),
-         acc = %{state: state, timers: Timers.new(), floor: -1, high_water: nil},
+         entity = %{state: state, timers: Timers.new(), floor: -1, high_water: nil},
          {:ok, restored, terminal, migrated} <-
-           walk(change_log_bytes, module, acc, 0, migrated, versions) do
+           walk(change_log_bytes, module, entity, migrated, versions) do
       {:ok, restored, max(terminal, terminal_hint), migrated}
     end
   rescue
@@ -186,7 +176,14 @@ defmodule Flezha.SDK.Record do
   @spec resolve(binary(), {pos_integer(), pos_integer()}) ::
           {:ok, decision() | {:timer_ops, decision()} | {:effect_record, decision()}}
           | {:error, String.t()}
-  def resolve(<<lang, _version::32, schema::32-big, format, _::16, _crc::32>>, {running, floor}) do
+  def resolve(header, versions) when is_binary(header) do
+    case RecordFrame.decode_header(header) do
+      {:ok, decoded} -> resolved(decoded, versions)
+      :error -> {:error, "malformed restoration header (truncated or invalid)"}
+    end
+  end
+
+  defp resolved(%{sdk_lang: lang, schema_version: schema, format_id: format}, {running, floor}) do
     # A floor above the running version reads the running version only.
     floor = min(floor, running)
 
@@ -214,9 +211,6 @@ defmodule Flezha.SDK.Record do
         decide(schema, running, floor)
     end
   end
-
-  def resolve(_short, _versions),
-    do: {:error, "malformed restoration header (truncated or invalid)"}
 
   defp decide(schema, running, floor) do
     cond do
@@ -259,25 +253,34 @@ defmodule Flezha.SDK.Record do
     end
   end
 
-  # One on-disk record: `[seq:64][len:32][header:16][body:len-16][crc32 over header <> body]`.
-  # A trailing fragment that is not a whole record ends the walk, as the
-  # controller's own reader ends it.
-  defp walk(<<seq::64-big, len::32-big, rest::binary>>, module, acc, terminal, migrated, versions)
-       when len >= @header_size and byte_size(rest) >= len + 4 do
-    body_len = len - @header_size
+  # The change log in the controller's on-disk framing: one walk, the frame
+  # seam's, so a record decoded here and the same record decoded from the WAL
+  # are the same record. A refusal ends the fold; a torn tail ends it quietly,
+  # as the controller's own reader ends it.
+  defp walk(bytes, module, entity, migrated, versions) do
+    acc = %{entity: entity, terminal: 0, migrated: migrated, error: nil}
 
-    <<header::binary-size(@header_size), body::binary-size(^body_len), crc::32-big, tail::binary>> =
-      rest
-
-    with :ok <- check_crc(header, body, crc, seq),
-         {:ok, resolved} <- resolve(header, versions),
-         {:ok, folded, decision} <- fold_record(body, resolved, module, acc) do
-      walk(tail, module, folded, max(terminal, seq), migrated or decision != :decode, versions)
+    case RecordFrame.fold_bytes(bytes, @change_log, acc, &fold_one(&1, &2, module, versions)) do
+      {:ok, %{error: nil} = acc} -> {:ok, acc.entity, acc.terminal, acc.migrated}
+      {:ok, %{error: error}} -> error
+      {:error, refusal} -> {:error, RecordFrame.refusal_message(@change_log_name, refusal)}
     end
   end
 
-  defp walk(_torn_or_empty, _module, folded, terminal, migrated, _versions),
-    do: {:ok, folded, terminal, migrated}
+  defp fold_one({seq, header, body, _raw}, acc, module, versions) do
+    with {:ok, resolved} <- resolve(header, versions),
+         {:ok, folded, decision} <- fold_record(body, resolved, module, acc.entity) do
+      {:cont,
+       %{
+         acc
+         | entity: folded,
+           terminal: max(acc.terminal, seq),
+           migrated: acc.migrated or decision != :decode
+       }}
+    else
+      {:error, _} = error -> {:halt, %{acc | error: error}}
+    end
+  end
 
   # A change into the state; timer ops into the pending set, never migrated.
   defp fold_record(body, {:timer_ops, decision}, _module, acc) do
@@ -326,12 +329,6 @@ defmodule Flezha.SDK.Record do
     end)
   end
 
-  defp check_crc(header, body, crc, seq) do
-    if :erlang.crc32(:erlang.crc32(header), body) == crc,
-      do: :ok,
-      else: {:error, "crc32 mismatch on change record (seq=#{seq})"}
-  end
-
   defp decode(bytes, :decode, _what, _module), do: decode_body(bytes)
 
   # The decoded term goes to the migration: the body codec is the language's
@@ -358,7 +355,7 @@ defmodule Flezha.SDK.Record do
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason), do: inspect(reason)
 
-  defp lang_name(lang), do: Map.get(@lang_names, lang, "unallocated")
+  defp lang_name(lang), do: RecordFrame.sdk_lang_name(lang)
 
   defp component(str) do
     case Integer.parse(str) do

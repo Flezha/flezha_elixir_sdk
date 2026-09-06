@@ -29,6 +29,13 @@ defmodule Flezha.SDK.Counters do
   for the controller's grant — so a runner parked on an exhausted window reads
   as parked beside a frozen `dispatches`, not wedged.
 
+  `restore_discarded_inputs` counts the input a restore threw away: an Entity
+  re-seats on a past in which nothing staged for the open checkpoint interval
+  was seen, so the interval's inputs and the buffered slice go with it. The
+  controller re-forwards them from the rewound watermark, which is why the
+  discard is a report and not a loss — and why a key that is silently absent
+  and a key reported as zero are different answers to an operator.
+
   `timers_armed` is the processing-time timers the runner's Entities hold on
   the BEAM's timer service — one per armed deadline, released on its firing,
   its disarm and the Entity's own end; an Entity killed untrappably releases
@@ -46,11 +53,13 @@ defmodule Flezha.SDK.Counters do
   @credit_parked 5
   @timers_fired 6
   @timers_armed 7
-  # Start-time slots follow the counters; adding a counter moves the base with
-  # it rather than leaving a second place to remember how many there are.
+  @restore_discarded_inputs 8
+  # The last counter, so the start-time slots that follow move with it rather
+  # than leaving a second place to remember how many counters there are.
+  @counters @restore_discarded_inputs
   @slots 64
-  @blocks [dispatch: @timers_armed, deferred: @timers_armed + @slots]
-  @size @timers_armed + 2 * @slots
+  @blocks [dispatch: @counters, deferred: @counters + @slots]
+  @size @counters + 2 * @slots
 
   @type t :: :atomics.atomics_ref()
   @typedoc "An Entity's identity, as the slot table hashes it."
@@ -67,6 +76,16 @@ defmodule Flezha.SDK.Counters do
 
   @spec dispatches(t()) :: non_neg_integer()
   def dispatches(ref), do: :atomics.get(ref, @dispatches)
+
+  @doc "Count `n` inputs a restore discarded; `0` is a no-op, not a write."
+  @spec add_restore_discarded_inputs(t(), non_neg_integer()) :: :ok
+  def add_restore_discarded_inputs(_ref, 0), do: :ok
+
+  def add_restore_discarded_inputs(ref, n) when n > 0,
+    do: :atomics.add(ref, @restore_discarded_inputs, n)
+
+  @spec restore_discarded_inputs(t()) :: non_neg_integer()
+  def restore_discarded_inputs(ref), do: :atomics.get(ref, @restore_discarded_inputs)
 
   @spec blocked_parks(t()) :: non_neg_integer()
   def blocked_parks(ref), do: :atomics.get(ref, @blocked_parks)

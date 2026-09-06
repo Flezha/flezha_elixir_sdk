@@ -18,9 +18,6 @@ defmodule Flezha.SDK.RunnerServer do
   use GenServer
   require Logger
 
-  alias Flezha.Config.Durations
-  alias Flezha.Config.Backoff
-
   alias Flezha.SDK.Knob
 
   alias Flezha.SDK.{
@@ -241,27 +238,7 @@ defmodule Flezha.SDK.RunnerServer do
   # --- liveness timers ---
 
   def handle_info(:data_heartbeat, %State{} = s) do
-    # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
-    # invisible to `dispatches` while the rest of the runner keeps completing.
-    {inflight, oldest_ms} = Counters.handout_liveness(s.counters)
-    # Backpressure that withholds work rather than shedding it: an Entity
-    # holding a push it has not queued yet holds no handout either, so
-    # `inflight` cannot see it.
-    {pending, pending_oldest_ms} = Counters.pending_push_liveness(s.counters)
-
-    meta = %{
-      "dispatches" => Integer.to_string(Counters.dispatches(s.counters)),
-      "blocked_parks" => Integer.to_string(Counters.blocked_parks(s.counters)),
-      "credit_parked" => Integer.to_string(Counters.credit_parked(s.counters)),
-      "timers_armed" => Integer.to_string(Counters.timers_armed(s.counters)),
-      "timers_fired" => Integer.to_string(Counters.timers_fired(s.counters)),
-      "drops_newest" => Integer.to_string(Counters.drops_newest(s.counters)),
-      "drops_oldest" => Integer.to_string(Counters.drops_oldest(s.counters)),
-      "inflight" => Integer.to_string(inflight),
-      "inflight_oldest_ms" => Integer.to_string(oldest_ms),
-      "pending_pushes" => Integer.to_string(pending),
-      "pending_push_oldest_ms" => Integer.to_string(pending_oldest_ms)
-    }
+    meta = heartbeat_metadata(s.counters)
 
     {verdict, held} = Hold.write("data_heartbeat", wire(s), {<<>>, meta})
     s = %{s | held: held}
@@ -303,7 +280,7 @@ defmodule Flezha.SDK.RunnerServer do
           Process.send_after(
             self(),
             {:park_resend, park_id},
-            Backoff.arm(:park_resend, n + 1, park_id)
+            Knob.arm(:park_resend, n + 1, park_id)
           )
 
         {:noreply, %{s | parks: Map.put(s.parks, park_id, %{park | resends: n + 1, timer: ref})}}
@@ -353,7 +330,7 @@ defmodule Flezha.SDK.RunnerServer do
       Process.send_after(
         self(),
         {:park_resend, body.park_id},
-        Backoff.arm(:park_resend, 1, body.park_id)
+        Knob.arm(:park_resend, 1, body.park_id)
       )
 
     park = %{entity: entity_pid, identity: identity, body: body, resends: 0, timer: ref}
@@ -365,11 +342,45 @@ defmodule Flezha.SDK.RunnerServer do
   # goes, so a reconnect-resume is loss-free.
   @impl true
   def terminate(_reason, %State{} = s) do
-    Commands.shutdown(s, Durations.get(:sdk_shutdown_ack_ms))
+    Commands.shutdown(s, Knob.get(:sdk_shutdown_ack_ms))
     :ok
   end
 
   # --- command dispatch ---
+
+  @doc """
+  The keys this runner's data heartbeat carries, and their values.
+
+  One function rather than a map built inside the timer clause, because the
+  cross-SDK gate has to be able to read the key set: a key the controller
+  mirrors and this SDK omits leaves an operator surface blank for one runtime
+  and correct for the other six.
+  """
+  @spec heartbeat_metadata(Counters.t()) :: %{String.t() => String.t()}
+  def heartbeat_metadata(counters) do
+    # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
+    # invisible to `dispatches` while the rest of the runner keeps completing.
+    {inflight, oldest_ms} = Counters.handout_liveness(counters)
+    # Backpressure that withholds work rather than shedding it: an Entity
+    # holding a push it has not queued yet holds no handout either, so
+    # `inflight` cannot see it.
+    {pending, pending_oldest_ms} = Counters.pending_push_liveness(counters)
+
+    %{
+      "dispatches" => Integer.to_string(Counters.dispatches(counters)),
+      "blocked_parks" => Integer.to_string(Counters.blocked_parks(counters)),
+      "credit_parked" => Integer.to_string(Counters.credit_parked(counters)),
+      "timers_armed" => Integer.to_string(Counters.timers_armed(counters)),
+      "timers_fired" => Integer.to_string(Counters.timers_fired(counters)),
+      "drops_newest" => Integer.to_string(Counters.drops_newest(counters)),
+      "drops_oldest" => Integer.to_string(Counters.drops_oldest(counters)),
+      "inflight" => Integer.to_string(inflight),
+      "inflight_oldest_ms" => Integer.to_string(oldest_ms),
+      "pending_pushes" => Integer.to_string(pending),
+      "pending_push_oldest_ms" => Integer.to_string(pending_oldest_ms),
+      "restore_discarded_inputs" => Integer.to_string(Counters.restore_discarded_inputs(counters))
+    }
+  end
 
   defp dispatch({:assign_runner_id, %{runner_id: rid}}, ref, s) do
     reply(s, ref, "success")
@@ -688,10 +699,10 @@ defmodule Flezha.SDK.RunnerServer do
     # The credit session died with the stream; the controller re-offers one.
     Credit.disarm(s.credit)
     s = teardown_streams(s)
-    Backoff.wait(:sdk_reconnect, n + 1, s.stable_id)
+    Knob.wait(:sdk_reconnect, n + 1, s.stable_id)
 
     case do_connect(%{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil}) do
-      {:ok, s} -> {:noreply, %{s | reconnect_attempt: Backoff.reset(:sdk_reconnect, s.stable_id)}}
+      {:ok, s} -> {:noreply, %{s | reconnect_attempt: Knob.reset(:sdk_reconnect, s.stable_id)}}
       {:error, r} -> reconnect(s, "retry: #{inspect(r)}")
     end
   end
@@ -779,5 +790,5 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp schedule_keepalive,
-    do: Process.send_after(self(), :control_keepalive, Durations.get(:control_keepalive_ms))
+    do: Process.send_after(self(), :control_keepalive, Knob.get(:control_keepalive_ms))
 end
