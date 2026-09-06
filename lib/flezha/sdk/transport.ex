@@ -153,8 +153,11 @@ defmodule Flezha.SDK.Transport do
     with {:ok, _dir, entries} <- resolve_connect(), do: {:ok, entries}
   end
 
+  # The name is `flz_transport`'s, reached through the NIF: this SDK is its own
+  # core and inherits nothing from `flz_core`, so it asks for the composition
+  # rather than repeating the controller's spelling of it.
   defp control_socket_path do
-    with {:ok, base} <- socket_base(), do: {:ok, base <> "/runner_control_channel.sock"}
+    with {:ok, base} <- socket_base(), do: Native.control_socket_path_in(base)
   end
 
   defp ca_cert_path, do: Knob.get(:ca_cert_path)
