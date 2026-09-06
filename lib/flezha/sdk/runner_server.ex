@@ -360,26 +360,31 @@ defmodule Flezha.SDK.RunnerServer do
   def heartbeat_metadata(counters) do
     # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
     # invisible to `dispatches` while the rest of the runner keeps completing.
-    {inflight, oldest_ms} = Counters.handout_liveness(counters)
-    # Backpressure that withholds work rather than shedding it: an Entity
-    # holding a push it has not queued yet holds no handout either, so
-    # `inflight` cannot see it.
-    {pending, pending_oldest_ms} = Counters.pending_push_liveness(counters)
+    # Backpressure that withholds work rather than shedding it comes from the
+    # second block — an Entity holding a push it has not queued yet holds no
+    # handout either, so `inflight` cannot see it. Both are scans rather than
+    # slots, which is why they are named here and the rest are not.
+    {inflight, inflight_oldest_ms} = Counters.handout_liveness(counters)
+    {pending_pushes, pending_push_oldest_ms} = Counters.pending_push_liveness(counters)
 
-    %{
-      "dispatches" => Integer.to_string(Counters.dispatches(counters)),
-      "blocked_parks" => Integer.to_string(Counters.blocked_parks(counters)),
-      "credit_parked" => Integer.to_string(Counters.credit_parked(counters)),
-      "timers_armed" => Integer.to_string(Counters.timers_armed(counters)),
-      "timers_fired" => Integer.to_string(Counters.timers_fired(counters)),
-      "drops_newest" => Integer.to_string(Counters.drops_newest(counters)),
-      "drops_oldest" => Integer.to_string(Counters.drops_oldest(counters)),
-      "inflight" => Integer.to_string(inflight),
-      "inflight_oldest_ms" => Integer.to_string(oldest_ms),
-      "pending_pushes" => Integer.to_string(pending),
-      "pending_push_oldest_ms" => Integer.to_string(pending_oldest_ms),
-      "restore_discarded_inputs" => Integer.to_string(Counters.restore_discarded_inputs(counters))
+    scanned = %{
+      "inflight" => inflight,
+      "inflight_oldest_ms" => inflight_oldest_ms,
+      "pending_pushes" => pending_pushes,
+      "pending_push_oldest_ms" => pending_push_oldest_ms
     }
+
+    # Walk the declared key list rather than restating it. Every
+    # other key is a counter slot of the same name, so a key added to the
+    # layout is carried here with no edit — which is what stops this runtime
+    # drifting a key behind the six that share `flz_core`'s builder.
+    Map.new(Knob.heartbeat_keys(), fn key ->
+      {key, Integer.to_string(Map.get_lazy(scanned, key, fn -> slot_value(counters, key) end))}
+    end)
+  end
+
+  defp slot_value(counters, key) do
+    Counters.counter_get(counters, String.to_existing_atom(key))
   end
 
   defp dispatch({:assign_runner_id, %{runner_id: rid}}, ref, s) do

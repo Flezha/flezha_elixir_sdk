@@ -22,6 +22,7 @@ defmodule Flezha.SDK.EntryInput do
 
     case :persistent_term.get(key, nil) do
       nil ->
+        # One cell, not a table: there is no second slot to number against.
         cell = :atomics.new(1, signed: false)
         :persistent_term.put(key, cell)
         cell

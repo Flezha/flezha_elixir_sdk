@@ -46,79 +46,86 @@ defmodule Flezha.SDK.Counters do
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
 
-  @dispatches 1
-  @blocked_parks 2
-  @drops_newest 3
-  @drops_oldest 4
-  @credit_parked 5
-  @timers_fired 6
-  @timers_armed 7
-  @restore_discarded_inputs 8
-  # The last counter, so the start-time slots that follow move with it rather
-  # than leaving a second place to remember how many counters there are.
-  @counters @restore_discarded_inputs
+  use Flezha.Process.Counters,
+    table: :counter,
+    backend: :atomics,
+    new_opts: [signed: false],
+    # Two blocks of start timestamps, addressed by an Entity's identity hash
+    # rather than by name. Their bases follow the counters, so adding a counter
+    # moves them rather than letting a new slot land inside one.
+    blocks: [dispatch: 64, deferred: 64],
+    slots: [
+      [name: :dispatches, kind: :count],
+      [name: :blocked_parks, kind: :count],
+      [name: :drops_newest, kind: :count],
+      [name: :drops_oldest, kind: :count],
+      [name: :credit_parked, kind: :count],
+      [name: :timers_fired, kind: :count],
+      # A gauge: timers currently armed, released on firing and disarm.
+      [name: :timers_armed, kind: :set],
+      [name: :restore_discarded_inputs, kind: :count]
+    ]
+
   @slots 64
-  @blocks [dispatch: @counters, deferred: @counters + @slots]
-  @size @counters + 2 * @slots
 
   @type t :: :atomics.atomics_ref()
   @typedoc "An Entity's identity, as the slot table hashes it."
   @type identity :: term()
 
   @spec new() :: t()
-  def new, do: :atomics.new(@size, signed: false)
+  def new, do: counter_new()
 
   @spec inc_dispatches(t()) :: :ok
-  def inc_dispatches(ref), do: :atomics.add(ref, @dispatches, 1)
+  def inc_dispatches(ref), do: counter_bump(ref, :dispatches)
 
   @spec inc_blocked_parks(t()) :: :ok
-  def inc_blocked_parks(ref), do: :atomics.add(ref, @blocked_parks, 1)
+  def inc_blocked_parks(ref), do: counter_bump(ref, :blocked_parks)
 
   @spec dispatches(t()) :: non_neg_integer()
-  def dispatches(ref), do: :atomics.get(ref, @dispatches)
+  def dispatches(ref), do: counter_get(ref, :dispatches)
 
   @doc "Count `n` inputs a restore discarded; `0` is a no-op, not a write."
   @spec add_restore_discarded_inputs(t(), non_neg_integer()) :: :ok
   def add_restore_discarded_inputs(_ref, 0), do: :ok
 
   def add_restore_discarded_inputs(ref, n) when n > 0,
-    do: :atomics.add(ref, @restore_discarded_inputs, n)
+    do: counter_add(ref, :restore_discarded_inputs, n)
 
   @spec restore_discarded_inputs(t()) :: non_neg_integer()
-  def restore_discarded_inputs(ref), do: :atomics.get(ref, @restore_discarded_inputs)
+  def restore_discarded_inputs(ref), do: counter_get(ref, :restore_discarded_inputs)
 
   @spec blocked_parks(t()) :: non_neg_integer()
-  def blocked_parks(ref), do: :atomics.get(ref, @blocked_parks)
+  def blocked_parks(ref), do: counter_get(ref, :blocked_parks)
 
   @spec inc_drops(t(), :drop_newest | :drop_oldest) :: :ok
-  def inc_drops(ref, :drop_newest), do: :atomics.add(ref, @drops_newest, 1)
-  def inc_drops(ref, :drop_oldest), do: :atomics.add(ref, @drops_oldest, 1)
+  def inc_drops(ref, :drop_newest), do: counter_bump(ref, :drops_newest)
+  def inc_drops(ref, :drop_oldest), do: counter_bump(ref, :drops_oldest)
 
   @spec drops_newest(t()) :: non_neg_integer()
-  def drops_newest(ref), do: :atomics.get(ref, @drops_newest)
+  def drops_newest(ref), do: counter_get(ref, :drops_newest)
 
   @spec drops_oldest(t()) :: non_neg_integer()
-  def drops_oldest(ref), do: :atomics.get(ref, @drops_oldest)
+  def drops_oldest(ref), do: counter_get(ref, :drops_oldest)
 
   @spec inc_credit_parked(t()) :: :ok
-  def inc_credit_parked(ref), do: :atomics.add(ref, @credit_parked, 1)
+  def inc_credit_parked(ref), do: counter_bump(ref, :credit_parked)
 
   @spec credit_parked(t()) :: non_neg_integer()
-  def credit_parked(ref), do: :atomics.get(ref, @credit_parked)
+  def credit_parked(ref), do: counter_get(ref, :credit_parked)
 
   @spec inc_timers_fired(t()) :: :ok
-  def inc_timers_fired(ref), do: :atomics.add(ref, @timers_fired, 1)
+  def inc_timers_fired(ref), do: counter_bump(ref, :timers_fired)
 
   @spec timers_fired(t()) :: non_neg_integer()
-  def timers_fired(ref), do: :atomics.get(ref, @timers_fired)
+  def timers_fired(ref), do: counter_get(ref, :timers_fired)
 
   @doc "Move the armed-timer gauge: one per processing-time timer armed, one less per firing or disarm."
   @spec add_timers_armed(t(), integer()) :: :ok
-  def add_timers_armed(ref, delta) when delta >= 0, do: :atomics.add(ref, @timers_armed, delta)
-  def add_timers_armed(ref, delta), do: :atomics.sub(ref, @timers_armed, -delta)
+  def add_timers_armed(ref, delta) when delta >= 0, do: counter_add(ref, :timers_armed, delta)
+  def add_timers_armed(ref, delta), do: counter_sub(ref, :timers_armed, -delta)
 
   @spec timers_armed(t()) :: non_neg_integer()
-  def timers_armed(ref), do: :atomics.get(ref, @timers_armed)
+  def timers_armed(ref), do: counter_get(ref, :timers_armed)
 
   @typedoc "Which block of start-time slots — one Entity may hold one of each."
   @type block :: :dispatch | :deferred
@@ -171,7 +178,7 @@ defmodule Flezha.SDK.Counters do
 
   defp liveness(ref, block) do
     now = now_ms()
-    base = Keyword.fetch!(@blocks, block)
+    base = counter_block_base(block)
 
     Enum.reduce(1..@slots, {0, 0}, fn i, {count, oldest} = idle ->
       case :atomics.get(ref, base + i) do
@@ -182,7 +189,7 @@ defmodule Flezha.SDK.Counters do
   end
 
   defp slot(block, identity),
-    do: Keyword.fetch!(@blocks, block) + 1 + :erlang.phash2(identity, @slots)
+    do: counter_block_base(block) + 1 + :erlang.phash2(identity, @slots)
 
   # Wall-clock ms: unsigned atomics cannot hold a monotonic reading, and `0` is
   # the free marker, which a wall-clock millisecond never is.

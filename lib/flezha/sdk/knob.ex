@@ -24,6 +24,19 @@ defmodule Flezha.SDK.Knob do
   alias Flezha.Config.Environment
   alias Flezha.Config.Keys
 
+  @doc """
+  The data heartbeat's key set, as the controller declares it.
+
+  A runner must send exactly the keys the controller mirrors, and that list is a
+  declared table like any other — every liveness row that names a `heartbeat:`.
+  It is read here for the same reason the configuration rows are: this is the
+  one SDK file that names the controller, so the hex extraction swaps it and the
+  rest of the SDK asks this module
+  (`scripts/check-sdk-boundary.sh`).
+  """
+  @spec heartbeat_keys() :: [String.t()]
+  defdelegate heartbeat_keys(), to: Flezha.Transport.LivenessCounters
+
   @doc "What this runner reads for `name`: its variable, else the row's default."
   @spec get(Keys.name()) :: term()
   def get(name), do: get(name, Config.default(name, :runner))

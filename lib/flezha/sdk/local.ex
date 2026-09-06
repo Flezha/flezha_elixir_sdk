@@ -45,8 +45,14 @@ defmodule Flezha.SDK.Local do
             "scale all need a controller."
 
   @counters_key {__MODULE__, :counters}
-  @notices 1
-  @unhandled 2
+
+  use Flezha.Process.Counters,
+    table: :counter,
+    slots: [
+      [name: :notices, kind: :count],
+      [name: :unhandled, kind: :count]
+    ]
+
   # Consecutive idle probes needed before a run is called settled: an Entity
   # between its dispatch and the emit that follows it is momentarily idle by
   # every probe, and the first probe of a run establishes the dispatch total
@@ -132,14 +138,14 @@ defmodule Flezha.SDK.Local do
 
   @doc "Non-durability notices emitted in this process; one per started run."
   @spec notices_emitted() :: non_neg_integer()
-  def notices_emitted, do: :counters.get(counters(), @notices)
+  def notices_emitted, do: counter_get(counters(), :notices)
 
   @doc """
   Values released on a sink no callback claimed. Each is reported as it happens;
   the count is what a run can assert on afterwards.
   """
   @spec unhandled_sink_outputs() :: non_neg_integer()
-  def unhandled_sink_outputs, do: :counters.get(counters(), @unhandled)
+  def unhandled_sink_outputs, do: counter_get(counters(), :unhandled)
 
   # --- server ---
 
@@ -163,7 +169,7 @@ defmodule Flezha.SDK.Local do
         credit: nil
       )
 
-    :counters.add(counters(), @notices, 1)
+    counter_bump(counters(), :notices)
     IO.puts(:stderr, @notice)
 
     {:ok,
@@ -231,7 +237,7 @@ defmodule Flezha.SDK.Local do
         fun.(%Output{channel: channel, payload: payload, metadata: metadata})
 
       :error ->
-        :counters.add(counters(), @unhandled, 1)
+        counter_bump(counters(), :unhandled)
 
         Logger.warning(
           "[flezha] local mode: a value was released on sink `#{channel}`, " <>
@@ -363,7 +369,7 @@ defmodule Flezha.SDK.Local do
   defp counters do
     case :persistent_term.get(@counters_key, nil) do
       nil ->
-        :persistent_term.put(@counters_key, :counters.new(2, [:atomics]))
+        :persistent_term.put(@counters_key, counter_new())
         :persistent_term.get(@counters_key)
 
       ref ->

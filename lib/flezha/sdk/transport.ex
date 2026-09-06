@@ -93,6 +93,8 @@ defmodule Flezha.SDK.Transport do
   end
 
   def connect_sockets(:quic, _runner_id, count, owner, conn) do
+    # A single cell holding the next payload index. One cell has no slot
+    # layout to declare, so it is not a `Flezha.Process.Counters` table.
     idx = :counters.new(1, [])
 
     dial_pairs(count, fn type ->
