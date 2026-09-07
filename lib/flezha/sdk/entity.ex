@@ -242,7 +242,7 @@ defmodule Flezha.SDK.Entity do
       proc_state: slot.state,
       change_seq: slot.seq,
       last_input_ms: now_ms(),
-      stream: Hold.new(counters: counters, credit: credit)
+      stream: Hold.new(cap: Keyword.get(opts, :hold_cap), counters: counters, credit: credit)
     }
 
     state = seed_tier(state, slot)

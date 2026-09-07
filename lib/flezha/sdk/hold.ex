@@ -118,8 +118,15 @@ defmodule Flezha.SDK.Hold do
     }
   end
 
-  # The reconnect hold's cap: `FLEZHA_RECONNECT_RING_CAPACITY`, else 1024.
-  defp cap, do: Knob.get(:reconnect_ring_capacity)
+  @doc """
+  The reconnect hold's declared cap: `FLEZHA_RECONNECT_RING_CAPACITY`, else 1024.
+
+  An owner of more than one hold reads it once and states it on each, so its
+  holds are bounded by one number instead of agreeing by accident: the
+  variable is process-wide and every construction reads it afresh.
+  """
+  @spec cap() :: pos_integer()
+  def cap, do: Knob.get(:reconnect_ring_capacity)
 
   @doc "The streams a write goes to; `[]` while nothing is bound."
   @spec bind(t(), [term()]) :: t()

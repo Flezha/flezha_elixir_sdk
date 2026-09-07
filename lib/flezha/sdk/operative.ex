@@ -63,6 +63,7 @@ defmodule Flezha.SDK.Operative do
       :topology,
       :range,
       :counters,
+      :hold_cap,
       :runner,
       :secondaries,
       :slots,
@@ -118,6 +119,11 @@ defmodule Flezha.SDK.Operative do
     Process.flag(:trap_exit, true)
 
     topology = Keyword.fetch!(opts, :topology)
+    counters = Keyword.fetch!(opts, :counters)
+    # The reconnect cap, resolved once: this Operative's holds and every
+    # Entity's are bounded by one number the caller can state, rather than by
+    # what the process-wide variable said at each separate construction.
+    hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
 
     state = %State{
       operative_id: Keyword.fetch!(opts, :operative_id),
@@ -126,7 +132,8 @@ defmodule Flezha.SDK.Operative do
       # starting this process, so the delivery path below is one atomic store.
       cells: Keyword.get_lazy(opts, :cells, fn -> EntryInput.cells_for(topology.entries) end),
       range: Keyword.fetch!(opts, :range),
-      counters: Keyword.fetch!(opts, :counters),
+      counters: counters,
+      hold_cap: hold_cap,
       runner: Keyword.fetch!(opts, :runner),
       secondaries: Keyword.fetch!(opts, :secondaries),
       credit: Keyword.get(opts, :credit),
@@ -138,8 +145,8 @@ defmodule Flezha.SDK.Operative do
       # on, and the keys a sweep evicted: one structure, three holds. The
       # handoff cannot share `held`: it arrives after outputs it has to
       # precede, and one FIFO cannot say that.
-      held: Hold.new(counters: Keyword.fetch!(opts, :counters)),
-      handed: Hold.new(counters: Keyword.fetch!(opts, :counters)),
+      held: Hold.new(cap: hold_cap, counters: counters),
+      handed: Hold.new(cap: hold_cap, counters: counters),
       evicted: Hold.new(cap: @evicted_trace_cap)
     }
 
@@ -564,6 +571,7 @@ defmodule Flezha.SDK.Operative do
       retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
       retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, Knob.ladder(:sdk_retry).base),
       counters: s.counters,
+      hold_cap: s.hold_cap,
       secondaries: s.secondaries,
       slots: s.slots,
       credit: s.credit,
