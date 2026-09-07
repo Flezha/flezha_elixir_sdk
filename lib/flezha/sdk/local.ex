@@ -33,10 +33,12 @@ defmodule Flezha.SDK.Local do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, KeyGroup, Operative, Topology, WorkflowOperative}
+  alias Flezha.SDK.{Call, Counters, KeyGroup, Operative, Topology, WorkflowOperative}
   alias Flezha.SDK.Operative.Inbox
   alias Flezha.Transport.Local.Stream, as: LocalStream
   alias Flezha.Transport.Stream, as: TransportStream
+
+  @silent "the local run did not answer"
 
   @notice "[flezha] LOCAL MODE: state is held in memory and NOTHING is durable — " <>
             "no write-ahead log, no snapshots, no dead-letter queue. Everything this run " <>
@@ -95,7 +97,7 @@ defmodule Flezha.SDK.Local do
   """
   @spec on_sink(pid(), String.t(), (Output.t() -> any())) :: :ok | {:error, String.t()}
   def on_sink(run, channel, fun) when is_function(fun, 1),
-    do: GenServer.call(run, {:on_sink, channel, fun})
+    do: Call.control(run, {:on_sink, channel, fun}, {:error, @silent})
 
   @doc """
   Feed one value to a declared entry channel — the bytes a controller would
@@ -103,7 +105,8 @@ defmodule Flezha.SDK.Local do
   Refuses a name the declaration does not carry as an entry.
   """
   @spec feed(pid(), String.t(), term()) :: :ok | {:error, String.t()}
-  def feed(run, channel, payload), do: GenServer.call(run, {:feed, channel, payload})
+  def feed(run, channel, payload),
+    do: Call.control(run, {:feed, channel, payload}, {:error, @silent})
 
   @doc """
   Block until every Entity has drained and nothing is in flight, or `budget_ms`
@@ -113,6 +116,7 @@ defmodule Flezha.SDK.Local do
   def run_until_idle(run, budget_ms) do
     case settle(run, System.monotonic_time(:millisecond) + budget_ms, {0, :unread}) do
       :ok -> :ok
+      {:working, nil} -> {:error, "the local run did not answer within #{budget_ms}ms"}
       {:working, id} -> {:error, "operative `#{id}` was still working after #{budget_ms}ms"}
     end
   end
@@ -128,9 +132,13 @@ defmodule Flezha.SDK.Local do
     :exit, _gone -> :ok
   end
 
-  @doc "The live operative, for a caller that wants to read its Entities."
-  @spec operative(pid()) :: pid()
-  def operative(run), do: GenServer.call(run, :operative)
+  @doc """
+  The live operative, for a caller that wants to read its Entities, or nil from
+  a run that will not answer.
+  """
+  @spec operative(pid()) :: pid() | nil
+  def operative(run), do: Call.control(run, :operative, nil)
+
 
   @doc "What every local run states before it does any work."
   @spec notice() :: String.t()
@@ -321,7 +329,10 @@ defmodule Flezha.SDK.Local do
   # --- quiescence ---
 
   defp settle(run, deadline, {seen, dispatched}) do
-    {state, id, now_dispatched} = GenServer.call(run, :status)
+    # A run that will not answer its own status is not idle, and it names no
+    # operative: the budget is what ends the wait either way.
+    {state, id, now_dispatched} = Call.control(run, :status, {:working, nil, :unread})
+
     seen = if state == :idle and now_dispatched == dispatched, do: seen + 1, else: 0
 
     cond do
@@ -347,11 +358,19 @@ defmodule Flezha.SDK.Local do
 
     handouts == 0 and deferred == 0 and
       Process.info(self(), :message_queue_len) == {:message_queue_len, 0} and
-      Enum.all?(entity_pids(s.op) ++ [s.stream.pid, s.op], &settled?/1)
+      settled_entities?(s)
   end
 
-  defp entity_pids(op) do
-    for {_procedure, _mode, keyed} <- Operative.entities(op), {_key, pid} <- keyed, do: pid
+  # A router that will not answer cannot be walked, so the run is not idle.
+  defp settled_entities?(%{op: op} = s) do
+    case Operative.entities(op) do
+      {:error, _busy} ->
+        false
+
+      nodes ->
+        pids = for {_procedure, _mode, keyed} <- nodes, {_key, pid} <- keyed, do: pid
+        Enum.all?(pids ++ [s.stream.pid, op], &settled?/1)
+    end
   end
 
   # A process is settled when it is parked in its own receive with nothing

@@ -18,13 +18,16 @@ defmodule Flezha.SDK.Commands do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Credit, Entity, Hold, Knob, Operative}
+  alias Flezha.SDK.{Call, Codec, Credit, Entity, Hold, Knob, Operative}
   alias Flezha.State.Wire
 
   # A serialise's wait for a mid-dispatch Entity, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
   @change_seq_key Wire.change_seq_key()
   @whole %{procedure: nil, entity_key: nil}
+  # One refusal, and each surface adds the prefix its siblings carry.
+  @router_silent "entity_busy: the operative did not answer"
+  @marker_silent "entity_busy: the operative did not take the compensation markers"
 
   @typedoc "How a command answers: status, errors, raw_data, the reply frame's metadata."
   @type respond :: (String.t(), [String.t()], binary(), map() -> any())
@@ -35,11 +38,19 @@ defmodule Flezha.SDK.Commands do
     off_loop(respond, fn ->
       case entity(s, cmd.entity_id, materialise: true) do
         {:ok, pid} ->
-          note_compensation(s, cmd)
-          restore(pid, cmd, respond)
+          case note_compensation(s, cmd) do
+            :ok -> restore(pid, cmd, respond)
+            {:error, reason} ->
+              respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
+          end
 
         {:error, :bad_entity_id} ->
           respond.("error", ["restore_init_state: malformed entity_id"], response(cmd, 0), %{})
+
+        # A router that did not answer is not an Entity that is not there: the
+        # ack below would tell the Controller its state was covered.
+        {:error, :operative_busy} ->
+          respond.("error", ["restore_init_state: " <> @router_silent], response(cmd, 0), %{})
 
         # No live Entity to rebuild: the controller's terminal covers what it
         # shipped, and the ack is what lets the bind proceed.
@@ -126,7 +137,8 @@ defmodule Flezha.SDK.Commands do
   def state_json(s, operative_id, selector) do
     with {:ok, op} <- operative(s, operative_id),
          :ok <- check_selector(selector),
-         {:ok, nodes} <- select_nodes(Operative.entities(op), operative_id, selector.procedure),
+         {:ok, all} <- nodes(op),
+         {:ok, nodes} <- select_nodes(all, operative_id, selector.procedure),
          {:ok, top, seqs} <- collect(op, nodes, selector.entity_key),
          {:ok, json} <- to_json(top) do
       {:ok, json, single(seqs)}
@@ -144,7 +156,7 @@ defmodule Flezha.SDK.Commands do
 
   def apply_json(op, operative_id, json) do
     case Jason.decode(json) do
-      {:ok, %{} = top} -> apply_top(Operative.entities(op), operative_id, top)
+      {:ok, %{} = top} -> with {:ok, nodes} <- nodes(op), do: apply_top(nodes, operative_id, top)
       {:ok, _other} -> {:error, "init_values: not a JSON object"}
       {:error, e} -> {:error, "init_values: #{Exception.message(e)}"}
     end
@@ -217,11 +229,14 @@ defmodule Flezha.SDK.Commands do
       # A call, not a cast: the driver decides whether to resume an unwind when
       # the last restore lands, and a marker racing that decision would let a
       # crash mid-rollback resume forward instead. Only a workflow class ever
-      # gets here — both flags are always false for a stream operative.
-      GenServer.call(op, {:compensation_markers, cmd.entity_id, intent, done})
+      # gets here — both flags are always false for a stream operative. A driver
+      # that will not take the markers fails the restore, so the Controller
+      # retries rather than resuming an unwind from a record that never landed.
+      Call.control(op, {:compensation_markers, cmd.entity_id, intent, done},
+        {:error, @marker_silent})
+    else
+      _unaddressable -> :ok
     end
-
-    :ok
   end
 
   defp response(cmd, terminal),
@@ -240,6 +255,16 @@ defmodule Flezha.SDK.Commands do
     case Map.get(operatives, operative_id) do
       {pid, _factory_id} -> {:ok, pid}
       nil -> {:error, "StreamOperative instance with id #{operative_id} not found"}
+    end
+  end
+
+  # The router's nodes, or its refusal in the words the Controller matches as a
+  # prefix. `[]` would be a lie: a walk that read it would report a live
+  # operative as empty.
+  defp nodes(op) do
+    case Operative.entities(op) do
+      {:error, :operative_busy} -> {:error, @router_silent}
+      nodes -> {:ok, nodes}
     end
   end
 

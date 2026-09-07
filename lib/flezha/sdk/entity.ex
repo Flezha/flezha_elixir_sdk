@@ -39,9 +39,12 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Counters, Ctx, Hold, Knob, Park, Procedure, Timers}
+  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Procedure, Timers}
   alias Flezha.SDK.Entity.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
+
+  # The live read's two verdicts. Every other refusal is `Flezha.SDK.Call`'s.
+  @read_verdict %{timeout: {:error, :busy}, other: {:error, :gone}}
 
   # A due timer: on the queue beside the inputs, dispatched through the same
   # ladder with `on_timer/4` in place of `run/3`.
@@ -91,7 +94,10 @@ defmodule Flezha.SDK.Entity do
   @doc "Start an Entity, unlinked: its Operative monitors it, and it monitors its Operative."
   def start(opts), do: GenServer.start(__MODULE__, opts)
 
-  @doc "Enqueue under `:drop_nothing` — the caller waits until there is room."
+  @doc """
+  Enqueue under `:drop_nothing` — the caller waits until there is room, with no
+  bound: the policy promises an input is never dropped and never refused.
+  """
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
 
   @doc "Run this Entity's `compensate/3` over the outputs it released."
@@ -110,36 +116,41 @@ defmodule Flezha.SDK.Entity do
   @doc "Release a held (parked) Entity after its `ParkPayloadAck`."
   def release_park(pid, park_id), do: send(pid, {:park_released, park_id})
 
-  @doc "Rebuild the state from a `RestoreInitState` payload; `{:ok, terminal_seq, migrated?}`."
+  @doc """
+  Rebuild from a `RestoreInitState` payload; `{:ok, terminal_seq, migrated?}`.
+  The fold grows with the change log, so it waits its own row.
+  """
   @spec restore(pid(), binary(), binary(), binary(), non_neg_integer()) ::
           {:ok, non_neg_integer(), boolean()} | {:error, String.t()}
-  def restore(pid, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint),
-    do:
-      GenServer.call(
-        pid,
-        {:restore, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint},
-        :infinity
-      )
+  def restore(pid, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint) do
+    request = {:restore, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint}
+    Call.entity(pid, request, timeout: Knob.get(:sdk_entity_restore_ms))
+  end
 
-  @doc "Ship the state as an `entity_state_snapshot`; `{:ok, snapshot_seq, body_size}`."
+  @doc """
+  Ship the state as an `entity_state_snapshot`; `{:ok, snapshot_seq, body_size}`.
+  Serialising grows with the state, so it waits inside the Controller's own
+  compaction bound.
+  """
   @spec snapshot(pid()) :: {:ok, non_neg_integer(), non_neg_integer()} | {:error, String.t()}
-  def snapshot(pid), do: GenServer.call(pid, :snapshot, :infinity)
+  def snapshot(pid), do: Call.entity(pid, :snapshot, timeout: Knob.get(:sdk_entity_snapshot_ms))
 
   @doc """
   The state and the seq it was read at; `{:error, :busy}` when a dispatch holds
   the Entity past `timeout` — the reference's serialize gate.
   """
   @spec read(pid(), timeout()) :: {:ok, term(), non_neg_integer()} | {:error, :busy | :gone}
-  def read(pid, timeout) do
-    GenServer.call(pid, :read, timeout)
-  catch
-    :exit, {:timeout, _} -> {:error, :busy}
-    :exit, _gone -> {:error, :gone}
-  end
+  # `log: false`: the walk names the Procedure and the key in a line of its own.
+  def read(pid, timeout),
+    do: Call.entity(pid, :read, timeout: timeout, log: false, on_error: @read_verdict)
 
-  @doc "Replace the state with a JSON object through the procedure's `state_from_json/1`."
+  @doc """
+  Replace the state with a JSON object through the procedure's
+  `state_from_json/1`, inside the Controller's own await for the reply.
+  """
   @spec apply_state(pid(), map()) :: :ok | {:error, String.t()}
-  def apply_state(pid, json), do: GenServer.call(pid, {:apply_state, json}, :infinity)
+  def apply_state(pid, json),
+    do: Call.entity(pid, {:apply_state, json}, timeout: Knob.get(:sdk_entity_apply_ms))
 
   @doc """
   Whether the Entity has been idle past `ttl_ms` holding no work at all — an
@@ -148,11 +159,10 @@ defmodule Flezha.SDK.Entity do
   inert to the caller.
   """
   @spec idle_for?(pid(), pos_integer(), timeout()) :: boolean()
-  def idle_for?(pid, ttl_ms, timeout) do
-    GenServer.call(pid, {:idle?, ttl_ms}, timeout)
-  catch
-    :exit, _ -> false
-  end
+  # `log: false`: the reaper probes every Entity on every sweep, so a probe that
+  # does not answer is routine.
+  def idle_for?(pid, ttl_ms, timeout),
+    do: Call.entity(pid, {:idle?, ttl_ms}, timeout: timeout, log: false, on_error: false)
 
   @doc """
   Evict an Entity the caller proved idle: it ships `delete_entity_state` when
@@ -160,12 +170,8 @@ defmodule Flezha.SDK.Entity do
   no stream would take goes to the Operative before the reply, so the caller
   knows the handoff is queued there by the time it sees `:evicted`.
   """
-  @spec evict(pid()) :: :evicted | :gone
-  def evict(pid) do
-    GenServer.call(pid, :evict, :infinity)
-  catch
-    :exit, _ -> :gone
-  end
+  @spec evict(pid()) :: :evicted | :busy | :gone
+  def evict(pid), do: Call.entity(pid, :evict, on_error: %{timeout: :busy, other: :gone})
 
   @doc """
   An Entity's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
@@ -181,13 +187,14 @@ defmodule Flezha.SDK.Entity do
   there was none. Synchronous on purpose: the caller replays this Entity's
   OUTPUTS after it returns, and a dispatch's records have to reach the wire
   first. A gone Entity has nothing to rebind and answers for itself.
+
+  Not bounded, and not by omission: giving up would let the caller replay this
+  Entity's outputs ahead of its own records, and both callers discard the answer
+  so there is no refusal for either to act on.
   """
   @spec rebind(pid(), [term()]) :: :ok
-  def rebind(pid, secondaries) do
-    GenServer.call(pid, {:rebind, secondaries}, :infinity)
-  catch
-    :exit, _gone -> :ok
-  end
+  def rebind(pid, secondaries),
+    do: Call.entity(pid, {:rebind, secondaries}, timeout: :infinity, log: false, on_error: :ok)
 
   # --- server ---
 

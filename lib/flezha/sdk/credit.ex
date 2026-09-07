@@ -18,7 +18,7 @@ defmodule Flezha.SDK.Credit do
 
   use GenServer
 
-  alias Flezha.SDK.Counters
+  alias Flezha.SDK.{Call, Counters}
 
   defstruct session: nil, available: 0, waiters: :queue.new(), counters: nil
 
@@ -41,6 +41,11 @@ defmodule Flezha.SDK.Credit do
   @doc """
   Debit `bytes`, parking until enough credit is available. `nil`, or a window
   that is gone, is a runner without one and returns at once.
+
+  Unbounded on purpose: the park IS the protocol. A sender that gave up on a
+  bound would either drop a durable record or ship it past a window the
+  Controller is metering, and the caller is this runner's own Entity, never a
+  process the host application supervises.
   """
   @spec acquire(GenServer.server() | nil, non_neg_integer()) :: :ok
   def acquire(nil, _bytes), do: :ok
@@ -51,9 +56,12 @@ defmodule Flezha.SDK.Credit do
     :exit, _gone -> :ok
   end
 
-  @doc "The adopted session, or nil."
+  @doc """
+  The adopted session, or nil — which is also what a window that will not
+  answer reports, because a session nobody can read is one nobody may debit.
+  """
   @spec session(GenServer.server()) :: String.t() | nil
-  def session(server), do: GenServer.call(server, :session)
+  def session(server), do: Call.control(server, :session, nil)
 
   # --- server ---
 

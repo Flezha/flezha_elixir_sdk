@@ -28,6 +28,7 @@ defmodule Flezha.SDK.Operative do
   require Logger
 
   alias Flezha.SDK.{
+    Call,
     Counters,
     Entity,
     EntryInput,
@@ -41,6 +42,8 @@ defmodule Flezha.SDK.Operative do
 
   alias Flezha.SDK.Operative.{Inbox, Routing}
 
+  # What a router that will not answer tells its caller.
+  @busy {:error, :operative_busy}
   @default_retry_max 3
   # What an entry input carries into routing: no metadata, no key, no Entity,
   # and the durable offset the controller stamped under the tier.
@@ -86,15 +89,27 @@ defmodule Flezha.SDK.Operative do
   """
   @spec lookup(GenServer.server(), String.t(), String.t() | nil, keyword()) ::
           {:ok, pid()}
-          | {:error, :procedure_not_found | :entity_not_found | :entity_evicted | :entity_capped}
+          | {:error,
+             :procedure_not_found
+             | :entity_not_found
+             | :entity_evicted
+             | :entity_capped
+             | :operative_busy}
   def lookup(pid, procedure, key, opts \\ []),
-    do: GenServer.call(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)})
+    do: Call.control(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)}, @busy)
 
-  @doc "Every node as `{procedure_name, mode, [{key, entity_pid}]}` — the live-read walk's input."
-  @spec entities(GenServer.server()) :: [
-          {String.t(), :single | :static | :dynamic, [{term(), pid()}]}
-        ]
-  def entities(pid), do: GenServer.call(pid, :entities)
+  @doc """
+  Every node as `{procedure_name, mode, [{key, entity_pid}]}` — the live-read
+  walk's input — or `{:error, :operative_busy}` from a router that will not
+  answer. The refusal is deliberately not an empty list: "no Entities" and "the
+  router did not say" are different facts, and a walk that confused them would
+  report a live operative as empty.
+  """
+  @spec entities(GenServer.server()) ::
+          [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
+          | {:error, :operative_busy}
+  def entities(pid), do: Call.control(pid, :entities, @busy)
+
 
   # --- server ---
 

@@ -21,6 +21,7 @@ defmodule Flezha.SDK.RunnerServer do
   alias Flezha.SDK.Knob
 
   alias Flezha.SDK.{
+    Call,
     Codec,
     Commands,
     Counters,
@@ -43,6 +44,8 @@ defmodule Flezha.SDK.RunnerServer do
   alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
+  # What a server that will not answer tells its caller.
+  @busy {:error, :runner_busy}
   @park_warn_every 5
   @persistence_commands [
     :restore_init_state,
@@ -97,13 +100,13 @@ defmodule Flezha.SDK.RunnerServer do
   def whereis, do: Process.whereis(@name)
 
   @doc "Post-start declared-set mutations (ships UpdateFactories)."
-  def define(server, module, topology), do: GenServer.call(server, {:define, module, topology})
-  def remove(server, module), do: GenServer.call(server, {:remove, module})
-  def namespace(server), do: GenServer.call(server, :namespace)
+  def define(server, module, topology), do: Call.control(server, {:define, module, topology}, @busy)
+  def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
+  def namespace(server), do: Call.control(server, :namespace, nil)
 
   @doc "Register an idle observer on the live runner (see `Flezha.SDK.on_entry_idle/4`)."
   def on_entry_idle(server, channel, threshold_ms, observer),
-    do: GenServer.call(server, {:on_entry_idle, channel, threshold_ms, observer})
+    do: Call.control(server, {:on_entry_idle, channel, threshold_ms, observer}, @busy)
 
   # --- server ---
 
@@ -121,7 +124,8 @@ defmodule Flezha.SDK.RunnerServer do
         {:ok,
          Enum.reduce(Keyword.get(opts, :idle_observers, []), state, fn
            {channel, threshold_ms, observer}, acc ->
-             register_idle(acc, channel, threshold_ms, observer)
+             {:ok, acc} = register_idle(acc, channel, threshold_ms, observer)
+             acc
          end)}
 
       {:error, reason} ->
@@ -213,8 +217,10 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_call(:namespace, _from, %State{} = s), do: {:reply, s.namespace, s}
 
-  def handle_call({:on_entry_idle, channel, threshold_ms, observer}, _from, %State{} = s),
-    do: {:reply, :ok, register_idle(s, channel, threshold_ms, observer)}
+  def handle_call({:on_entry_idle, channel, threshold_ms, observer}, _from, %State{} = s) do
+    {reply, s} = register_idle(s, channel, threshold_ms, observer)
+    {:reply, reply, s}
+  end
 
   # --- control commands ---
 
@@ -772,20 +778,13 @@ defmodule Flezha.SDK.RunnerServer do
   # The idle process starts with the first registration and is linked here, so
   # it ends with the runner. Interning happens in this process, one at a time.
   defp register_idle(%State{} = s, channel, threshold_ms, observer) do
-    s =
-      case s.idle do
-        nil ->
-          {:ok, pid} = EntryIdle.start_link()
-          %{s | idle: pid}
+    s = if s.idle, do: s, else: %{s | idle: start_idle()}
+    {EntryIdle.register(s.idle, channel, EntryInput.cell_for(channel), threshold_ms, observer), s}
+  end
 
-        _pid ->
-          s
-      end
-
-    :ok =
-      EntryIdle.register(s.idle, channel, EntryInput.cell_for(channel), threshold_ms, observer)
-
-    s
+  defp start_idle do
+    {:ok, pid} = EntryIdle.start_link()
+    pid
   end
 
   defp schedule_heartbeat do

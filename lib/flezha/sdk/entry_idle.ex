@@ -20,7 +20,7 @@ defmodule Flezha.SDK.EntryIdle do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{EntryInput, Knob}
+  alias Flezha.SDK.{Call, EntryInput, Knob}
 
   defmodule Watch do
     @moduledoc false
@@ -37,11 +37,21 @@ defmodule Flezha.SDK.EntryIdle do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Register `observer` against `channel`; `cell` is the channel's interned cell."
+  @doc """
+  Register `observer` against `channel`; `cell` is the channel's interned cell.
+
+  A watcher that will not answer is `{:error, :idle_watcher_busy}`: nothing was
+  registered, and the caller learns that instead of inheriting an exit.
+  """
   @spec register(GenServer.server(), String.t(), EntryInput.cell(), pos_integer(), observer()) ::
-          :ok
+          :ok | {:error, :idle_watcher_busy}
   def register(server, channel, cell, threshold_ms, observer),
-    do: GenServer.call(server, {:register, watch(channel, cell, threshold_ms, observer)})
+    do:
+      Call.control(
+        server,
+        {:register, watch(channel, cell, threshold_ms, observer)},
+        {:error, :idle_watcher_busy}
+      )
 
   @doc "A watch over `cell`, armed."
   @spec watch(String.t(), EntryInput.cell(), pos_integer(), observer()) :: Watch.t()
