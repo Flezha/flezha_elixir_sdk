@@ -18,8 +18,6 @@ defmodule Flezha.SDK.RunnerServer do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.Knob
-
   alias Flezha.SDK.{
     Call,
     Codec,
@@ -33,6 +31,7 @@ defmodule Flezha.SDK.RunnerServer do
     Hold,
     Jitter,
     KeyGroup,
+    Knob,
     Operative,
     Park,
     PersistentId,
@@ -395,9 +394,14 @@ defmodule Flezha.SDK.RunnerServer do
     Counters.counter_get(counters, String.to_existing_atom(key))
   end
 
-  defp dispatch({:assign_runner_id, %{runner_id: rid}}, ref, s) do
+  # Written only once the controller has admitted the runner, and on no
+  # refusal, so it is the reconnect ladder's one reset — announced only where
+  # an attempt was spent. An admitted session dropped at once resets every
+  # cycle, so that loop is unthrottled: a bind is not the cheap refusal below.
+  defp dispatch({:assign_runner_id, %{runner_id: rid}}, ref, %State{} = s) do
     reply(s, ref, "success")
-    {:noreply, %{s | session_token: rid}}
+    n = if s.reconnect_attempt > 0, do: Knob.reset(:sdk_reconnect, s.stable_id), else: 0
+    {:noreply, %{s | session_token: rid, reconnect_attempt: n}}
   end
 
   defp dispatch({:connect_socket, %{sockets_count: n}}, ref, s) do
@@ -707,15 +711,19 @@ defmodule Flezha.SDK.RunnerServer do
 
   # --- reconnect ---
 
+  # The rung outlives the attempt; only the controller's admission resets it
+  # (`dispatch/3`). Reaching the connect is not success — a namespace this
+  # controller does not run is answered by closing the session.
   defp reconnect(%State{reconnect_attempt: n} = s, reason) do
     Logger.warning("[Flezha.SDK] connection lost (#{reason}); reconnecting (attempt #{n + 1})")
     # The credit session died with the stream; the controller re-offers one.
     Credit.disarm(s.credit)
     s = teardown_streams(s)
     Knob.wait(:sdk_reconnect, n + 1, s.stable_id)
+    s = %{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil}
 
-    case do_connect(%{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil}) do
-      {:ok, s} -> {:noreply, %{s | reconnect_attempt: Knob.reset(:sdk_reconnect, s.stable_id)}}
+    case do_connect(s) do
+      {:ok, s} -> {:noreply, s}
       {:error, r} -> reconnect(s, "retry: #{inspect(r)}")
     end
   end
@@ -723,12 +731,8 @@ defmodule Flezha.SDK.RunnerServer do
   # --- connect + helpers ---
 
   defp do_connect(%State{} = s) do
-    case Transport.connect(s.transport, s.payload, self()) do
-      {:ok, control_handle, conn} ->
-        {:ok, %{s | control_handle: control_handle, conn: conn, reconnect_attempt: 0}}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, handle, conn} <- Transport.connect(s.transport, s.payload, self()) do
+      {:ok, %{s | control_handle: handle, conn: conn}}
     end
   end
 
