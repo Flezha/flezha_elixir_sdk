@@ -111,7 +111,7 @@ defmodule Flezha.SDK.Hold do
   def new(opts \\ []) do
     %__MODULE__{
       queue: :queue.new(),
-      cap: Keyword.get(opts, :cap) || cap(),
+      cap: declared_cap(Keyword.get(opts, :cap)),
       counters: Keyword.get(opts, :counters),
       credit: Keyword.get(opts, :credit),
       streams: Keyword.get(opts, :streams, [])
@@ -219,6 +219,14 @@ defmodule Flezha.SDK.Hold do
   @doc "Whether `item` is still remembered."
   @spec member?(t(), term()) :: boolean()
   def member?(%__MODULE__{queue: queue}, item), do: :queue.member(item, queue)
+
+  # A cap is a positive integer or it is not a cap. The variable path
+  # refuses a non-positive `FLEZHA_RECONNECT_RING_CAPACITY` and falls back
+  # to the declared default; a caller's `0` is truthy in Elixir, so the
+  # same fallback has to be said here. A cap of zero would make `push/2`
+  # drop from an empty queue and raise on the first frame the wire refused.
+  defp declared_cap(cap) when is_integer(cap) and cap > 0, do: cap
+  defp declared_cap(_), do: cap()
 
   # --- the classes ---
 
