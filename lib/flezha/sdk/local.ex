@@ -139,7 +139,6 @@ defmodule Flezha.SDK.Local do
   @spec operative(pid()) :: pid() | nil
   def operative(run), do: Call.control(run, :operative, nil)
 
-
   @doc "What every local run states before it does any work."
   @spec notice() :: String.t()
   def notice, do: @notice

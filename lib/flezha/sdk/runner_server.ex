@@ -100,7 +100,9 @@ defmodule Flezha.SDK.RunnerServer do
   def whereis, do: Process.whereis(@name)
 
   @doc "Post-start declared-set mutations (ships UpdateFactories)."
-  def define(server, module, topology), do: Call.control(server, {:define, module, topology}, @busy)
+  def define(server, module, topology),
+    do: Call.control(server, {:define, module, topology}, @busy)
+
   def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
   def namespace(server), do: Call.control(server, :namespace, nil)
 

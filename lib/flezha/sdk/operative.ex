@@ -97,7 +97,8 @@ defmodule Flezha.SDK.Operative do
              | :entity_capped
              | :operative_busy}
   def lookup(pid, procedure, key, opts \\ []),
-    do: Call.control(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)}, @busy)
+    do:
+      Call.control(pid, {:lookup, procedure, key, Keyword.get(opts, :materialise, false)}, @busy)
 
   @doc """
   Every node as `{procedure_name, mode, [{key, entity_pid}]}` — the live-read
@@ -110,7 +111,6 @@ defmodule Flezha.SDK.Operative do
           [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
           | {:error, :operative_busy}
   def entities(pid), do: Call.control(pid, :entities, @busy)
-
 
   # --- server ---
 

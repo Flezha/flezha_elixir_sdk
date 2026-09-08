@@ -39,7 +39,9 @@ defmodule Flezha.SDK.Commands do
       case entity(s, cmd.entity_id, materialise: true) do
         {:ok, pid} ->
           case note_compensation(s, cmd) do
-            :ok -> restore(pid, cmd, respond)
+            :ok ->
+              restore(pid, cmd, respond)
+
             {:error, reason} ->
               respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
           end
@@ -232,8 +234,11 @@ defmodule Flezha.SDK.Commands do
       # gets here — both flags are always false for a stream operative. A driver
       # that will not take the markers fails the restore, so the Controller
       # retries rather than resuming an unwind from a record that never landed.
-      Call.control(op, {:compensation_markers, cmd.entity_id, intent, done},
-        {:error, @marker_silent})
+      Call.control(
+        op,
+        {:compensation_markers, cmd.entity_id, intent, done},
+        {:error, @marker_silent}
+      )
     else
       _unaddressable -> :ok
     end
