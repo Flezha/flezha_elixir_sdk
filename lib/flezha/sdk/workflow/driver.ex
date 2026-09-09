@@ -17,7 +17,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   This one is event-driven, because a blocked BEAM process cannot answer the
   stop, the inbox push or the restore that must reach it while a stage is in
   flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from an
-  Entity's queue barrier, and `{:barrier_ack, ref, error}` from the runner.
+  Entity's queue barrier, and `{:barrier_ack, ref, result, error}` from the runner.
   """
 
   use GenServer
@@ -263,10 +263,10 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  def handle_info({:barrier_ack, ref, error}, %State{barrier: %{ref: ref}} = s),
+  def handle_info({:barrier_ack, ref, _result, error}, %State{barrier: %{ref: ref}} = s),
     do: settle(barrier_settled(s, error))
 
-  def handle_info({:barrier_ack, _stale, _error}, %State{} = s), do: {:noreply, s}
+  def handle_info({:barrier_ack, _stale, _result, _error}, %State{} = s), do: {:noreply, s}
 
   def handle_info({:sugar_done, outcome}, %State{} = s), do: settle(sugar_finished(s, outcome))
 

@@ -169,16 +169,27 @@ defmodule Flezha.SDK do
     end
   end
 
+  @doc """
+  The live runner process behind a handle: `{:error, :not_started}` before
+  `start/1`, and a refused handle's own error unchanged.
+
+  The one place a caller outside this module reads the handle's server, so the
+  struct's shape stays this module's business.
+  """
+  @spec server(result()) :: {:ok, pid()} | {:error, term()}
+  def server({:error, _reason} = e), do: e
+  def server(%__MODULE__{server: nil}), do: {:error, :not_started}
+  def server(%__MODULE__{server: pid}), do: {:ok, pid}
+
   @doc "Block until the runner terminates."
   @spec await_termination(result()) :: :ok | {:error, term()}
-  def await_termination({:error, _} = e), do: e
-  def await_termination(%__MODULE__{server: nil}), do: {:error, :not_started}
+  def await_termination(handle) do
+    with {:ok, pid} <- server(handle) do
+      ref = Process.monitor(pid)
 
-  def await_termination(%__MODULE__{server: pid}) do
-    ref = Process.monitor(pid)
-
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
     end
   end
 

@@ -109,6 +109,16 @@ defmodule Flezha.SDK.Codec do
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}
   end
 
+  @doc """
+  The `AdminRequest` command tuple: the verb, and its arguments as a JSON
+  array. Neither a namespace nor a principal rides it; the controller fills
+  both from the connection.
+  """
+  @spec admin_request_command(String.t(), String.t()) :: {atom(), struct()}
+  def admin_request_command(verb, args) do
+    {:admin_request, %RunnerCommands.AdminRequest{verb: verb, args: args}}
+  end
+
   @doc "The `ProcCommit` command tuple for one completed stage."
   @spec proc_commit_command(
           String.t(),

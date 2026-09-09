@@ -16,7 +16,7 @@ defmodule Flezha.SDK.Workflow.Commit do
 
   alias Flezha.SDK.Codec
 
-  @doc "Ship `ProcCommit` for one completed stage; the ack reaches `driver` as `{:barrier_ack, ref, error}`."
+  @doc "Ship `ProcCommit` for one completed stage; the ack reaches `driver` as `{:barrier_ack, ref, result, error}`."
   @spec proc(pid(), pid(), reference(), keyword()) :: tuple()
   def proc(runner, driver, ref, fields) do
     command =

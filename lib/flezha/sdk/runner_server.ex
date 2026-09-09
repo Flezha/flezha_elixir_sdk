@@ -105,6 +105,29 @@ defmodule Flezha.SDK.RunnerServer do
   def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
   def namespace(server), do: Call.control(server, :namespace, nil)
 
+  @doc """
+  Run one administration verb against the controller's published consumer
+  surface, as the identity this connection proved (see `Flezha.SDK.Admin`).
+
+  A cast rather than a call: the controller may have to start an operative
+  before it can answer, and the runner must keep serving while it does. The
+  reply reaches the caller on the same `barriers` table a workflow commit's ack
+  rides.
+  """
+  @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
+          {:ok, String.t()} | {:error, term()}
+  def admin_call(server, verb, args, timeout \\ 30_000) do
+    ref = make_ref()
+    GenServer.cast(server, {:admin, self(), ref, verb, args})
+
+    receive do
+      {:reply_ack, ^ref, _result, error} when error != "" -> {:error, error}
+      {:reply_ack, ^ref, result, _error} -> {:ok, result}
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
   @doc "Register an idle observer on the live runner (see `Flezha.SDK.on_entry_idle/4`)."
   def on_entry_idle(server, channel, threshold_ms, observer),
     do: Call.control(server, {:on_entry_idle, channel, threshold_ms, observer}, @busy)
@@ -316,7 +339,7 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
     reference_id = "wf-" <> Integer.to_string(System.unique_integer([:positive]))
     ship_request(s, reference_id, command)
-    {:noreply, %{s | barriers: Map.put(s.barriers, reference_id, {driver, ref})}}
+    {:noreply, await_reply(s, reference_id, driver, ref, :barrier_ack)}
   end
 
   def handle_cast({:emit_output, _oid, _meta, _bytes} = write, %State{} = s),
@@ -324,6 +347,21 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_cast({:record, _payload_id, _frame} = write, %State{} = s),
     do: {:noreply, ship_write(s, write)}
+
+  # The same table a workflow barrier uses, because it answers the same
+  # question: which caller is waiting on this reference id.
+  def handle_cast({:admin, caller, ref, verb, args}, %State{} = s) do
+    reference_id = "admin-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    case ship_request(s, reference_id, Codec.admin_request_command(verb, args)) do
+      :ok ->
+        {:noreply, await_reply(s, reference_id, caller, ref, :reply_ack)}
+
+      _refused ->
+        send(caller, {:reply_ack, ref, "", "no control plane to administer over"})
+        {:noreply, s}
+    end
+  end
 
   def handle_cast({:notify, command}, %State{} = s) do
     ship_request(s, "wf-" <> Integer.to_string(System.unique_integer([:positive])), command)
@@ -447,21 +485,15 @@ defmodule Flezha.SDK.RunnerServer do
     reply_ok(s, ref)
   end
 
-  # A barrier ack rides the reference_id of the commit it answers, which is
-  # what names the driver that shipped it. Nothing is replied to: the ack is
-  # itself a reply.
-  defp dispatch({tag, %{error: error}}, ref, %State{} = s)
-       when tag in [:proc_commit_response, :iter_commit_response] do
-    case Map.pop(s.barriers, ref) do
-      {{driver, barrier_ref}, barriers} ->
-        send(driver, {:barrier_ack, barrier_ref, error})
-        {:noreply, %{s | barriers: barriers}}
+  # A controller reply to something this runner asked for rides the reference id
+  # of the request, which is what names the process waiting on it. Nothing is
+  # replied to: the reply is itself an answer. One clause for every such reply,
+  # because they differ only in what rides back.
+  defp dispatch({:proc_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
+  defp dispatch({:iter_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
 
-      {nil, _} ->
-        Logger.debug("[Flezha.SDK] barrier ack for an unknown reference #{ref}")
-        {:noreply, s}
-    end
-  end
+  defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
+    do: settle(s, ref, result, error)
 
   # A terminal disconnect is the rung of the controller's convergence ladder
   # that ends a wedged process: nothing else clears it, and only the
@@ -772,6 +804,23 @@ defmodule Flezha.SDK.RunnerServer do
     bin = Codec.encode_request(ref, command)
     {verdict, _hold} = Hold.write({"control_command", elem(command, 0)}, control(s), {bin, %{}})
     verdict
+  end
+
+  # Remember who waits on `reference_id`, and under which message tag their
+  # answer reaches them.
+  defp await_reply(%State{} = s, reference_id, waiter, ref, tag),
+    do: %{s | barriers: Map.put(s.barriers, reference_id, {waiter, ref, tag})}
+
+  defp settle(%State{} = s, reference_id, result, error) do
+    case Map.pop(s.barriers, reference_id) do
+      {{waiter, ref, tag}, barriers} ->
+        send(waiter, {tag, ref, result, error})
+        {:noreply, %{s | barriers: barriers}}
+
+      {nil, _barriers} ->
+        Logger.debug("[Flezha.SDK] controller reply for an unknown reference #{reference_id}")
+        {:noreply, s}
+    end
   end
 
   defp reply_ok(s, ref) do
