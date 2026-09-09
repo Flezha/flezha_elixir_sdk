@@ -61,6 +61,13 @@ defmodule Flezha.SDK.Topology do
 
   @transform_links [:map, :filter, :flat_map]
 
+  # A channel name rides every frame the channel produces, as the `channel`
+  # metadata value under the metadata region's one-byte length prefix. The core
+  # spells the same number as `MAX_METADATA_FIELD_LEN`; the two are held together
+  # by the `ChannelNameTooLong` row of `test/fixtures/reference_topologies.txt`,
+  # which every runtime answers.
+  @max_channel_name_bytes 255
+
   @doc """
   Compile `module`'s declaration into a topology. `declare` names the callback
   that authors it: `:channels` for a stream class, `:procedures` for a workflow
@@ -355,13 +362,22 @@ defmodule Flezha.SDK.Topology do
   end
 
   # One namespace per operative for channels and one for node identities: a
-  # derived name, a `named/2` override and an entry name all collide here.
+  # derived name, a `named/2` override and an entry name all collide here. A
+  # name also has to fit the frame it rides, and this is where the author can
+  # still be told.
   defp names(acc, channels) do
     channel_names = acc.entry_order ++ for(%{source: {:node, _}} = c <- channels, do: c.name)
     node_ids = for {_ref, node} <- nodes_in_order(acc), do: node.name || node.module.name()
 
     duplicates(channel_names, :DuplicateChannel) ++
-      duplicates(node_ids, :NodeIdentityCollision)
+      duplicates(node_ids, :NodeIdentityCollision) ++
+      over_long_names(channel_names)
+  end
+
+  defp over_long_names(names) do
+    for name <- Enum.uniq(names),
+        byte_size(name) > @max_channel_name_bytes,
+        do: {:ChannelNameTooLong, name}
   end
 
   defp duplicates(names, found) do
