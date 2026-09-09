@@ -746,7 +746,16 @@ defmodule Flezha.SDK.RunnerServer do
         end),
       "stable_id" => stable_id
     }
+    |> put_namespace_secret(Knob.get(:namespace_secret))
   end
+
+  # The credential the controller checks the claimed namespace against. Absent
+  # from the frame when this runner holds none, so a deployment authenticating
+  # with a certificate — or one with enforcement off — sends what it always did.
+  defp put_namespace_secret(payload, secret) when is_binary(secret) and secret != "",
+    do: Map.put(payload, "namespace_secret", secret)
+
+  defp put_namespace_secret(payload, _none), do: payload
 
   defp ship_update_factories(%State{control_handle: nil}), do: :ok
 
