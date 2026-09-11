@@ -11,8 +11,8 @@ defmodule Flezha.SDK.RunnerServer do
   nothing reconnects, and the process stays, so a `:permanent` supervisor has
   nothing to restart into a second registration. The persistence family — restore, compaction, the live
   read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
-  off this loop, and a graceful stop ships every operative's state before the
-  connection closes; a `"workflow"` `AddOperative` is refused.
+  off this loop, operatives start and stop through `Flezha.SDK.Operatives`, and
+  a graceful stop ships every operative's state before the connection closes.
   """
 
   use GenServer
@@ -30,16 +30,14 @@ defmodule Flezha.SDK.RunnerServer do
     EntryInput,
     Hold,
     Jitter,
-    KeyGroup,
     Knob,
-    Operative,
+    Operatives,
     Park,
     PersistentId,
     Transport
   }
 
-  alias Flezha.SDK.Declarations
-  alias Flezha.SDK.Workflow.{Driver, Spec}
+  alias Flezha.SDK.Workflow.Driver
   alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
@@ -87,6 +85,7 @@ defmodule Flezha.SDK.RunnerServer do
       held: nil,
       control: nil,
       reconnect_attempt: 0,
+      handshake: :pending,
       disconnecting?: false,
       stopped?: false
     ]
@@ -250,6 +249,8 @@ defmodule Flezha.SDK.RunnerServer do
 
   @impl true
   def handle_info({:flz_data, _id, "control_command", bin, _meta}, %State{} = s) do
+    s = complete_handshake(s)
+
     case Codec.decode_command(bin) do
       {:ok, %{reference_id: ref, command: command}} ->
         dispatch(command, ref, s)
@@ -261,7 +262,8 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # The control keepalive echo from the controller — liveness only, never re-echoed.
-  def handle_info({:flz_data, _id, "control_ping", _body, _meta}, %State{} = s), do: {:noreply, s}
+  def handle_info({:flz_data, _id, "control_ping", _body, _meta}, %State{} = s),
+    do: {:noreply, complete_handshake(s)}
 
   def handle_info({:flz_data, _id, _payload_id, _msg, _meta}, %State{} = s), do: {:noreply, s}
 
@@ -327,8 +329,21 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  def handle_info({:flz_closed, _id, reason}, %State{} = s), do: reconnect(s, reason)
-  def handle_info({:data_stream_closed, _pid, reason}, %State{} = s), do: reconnect(s, reason)
+  # Only the control stream's close ends the session. A data plane is whole or
+  # gone: losing one stream closes the rest, which is how the controller learns
+  # to re-issue `ConnectSocket` inside this session. Reconnecting instead turns
+  # one severed stream into a loop that never reaches that repair. A close for a
+  # stream a rebind already replaced is old news.
+  def handle_info({:flz_closed, id, reason}, %State{} = s) do
+    cond do
+      id == stream_id(s.control_handle) -> reconnect(s, reason)
+      Enum.any?(s.secondaries, &(stream_id(&1) == id)) -> {:noreply, teardown_streams(s)}
+      true -> {:noreply, s}
+    end
+  end
+
+  def handle_info({:data_stream_closed, pid, _reason}, %State{} = s),
+    do: {:noreply, if(pid in s.primaries, do: teardown_streams(s), else: s)}
 
   def handle_info({:EXIT, _pid, _reason}, %State{} = s), do: {:noreply, s}
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
@@ -432,21 +447,16 @@ defmodule Flezha.SDK.RunnerServer do
     Counters.counter_get(counters, String.to_existing_atom(key))
   end
 
-  # Written only once the controller has admitted the runner, and on no
-  # refusal, so it is the reconnect ladder's one reset — announced only where
-  # an attempt was spent. An admitted session dropped at once resets every
-  # cycle, so that loop is unthrottled: a bind is not the cheap refusal below.
   defp dispatch({:assign_runner_id, %{runner_id: rid}}, ref, %State{} = s) do
     reply(s, ref, "success")
-    n = if s.reconnect_attempt > 0, do: Knob.reset(:sdk_reconnect, s.stable_id), else: 0
-    {:noreply, %{s | session_token: rid, reconnect_attempt: n}}
+    {:noreply, %{s | session_token: rid}}
   end
 
   defp dispatch({:connect_socket, %{sockets_count: n}}, ref, s) do
     case establish_sockets(s, n) do
       {:ok, s} ->
         reply(s, ref, "success")
-        {:noreply, s}
+        {:noreply, if(s.handshake == :pending, do: %{s | handshake: :answered}, else: s)}
 
       {:error, reason} ->
         Logger.error("[Flezha.SDK] ConnectSocket failed: #{inspect(reason)}")
@@ -456,7 +466,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp dispatch({:add_operative, add}, ref, s) do
-    case add_operative(s, add) do
+    case Operatives.add(s, add) do
       {:ok, s, metadata} ->
         reply(s, ref, "success", [], Codec.encode_add_operative_response(metadata))
         {:noreply, s}
@@ -468,7 +478,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp dispatch({:rem_operative, %{operative_id: oid}}, ref, s) do
-    reply_ok(teardown_operative(s, oid), ref)
+    reply_ok(Operatives.remove(s, oid), ref)
   end
 
   defp dispatch({:ping, %{nonce: nonce}}, ref, s) do
@@ -547,111 +557,6 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch(other, ref, s) do
     Logger.debug("[Flezha.SDK] unhandled control command: #{inspect(other)}")
     reply_ok(s, ref)
-  end
-
-  # --- operative lifecycle ---
-
-  defp add_operative(%State{} = s, add) do
-    kind = if add.kind in [nil, ""], do: "stream", else: add.kind
-
-    range =
-      KeyGroup.decode(
-        add.partition_index || 0,
-        add.partition_count || 0,
-        add.key_group_from || 0,
-        add.key_group_to || 0
-      )
-
-    topo = Map.get(s.topologies, add.factory_id)
-
-    cond do
-      is_nil(topo) ->
-        {:error, "unknown factory #{add.factory_id}", s}
-
-      # The kind the controller placed under and the class registered under
-      # this id must agree: a mismatch would drive a stream topology through
-      # the workflow driver, or the reverse, and neither has the other's shape.
-      kind == "workflow" ->
-        start_workflow(s, add, topo)
-
-      match?(%Spec{}, topo) ->
-        {:error, "factory #{add.factory_id} is a workflow class; kind was #{inspect(kind)}", s}
-
-      KeyGroup.partitioned?(range) and topo.keyless? ->
-        {:error, "PartitionsWithoutKeyedProcedure: a partition_count >= 2 class needs a key_by",
-         s}
-
-      true ->
-        start_stream(s, add, topo, range)
-    end
-  end
-
-  defp start_stream(%State{} = s, add, topo, range) do
-    {:ok, op_pid} =
-      Operative.start_link(
-        operative_id: add.operative_id,
-        topology: topo,
-        cells: EntryInput.cells_for(topo.entries),
-        range: range,
-        counters: s.counters,
-        runner: self(),
-        secondaries: s.secondaries,
-        credit: s.credit
-      )
-
-    :ets.insert(s.registry, {add.operative_id, op_pid})
-    seed_init_values(op_pid, add)
-
-    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {op_pid, add.factory_id})},
-     Declarations.for(topo)}
-  end
-
-  # What the class declares to the controller: partitionability only when
-  # refusable, the compaction threshold only when it differs from the default,
-  defp start_workflow(%State{} = s, add, %Spec{} = spec) do
-    {:ok, pid} =
-      Driver.start_link(
-        operative_id: add.operative_id,
-        spec: spec,
-        args: add.init_values || "",
-        journal: Codec.journal_facts(add.proc_journal),
-        owed_inbox: add.inbox_tail_count || 0,
-        resume_entity_count: add.resume_entity_count || 0,
-        counters: s.counters,
-        runner: self(),
-        secondaries: s.secondaries,
-        credit: s.credit
-      )
-
-    :ets.insert(s.registry, {add.operative_id, pid})
-
-    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {pid, add.factory_id})},
-     Declarations.for(spec)}
-  end
-
-  defp start_workflow(%State{} = s, add, _topology),
-    do: {:error, "factory #{add.factory_id} is a stream class; kind was \"workflow\"", s}
-
-  defp seed_init_values(op_pid, add) do
-    case Commands.apply_json(op_pid, add.operative_id, add.init_values) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Flezha.SDK] #{add.operative_id} init_values: #{reason}")
-    end
-  end
-
-  defp teardown_operative(%State{} = s, oid) do
-    case Map.pop(s.operatives, oid) do
-      {nil, _} ->
-        s
-
-      {{pid, _fid}, operatives} ->
-        :ets.delete(s.registry, oid)
-        if Process.alive?(pid), do: Operative.stop(pid)
-        %{s | operatives: operatives}
-    end
   end
 
   # --- sockets ---
@@ -743,22 +648,37 @@ defmodule Flezha.SDK.RunnerServer do
 
   # --- reconnect ---
 
-  # The rung outlives the attempt; only the controller's admission resets it
-  # (`dispatch/3`). Reaching the connect is not success — a namespace this
-  # controller does not run is answered by closing the session.
+  # The rung outlives the attempt; only a completed handshake resets it
+  # (`complete_handshake/1`). Reaching the connect is not success — a
+  # namespace this controller does not run is answered by closing the session.
   defp reconnect(%State{reconnect_attempt: n} = s, reason) do
     Logger.warning("[Flezha.SDK] connection lost (#{reason}); reconnecting (attempt #{n + 1})")
     # The credit session died with the stream; the controller re-offers one.
     Credit.disarm(s.credit)
     s = teardown_streams(s)
     Knob.wait(:sdk_reconnect, n + 1, s.stable_id)
-    s = %{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil}
+    s = %{s | reconnect_attempt: n + 1, control_handle: nil, conn: nil, handshake: :pending}
 
     case do_connect(s) do
       {:ok, s} -> {:noreply, s}
       {:error, r} -> reconnect(s, "retry: #{inspect(r)}")
     end
   end
+
+  # A control frame read after this runner answered `ConnectSocket` is the
+  # controller carrying on with the session it accepted, and the reconnect
+  # ladder's one reset, announced only where an attempt was spent. The first
+  # frame is not admission: a controller can write `assign_runner_id` and then
+  # fail the connect, and resetting there retries it at the lowest rung for ever.
+  defp complete_handshake(%State{handshake: :answered, reconnect_attempt: n} = s) do
+    n = if n > 0, do: Knob.reset(:sdk_reconnect, s.stable_id), else: 0
+    %{s | handshake: :completed, reconnect_attempt: n}
+  end
+
+  defp complete_handshake(%State{} = s), do: s
+
+  defp stream_id(nil), do: nil
+  defp stream_id(handle), do: Flezha.Transport.Stream.stream_id(handle)
 
   # --- connect + helpers ---
 
