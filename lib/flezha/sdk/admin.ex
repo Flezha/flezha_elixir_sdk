@@ -9,7 +9,7 @@ defmodule Flezha.SDK.Admin do
   grants a namespace's applications the authority once and revokes it the same
   way, and a revocation takes effect on the next call:
 
-      flz role bind runner@team-orders team-orders app
+      flz role bind runner@team-orders app team-orders
 
   Every function here is one line over `call/3`, because the verb travels as
   data on the wire. Adding a verb costs a function and nothing else. This host
