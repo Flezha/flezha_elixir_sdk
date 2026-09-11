@@ -184,9 +184,6 @@ defmodule Flezha.SDK.Record do
   end
 
   defp resolved(%{sdk_lang: lang, schema_version: schema, format_id: format}, {running, floor}) do
-    # A floor above the running version reads the running version only.
-    floor = min(floor, running)
-
     cond do
       lang != Codec.sdk_lang() ->
         {:error,
@@ -222,6 +219,7 @@ defmodule Flezha.SDK.Record do
          "record stamped schema_version #{schema} is above the running procedure's #{running}: " <>
            "older code cannot read newer state"}
 
+      # After the two arms above, so a floor above `running` reads `running` only.
       schema < floor ->
         {:error,
          "record stamped schema_version #{schema} is below the readable floor #{floor} " <>

@@ -13,6 +13,7 @@ defmodule Flezha.SDK.Transport do
   alias Flezha.Transport.Local
   alias Flezha.Transport.Native
   alias Flezha.Transport.Server, as: TransportServer
+  alias Flezha.Transport.Stream, as: TStream
 
   @doc """
   Connect the control channel. `owner` receives inbound control frames. Returns
@@ -62,25 +63,21 @@ defmodule Flezha.SDK.Transport do
 
   @doc """
   Establish `count` primary+secondary data stream pairs. Returns
-  `{:ok, primaries, secondaries}` — lists of handles. For native the SDK also
-  binds the controller side directly through `bind_data_stream/3`.
+  `{:ok, primaries, secondaries}` — lists of handles — or the first refusal,
+  with every stream opened before it closed. For native the SDK also binds the
+  controller side directly through `bind_data_stream/3`.
   """
   @spec connect_sockets(:native | :uds | :quic, term(), non_neg_integer(), pid(), term()) ::
           {:ok, [term()], [term()]} | {:error, term()}
   def connect_sockets(:native, runner_id, count, _owner, _conn) do
-    result =
-      Enum.reduce(0..(count - 1), {[], []}, fn _key, {prims, secs} ->
-        {sdk_p, ctrl_p} = Local.Stream.open()
-        {:ok, :primary, _} = TransportServer.bind_data_stream(runner_id, 1, ctrl_p)
+    # `bind_data_stream/3` closes a stream it has no channel for.
+    dial_pairs(count, fn type ->
+      {sdk, controller} = Local.Stream.open()
 
-        {sdk_s, ctrl_s} = Local.Stream.open()
-        {:ok, :secondary, _} = TransportServer.bind_data_stream(runner_id, 2, ctrl_s)
-
-        {[sdk_p | prims], [sdk_s | secs]}
-      end)
-
-    {prims, secs} = result
-    {:ok, Enum.reverse(prims), Enum.reverse(secs)}
+      with {:ok, _type, _channel} <-
+             TransportServer.bind_data_stream(runner_id, type_byte(type), controller),
+           do: {:ok, sdk}
+    end)
   end
 
   def connect_sockets(:uds, runner_id, count, owner, _conn) do
@@ -100,27 +97,34 @@ defmodule Flezha.SDK.Transport do
     dial_pairs(count, fn type ->
       i = :counters.get(idx, 1)
       :counters.add(idx, 1, 1)
-      type_byte = if type == "primary", do: 1, else: 2
-      Native.client_open_stream(conn, type_byte, i, owner)
+      Native.client_open_stream(conn, type_byte(type), i, owner)
     end)
   end
 
   # --- helpers ---
 
+  # A refusal is the answer, and nothing dialled before it is left open.
   defp dial_pairs(count, dial) do
-    Enum.reduce_while(0..(count - 1), {:ok, [], []}, fn _key, {:ok, prims, secs} ->
-      with {:ok, p} <- dial.("primary"),
-           {:ok, s} <- dial.("secondary") do
-        {:cont, {:ok, [p | prims], [s | secs]}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
+    types = for _pair <- 1..count//1, type <- ["primary", "secondary"], do: type
+
+    Enum.reduce_while(types, %{"primary" => [], "secondary" => []}, fn type, opened ->
+      case dial.(type) do
+        {:ok, handle} ->
+          {:cont, Map.update!(opened, type, &[handle | &1])}
+
+        {:error, _} = refused ->
+          opened |> Map.values() |> Enum.concat() |> Enum.each(&TStream.close/1)
+          {:halt, refused}
       end
     end)
     |> case do
-      {:ok, prims, secs} -> {:ok, Enum.reverse(prims), Enum.reverse(secs)}
-      other -> other
+      %{"primary" => prims, "secondary" => secs} -> {:ok, Enum.reverse(prims), Enum.reverse(secs)}
+      refused -> refused
     end
   end
+
+  defp type_byte("primary"), do: 1
+  defp type_byte("secondary"), do: 2
 
   defp send_handshake(handle, payload) do
     json = Jason.encode!(payload)
