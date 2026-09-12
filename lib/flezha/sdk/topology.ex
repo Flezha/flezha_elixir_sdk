@@ -42,6 +42,7 @@ defmodule Flezha.SDK.Topology do
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
             entries: %{},
+            entry_order: [],
             node_modules: %{},
             node_mode: %{},
             node_name: %{},
@@ -109,6 +110,10 @@ defmodule Flezha.SDK.Topology do
        %__MODULE__{
          factory_id: module.factory_id(),
          entries: acc.entries,
+         # Declaration order, which `entries` cannot carry: a map's key order
+         # is the term order. The first of these is where a frame naming no
+         # channel goes, and `flz_core::first_of_kind` answers the same way.
+         entry_order: Enum.uniq(acc.entry_order),
          node_modules: node_modules(acc),
          node_mode: node_mode,
          node_name: node_names(acc),

@@ -48,6 +48,12 @@ defmodule Flezha.SDK.Operative do
   # What an entry input carries into routing: no metadata, no key, no Entity,
   # and the durable offset the controller stamped under the tier.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
+
+  # The identity slot a park with no resolved channel takes. A name off the
+  # wire never becomes a path component: the controller makes this slot a
+  # directory under the dead-letter root, and the name the frame asked for
+  # rides the row's `channel` field. `flz_core` spells it the same way.
+  @unresolved_procedure_id "_unresolved"
   # How long a sweep waits on one Entity's idle probe before moving on.
   # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
   # Evicted keys remembered; beyond it a key reads as never existed.
@@ -248,19 +254,26 @@ defmodule Flezha.SDK.Operative do
   end
 
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
-    channel = resolve_channel(s.topology, channel)
-    # The frame counts before it can be declined: the stamp precedes the parse.
-    EntryInput.stamp(Map.fetch!(s.cells, channel))
+    case resolve_channel(s.topology, channel) do
+      {:unresolved, requested} ->
+        {:noreply, park_unresolved(s, requested, message)}
 
-    case parse(s.topology, channel, message) do
-      {:ok, value} ->
-        {offset, replay} = frame_facts(s.topology, metadata)
-        emit = %{@entry_emit | offset: offset, replay: replay}
-        {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
-        {:noreply, s}
+      channel ->
+        # The frame counts before it can be declined: the stamp precedes the
+        # parse. A frame that resolved no channel stamps none, having reached
+        # none.
+        EntryInput.stamp(Map.fetch!(s.cells, channel))
 
-      {:error, reason} ->
-        {:noreply, park_entry(s, channel, message, reason)}
+        case parse(s.topology, channel, message) do
+          {:ok, value} ->
+            {offset, replay} = frame_facts(s.topology, metadata)
+            emit = %{@entry_emit | offset: offset, replay: replay}
+            {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
+            {:noreply, s}
+
+          {:error, reason} ->
+            {:noreply, park_entry(s, channel, message, reason)}
+        end
     end
   end
 
@@ -650,22 +663,39 @@ defmodule Flezha.SDK.Operative do
   end
 
   defp park_entry(%State{} = s, channel, message, reason),
-    do: park_pre_dispatch(s, channel, "entry parse failed: #{inspect(reason)}", message)
+    do: park_pre_dispatch(s, channel, channel, "entry parse failed: #{inspect(reason)}", message)
 
-  defp park_misroute(%State{} = s, node_ref, value, reason),
-    do: park_pre_dispatch(s, node_ref_label(s, node_ref), reason, value)
+  defp park_unresolved(%State{} = s, requested, message) do
+    park_pre_dispatch(
+      s,
+      @unresolved_procedure_id,
+      requested,
+      unresolved_entry_error(s.topology, requested),
+      message
+    )
+  end
 
-  # A pre-dispatch park (entry-parse or partition mis-route), forwarded to the
-  # runner which owns the ack loop. The park_id uses a fresh unique integer since
-  # no Entity seq exists yet.
-  defp park_pre_dispatch(%State{} = s, label, error, payload) do
-    park_id = "#{s.operative_id}/#{label}##{System.unique_integer([:positive, :monotonic])}"
+  defp park_misroute(%State{} = s, node_ref, value, reason) do
+    label = node_ref_label(s, node_ref)
+    park_pre_dispatch(s, label, label, reason, value)
+  end
+
+  # A pre-dispatch park (entry parse, unresolved channel, partition mis-route),
+  # forwarded to the runner which owns the ack loop. The park_id uses a fresh
+  # unique integer since no Entity seq exists yet.
+  #
+  # `procedure_id` is the identity slot, which the controller turns into a
+  # DIRECTORY under the dead-letter root, so it is always a value this side
+  # chose. `channel` is the row's attribution and may be a name off the wire.
+  defp park_pre_dispatch(%State{} = s, procedure_id, channel, error, payload) do
+    park_id =
+      "#{s.operative_id}/#{procedure_id}##{System.unique_integer([:positive, :monotonic])}"
 
     Park.ship(
       s.runner,
       self(),
-      Park.identity(s.operative_id, label, ""),
-      Park.body(park_id, label, error, 1, payload)
+      Park.identity(s.operative_id, procedure_id, ""),
+      Park.body(park_id, channel, error, 1, payload)
     )
 
     s
@@ -686,11 +716,41 @@ defmodule Flezha.SDK.Operative do
     e -> {:error, Exception.message(e)}
   end
 
-  # An unknown/absent channel falls back to the first declared entry.
-  defp resolve_channel(topo, channel) do
-    if is_binary(channel) and Map.has_key?(topo.entries, channel),
-      do: channel,
-      else: topo.entries |> Map.keys() |> List.first()
+  # A name the operative declares resolves to it; a name it does not is
+  # unresolved, and parks under the name it asked for rather than reaching
+  # whichever entry channel happens to be first. A frame naming no channel
+  # takes the first DECLARED entry — the source-plugin default, and the order
+  # `entry_order` keeps, because `entries` is a map and its key order is the
+  # term order, which is not the author's — and is unresolved only when there
+  # is none to take.
+  #
+  # The answer is asymmetric on purpose: this runs once per input frame, so
+  # the resolved arm returns the name itself and allocates nothing, and only
+  # the cold arm builds a tuple. A declared name is a binary and can never
+  # match `{:unresolved, _}`.
+  defp resolve_channel(topo, channel) when is_binary(channel) do
+    if Map.has_key?(topo.entries, channel), do: channel, else: {:unresolved, channel}
+  end
+
+  defp resolve_channel(topo, _channel) do
+    case topo.entry_order do
+      [first | _] -> first
+      [] -> {:unresolved, ""}
+    end
+  end
+
+  # Why the frame did not enter: the name it asked for against the set the
+  # operative declares, or that it declares none at all. `flz_core`'s
+  # `unresolved_entry_error` answers in the same words, over the same sorted
+  # set, so an operator reading a DLQ row cannot tell which core wrote it.
+  defp unresolved_entry_error(topo, requested) do
+    case Enum.sort(topo.entry_order) do
+      [] ->
+        "the operative declares no entry channel"
+
+      declared ->
+        "no entry channel `#{requested}`; the operative declares: #{Enum.join(declared, ", ")}"
+    end
   end
 
   # Sink outputs ride a secondary stream directly (no router hop). The controller
