@@ -377,7 +377,11 @@ defmodule Flezha.SDK.Topology do
     # two of those is a shape that looks nothing like a naming collision to the
     # author who wrote it, so it is refused under its own name.
     from_sink =
-      Enum.frequencies(for {_ref, %{name: nil, sink_names: [name | _]}} <- acc.nodes, do: name)
+      Enum.frequencies(
+        for {_ref, node} <- acc.nodes,
+            Channels.named_by_sink?(node),
+            do: Channels.node_channel_name(node)
+      )
 
     duplicates(channel_names, &channel_collision(&1, from_sink)) ++
       duplicates(node_ids, &{:NodeIdentityCollision, &1}) ++
@@ -397,12 +401,9 @@ defmodule Flezha.SDK.Topology do
   # ONE name are the duplicate wire instead, which `terminate_sink` refuses.
   defp named_twice(acc) do
     for {_ref, node} <- nodes_in_order(acc),
-        [first, second | _] <- [naming_declarations(node)],
+        [first, second | _] <- [Channels.naming_declarations(node)],
         do: {:ChannelNamedTwice, node.module.name(), first, second}
   end
-
-  defp naming_declarations(%{name: nil, sink_names: sinks}), do: Enum.uniq(sinks)
-  defp naming_declarations(%{name: name, sink_names: sinks}), do: [name | Enum.uniq(sinks)]
 
   defp over_long_names(names) do
     for name <- Enum.uniq(names),

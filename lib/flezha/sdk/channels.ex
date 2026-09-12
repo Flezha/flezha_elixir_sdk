@@ -278,13 +278,26 @@ defmodule Flezha.SDK.Channels do
 
   def channel_name(acc, {:node, ref}), do: node_channel_name(Map.fetch!(acc.nodes, ref))
 
+  # The names a node's record declares for its channel, in the order they win:
+  # `named/2`'s name, then the names its sinks wrote. The one reader of a node's
+  # naming declarations — the wire name, the refusal two of them raise, and
+  # whether a sink supplied the name all come off this list, so they cannot be
+  # read from different fields.
+  @doc false
+  def naming_declarations(%{name: nil, sink_names: sinks}), do: Enum.uniq(sinks)
+  def naming_declarations(%{name: name, sink_names: sinks}), do: [name | Enum.uniq(sinks)]
+
   @doc """
-  The same rule off a node record: `named/2`'s name, else the first name a
-  `sink` declared, else the procedure's own. One reader, so the wire name and
-  the check's name cannot be derived two ways.
+  The same rule off a node record: its first naming declaration, else the
+  procedure's own name.
   """
-  def node_channel_name(%{module: module, name: name, sink_names: sinks}),
-    do: name || List.first(sinks) || module.name()
+  def node_channel_name(%{module: module} = node),
+    do: List.first(naming_declarations(node)) || module.name()
+
+  # Whether a node's channel took its name from the node's own `sink`, rather
+  # than from `named/2` or from its procedure.
+  @doc false
+  def named_by_sink?(%{name: name, sink_names: sinks}), do: is_nil(name) and sinks != []
 
   @doc false
   def fuse(chain) do
