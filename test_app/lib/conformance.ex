@@ -279,7 +279,10 @@ defmodule ElixirRunner.Conformance do
       "kind" => kind,
       "producer" => producer,
       "consumers" => consumers,
-      "sink" => List.first(sinks)
+      # A sink names the channel it terminates, so the descriptor has no name
+      # of its own: presence is what the routes carry, and the name is the
+      # channel's.
+      "sink" => if(sinks == [], do: nil, else: name)
     }
   end
 
@@ -332,6 +335,7 @@ defmodule ElixirRunner.Conformance do
       {"key", _} -> {Channels.key_by(stream, & &1), acc}
       {"keyed", _} -> {Channels.keyed(stream), acc}
       {"named", name} -> {Channels.named(stream, name), acc}
+      {"sink", ""} -> {Channels.sink(stream), acc}
       {"sink", name} -> {Channels.sink(stream, name), acc}
       {"retry_max", n} -> {Channels.retry_max(stream, integer(n)), acc}
       {"on_full", policy} -> {Channels.on_full(stream, overflow(policy)), acc}

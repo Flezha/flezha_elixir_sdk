@@ -48,8 +48,7 @@ defmodule ElixirRunner.StoreInputOp do
     c
     |> input("input")
     |> into(ElixirRunner.StoreInputProc)
-    |> named("sink")
-    |> sink("store_input_sink")
+    |> sink("sink")
   end
 end
 
@@ -223,8 +222,7 @@ defmodule ElixirRunner.ResumeProbeOp do
     c
     |> input("input")
     |> into(ElixirRunner.ResumeProbeProc)
-    |> named("total")
-    |> sink("resume_probe_out")
+    |> sink("total")
   end
 end
 
@@ -290,8 +288,7 @@ defmodule ElixirRunner.SchemaEvolutionV1Op do
     c
     |> input("input")
     |> into(ElixirRunner.EvolvingCartV1Proc)
-    |> named("total")
-    |> sink("schema_evolution_out")
+    |> sink("total")
   end
 end
 
@@ -306,8 +303,7 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
     c
     |> input("input")
     |> into(ElixirRunner.EvolvingCartV2Proc)
-    |> named("total")
-    |> sink("schema_evolution_out")
+    |> sink("total")
   end
 end
 
@@ -364,8 +360,7 @@ defmodule ElixirRunner.SessionTimeoutOp do
     c
     |> input("input")
     |> into(ElixirRunner.SessionTimeoutProc)
-    |> named("kafka")
-    |> sink("test_kafka")
+    |> sink("kafka")
   end
 end
 
@@ -414,9 +409,8 @@ defmodule ElixirRunner.CheckpointStoreOp do
     |> checkpoint_ack()
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreProc)
-    |> named("sink")
     |> keyed()
-    |> sink("tier_sink")
+    |> sink("sink")
   end
 end
 
@@ -434,9 +428,8 @@ defmodule ElixirRunner.CheckpointBatchedOp do
     |> outputs_at_checkpoint(1_500)
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreProc)
-    |> named("sink")
     |> keyed()
-    |> sink("tier_sink")
+    |> sink("sink")
   end
 end
 
@@ -506,9 +499,8 @@ defmodule ElixirRunner.CandleOp do
     |> correction_window(600_000)
     |> input("input")
     |> into(ElixirRunner.CandleProc)
-    |> named("sink")
     |> keyed()
-    |> sink("tier_sink")
+    |> sink("sink")
   end
 end
 

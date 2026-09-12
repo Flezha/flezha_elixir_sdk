@@ -140,8 +140,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.WorkflowsLoop.ChatReply)
-      |> named("out")
-      |> sink("chat_sink")
+      |> sink("out")
     end
   end
 
@@ -163,8 +162,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       c
       |> input("in")
       |> into(ElixirRunner.WorkflowsLoop.ChatReply)
-      |> named("out")
-      |> sink("chat_sink")
+      |> sink("out")
     end
   end
 
@@ -184,8 +182,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.WorkflowsLoop.ChatReplyUndoable)
-      |> named("out")
-      |> sink("chat_sink")
+      |> sink("out")
     end
   end
 
@@ -213,8 +210,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       |> into(ElixirRunner.WorkflowsLoop.BenchTurn)
       |> named("mid")
       |> into(ElixirRunner.WorkflowsLoop.ChatReply)
-      |> named("out")
-      |> sink("bench_sink")
+      |> sink("out")
     end
   end
 
@@ -231,8 +227,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     |> Enum.reduce(c |> input("in") |> into(first), fn step, s ->
       s |> named("edge_" <> step.name()) |> into(step)
     end)
-    |> named("out")
-    |> sink("bench_sink")
+    |> sink("out")
   end
 
   @doc false

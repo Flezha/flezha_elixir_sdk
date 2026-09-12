@@ -360,8 +360,7 @@ defmodule ElixirRunner.Workflows do
       c
       |> input("in")
       |> into(ElixirRunner.Workflows.CommitA)
-      |> named("mid")
-      |> sink_with("optout_sink", fn s -> "a-ran:" <> s end)
+      |> sink_with("mid", fn s -> "a-ran:" <> s end)
       |> into(ElixirRunner.Workflows.BlockB)
     end
   end
@@ -378,9 +377,8 @@ defmodule ElixirRunner.Workflows do
       |> effectively_once()
       |> input("in")
       |> into(ElixirRunner.Workflows.TierCommitA)
-      |> named("mid")
       |> keyed()
-      |> sink_with("tier_sink", & &1)
+      |> sink_with("mid", & &1)
       |> into(ElixirRunner.Workflows.BlockB)
     end
   end
@@ -414,8 +412,7 @@ defmodule ElixirRunner.Workflows do
       c
       |> input("in")
       |> into(ElixirRunner.Workflows.CommitA)
-      |> named("mid")
-      |> sink_with("outbox_sink", fn s -> "a-out:" <> s end)
+      |> sink_with("mid", fn s -> "a-out:" <> s end)
       |> into(ElixirRunner.Workflows.BlockB)
     end
   end
@@ -431,8 +428,7 @@ defmodule ElixirRunner.Workflows do
       c
       |> input("in")
       |> into(ElixirRunner.Workflows.UndoOutboxA)
-      |> named("mid")
-      |> sink_with("undo_sink", fn s -> "out:" <> s end)
+      |> sink_with("mid", fn s -> "out:" <> s end)
       |> into(ElixirRunner.Workflows.UndoC)
     end
   end
@@ -455,21 +451,17 @@ defmodule ElixirRunner.Workflows do
         c
         |> input("in")
         |> into(ElixirRunner.Workflows.BranchA)
-        |> named("mid")
-        |> sink_with("branch_sink", fn s -> "a:" <> s end)
+        |> sink_with("mid", fn s -> "a:" <> s end)
 
       mid
       |> into(ElixirRunner.Workflows.BranchB)
-      |> named("bmid")
-      |> sink_with("branch_sink", fn s -> "b:" <> s end)
+      |> sink_with("bmid", fn s -> "b:" <> s end)
       |> into(ElixirRunner.Workflows.BranchD)
-      |> named("d_out")
-      |> sink("branch_sink")
+      |> sink("d_out")
 
       mid
       |> into(ElixirRunner.Workflows.BranchC)
-      |> named("c_out")
-      |> sink("branch_sink")
+      |> sink("c_out")
     end
   end
 
@@ -487,24 +479,20 @@ defmodule ElixirRunner.Workflows do
         c
         |> input("in")
         |> into(ElixirRunner.Workflows.DiamA)
-        |> named("dfan")
-        |> sink_with("diamond_sink", fn s -> "a:" <> s end)
+        |> sink_with("dfan", fn s -> "a:" <> s end)
 
       fan
       |> into(ElixirRunner.Workflows.DiamB1)
       |> named("db1")
       |> into(ElixirRunner.Workflows.DiamB2)
-      |> named("db2")
-      |> sink_with("diamond_sink", & &1)
+      |> sink_with("db2", & &1)
       |> into(ElixirRunner.Workflows.DiamJoin)
 
       fan
       |> into(ElixirRunner.Workflows.DiamC)
-      |> named("dc")
-      |> sink_with("diamond_sink", & &1)
+      |> sink_with("dc", & &1)
       |> into(ElixirRunner.Workflows.DiamJoin)
-      |> named("j_out")
-      |> sink("diamond_sink")
+      |> sink("j_out")
     end
   end
 
@@ -519,11 +507,9 @@ defmodule ElixirRunner.Workflows do
       c
       |> input("in")
       |> into(ElixirRunner.Workflows.RetryA)
-      |> named("mid")
-      |> sink_with("retry_sink", fn s -> "res:" <> s end)
+      |> sink_with("mid", fn s -> "res:" <> s end)
       |> into(ElixirRunner.Workflows.RetryFlaky)
-      |> named("out")
-      |> sink("retry_sink")
+      |> sink("out")
     end
   end
 

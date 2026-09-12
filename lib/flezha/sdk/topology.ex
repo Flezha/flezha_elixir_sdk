@@ -245,13 +245,13 @@ defmodule Flezha.SDK.Topology do
 
   defp terminated?(state, walk), do: walk.closed? or state.sinks != []
 
-  # One wire per (channel, plugin). Neither half alone is the duplicate: a
-  # channel may reach several plugins (a keyed wire beside a plain one), and a
-  # plugin may be fed by several channels, each with its own encoder. Wiring
-  # the SAME channel to the SAME plugin twice is the duplicate — two identical
-  # routes, every value delivered twice.
+  # A channel may still carry more than one plugin wire — the keyed wire beside
+  # the plain one, which stamps and does not. What it may not carry is two
+  # wires nothing tells apart: since a sink names the CHANNEL, the stamping
+  # mode is the whole of a wire's identity, and two wires sharing it are two
+  # identical routes with every value delivered twice.
   defp terminate_sink(state, plugin, serializer, steps, keyed?) do
-    if Enum.any?(state.sinks, &(&1.plugin == plugin)) do
+    if Enum.any?(state.sinks, &(&1.keyed == keyed?)) do
       issue(state, {:DuplicatePluginSink, state.name, plugin})
     else
       {transform, key_by} = Channels.fuse(Enum.reverse(steps))
@@ -373,11 +373,36 @@ defmodule Flezha.SDK.Topology do
   defp names(acc, channels) do
     channel_names = acc.entry_order ++ for(%{source: {:node, _}} = c <- channels, do: c.name)
     node_ids = for {_ref, node} <- nodes_in_order(acc), do: node.name || node.module.name()
+    # Per name, how many nodes took their channel name from their own `sink`:
+    # two of those is a shape that looks nothing like a naming collision to the
+    # author who wrote it, so it is refused under its own name.
+    from_sink =
+      Enum.frequencies(for {_ref, %{name: nil, sink_names: [name | _]}} <- acc.nodes, do: name)
 
-    duplicates(channel_names, :DuplicateChannel) ++
-      duplicates(node_ids, :NodeIdentityCollision) ++
-      over_long_names(channel_names)
+    duplicates(channel_names, &channel_collision(&1, from_sink)) ++
+      duplicates(node_ids, &{:NodeIdentityCollision, &1}) ++
+      over_long_names(channel_names) ++
+      named_twice(acc)
   end
+
+  defp channel_collision(name, from_sink) do
+    if Map.get(from_sink, name, 0) >= 2,
+      do: {:DuplicateSinkName, name},
+      else: {:DuplicateChannel, name}
+  end
+
+  # A channel is named once. `named/2` beside a `sink(name)` is two
+  # declarations even when they agree — permitting the agreeing case would
+  # leave a redundant pair with a rule nobody can remember. Two sinks spelling
+  # ONE name are the duplicate wire instead, which `terminate_sink` refuses.
+  defp named_twice(acc) do
+    for {_ref, node} <- nodes_in_order(acc),
+        [first, second | _] <- [naming_declarations(node)],
+        do: {:ChannelNamedTwice, node.module.name(), first, second}
+  end
+
+  defp naming_declarations(%{name: nil, sink_names: sinks}), do: Enum.uniq(sinks)
+  defp naming_declarations(%{name: name, sink_names: sinks}), do: [name | Enum.uniq(sinks)]
 
   defp over_long_names(names) do
     for name <- Enum.uniq(names),
@@ -385,12 +410,12 @@ defmodule Flezha.SDK.Topology do
         do: {:ChannelNameTooLong, name}
   end
 
-  defp duplicates(names, found) do
+  defp duplicates(names, issue) when is_function(issue, 1) do
     names
     |> Enum.frequencies()
     |> Enum.sort()
     |> Enum.flat_map(fn
-      {name, n} when n > 1 -> [{found, name}]
+      {name, n} when n > 1 -> [issue.(name)]
       _once -> []
     end)
   end
@@ -637,10 +662,10 @@ defmodule Flezha.SDK.Topology do
   defp node_seqs(acc), do: Map.new(acc.nodes, fn {ref, %{seq: n}} -> {ref, n} end)
   defp node_names(acc), do: Map.new(acc.nodes, fn {ref, %{name: n}} -> {ref, n} end)
 
-  # The channel a node's outputs are named by on the wire: `named/2`'s name,
-  # else the procedure's own — the auto-derived channel name every SDK ships.
+  # The channel a node's outputs are named by on the wire — the one derivation,
+  # read off `Channels` so the routes and the check cannot answer differently.
   defp node_channels(acc),
-    do: Map.new(acc.nodes, fn {ref, %{module: m, name: n}} -> {ref, n || m.name()} end)
+    do: Map.new(acc.nodes, fn {ref, node} -> {ref, Channels.node_channel_name(node)} end)
 
   # How a refusal names a node: the name the author gave it, else its module.
   defp node_label(acc, node_ref) do

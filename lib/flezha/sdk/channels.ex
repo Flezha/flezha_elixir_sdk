@@ -181,18 +181,40 @@ defmodule Flezha.SDK.Channels do
   def into_named(%Stream{} = s, module, name) when is_binary(name),
     do: do_into(s, module, name)
 
-  @doc "Terminal plugin sink with default serialization (bytes/UTF-8/JSON). Returns the handle."
-  def sink(%Stream{} = s, plugin) when is_binary(plugin),
+  @doc """
+  Terminate the channel on the plugin layer with default serialization
+  (bytes/UTF-8/JSON), naming it. The string written here IS the channel's name
+  everywhere one appears; `sink/1` leaves it derived as it would be without a
+  sink at all. Returns the handle.
+  """
+  def sink(%Stream{} = s, plugin \\ nil) when is_nil(plugin) or is_binary(plugin),
     do: sink_with(s, plugin, &default_serialize/1)
 
   @doc """
-  Terminal plugin sink with a custom serializer. Returns the handle, so a
-  channel carrying a sink AND a consumer (the hybrid shape) is one pipeline.
+  `sink/2` with a custom serializer. Returns the handle, so a channel carrying
+  a sink AND a consumer (the hybrid shape) is one pipeline.
   """
-  def sink_with(%Stream{} = s, plugin, serializer)
-      when is_binary(plugin) and is_function(serializer, 1) do
+  def sink_with(%Stream{} = s, plugin \\ nil, serializer)
+      when (is_nil(plugin) or is_binary(plugin)) and is_function(serializer, 1) do
+    s = name_from_sink(s, plugin)
     %{link(s, {:sink, plugin, serializer}) | chain_id: nil}
   end
+
+  # A sink that names the channel records the name where `named/2` records its
+  # own, so one rule answers what a channel is called and the check can see a
+  # channel named twice.
+  defp name_from_sink(%Stream{} = s, nil), do: s
+
+  defp name_from_sink(%Stream{source: {:node, node_ref}, builder: ref} = s, plugin) do
+    update(ref, fn acc ->
+      update_in(acc, [:nodes, node_ref, :sink_names], &(&1 ++ [plugin]))
+    end)
+
+    s
+  end
+
+  defp name_from_sink(%Stream{source: {:entry, name}} = s, plugin),
+    do: refuse(s, {:ChannelNamedTwice, name, name, plugin})
 
   @doc """
   Declare output identity on the plugin wire this handle reaches — the
@@ -247,17 +269,22 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The channel a source is named by on the wire: an entry's own name, a node's
-  `named/2` name, else its procedure's. One rule, read by the check's refusals
-  and by the compiled routes, so the `named` override is applied once for
-  every terminator the channel carries.
+  `named/2` name, the name its `sink` declared, else its procedure's. One rule,
+  read by the check's refusals and by the compiled routes, so the override is
+  applied once for every terminator the channel carries.
   """
   @spec channel_name(map(), {:entry, String.t()} | {:node, reference()}) :: String.t()
   def channel_name(_acc, {:entry, name}), do: name
 
-  def channel_name(acc, {:node, ref}) do
-    %{module: module, name: name} = Map.fetch!(acc.nodes, ref)
-    name || module.name()
-  end
+  def channel_name(acc, {:node, ref}), do: node_channel_name(Map.fetch!(acc.nodes, ref))
+
+  @doc """
+  The same rule off a node record: `named/2`'s name, else the first name a
+  `sink` declared, else the procedure's own. One reader, so the wire name and
+  the check's name cannot be derived two ways.
+  """
+  def node_channel_name(%{module: module, name: name, sink_names: sinks}),
+    do: name || List.first(sinks) || module.name()
 
   @doc false
   def fuse(chain) do
@@ -330,7 +357,13 @@ defmodule Flezha.SDK.Channels do
   end
 
   defp put_node(acc, node_ref, module, name),
-    do: put_in(acc, [:nodes, node_ref], %{module: module, name: name, seq: map_size(acc.nodes)})
+    do:
+      put_in(acc, [:nodes, node_ref], %{
+        module: module,
+        name: name,
+        sink_names: [],
+        seq: map_size(acc.nodes)
+      })
 
   # `named/2` on a node whose name another node already claims writes the name
   # anyway: two nodes then answer to it and the check names the collision.

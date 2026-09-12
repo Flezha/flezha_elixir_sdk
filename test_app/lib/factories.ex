@@ -31,8 +31,7 @@ defmodule ElixirRunner.CompareFilterOp do
     c
     |> input("input")
     |> into(ElixirRunner.CompareFilterProc)
-    |> named("sink")
-    |> sink("compare_filter_sink")
+    |> sink("sink")
   end
 end
 
@@ -88,8 +87,7 @@ defmodule ElixirRunner.StaticEntityOp do
     |> into(ElixirRunner.StaticEntryProc)
     |> named("hop")
     |> into(ElixirRunner.StaticDownstreamProc)
-    |> named("kafka")
-    |> sink("test_kafka")
+    |> sink("kafka")
   end
 end
 
@@ -116,8 +114,8 @@ defmodule ElixirRunner.SugarStaticEntityOp do
   @behaviour Flezha.SDK.StreamOperative
   def factory_id, do: "sugar_static_entity"
 
-  # The Rust `operative!` pipeline leaves the hop unnamed and names the plugin
-  # channel after the plugin.
+  # The Rust `operative!` pipeline leaves the hop unnamed and lets the sink
+  # name the producing channel.
   def channels(c) do
     import Flezha.SDK.Channels
 
@@ -125,7 +123,6 @@ defmodule ElixirRunner.SugarStaticEntityOp do
     |> input("input")
     |> into(ElixirRunner.MacroStaticEntryProc)
     |> into(ElixirRunner.MacroStaticDownstreamProc)
-    |> named("test_kafka")
     |> sink("test_kafka")
   end
 end
@@ -177,8 +174,7 @@ defmodule ElixirRunner.MixedOp do
     |> into(ElixirRunner.MixedMacroEntryProc)
     |> named("hop")
     |> into(ElixirRunner.MixedHandDownstreamProc)
-    |> named("kafka")
-    |> sink("test_kafka")
+    |> sink("kafka")
   end
 end
 
@@ -212,7 +208,6 @@ defmodule ElixirRunner.SugarDoNothingOp do
     c
     |> input("input")
     |> into(ElixirRunner.SugarDoNothingProc)
-    |> named("sugar_do_nothing_echo")
     |> sink("sugar_do_nothing_echo")
   end
 end
@@ -243,7 +238,6 @@ defmodule ElixirRunner.SugarStoreInputOp do
     c
     |> input("input")
     |> into(ElixirRunner.SugarStoreInputProc)
-    |> named("sugar_store_sink")
     |> sink("sugar_store_sink")
   end
 end
@@ -297,8 +291,7 @@ defmodule ElixirRunner.HybridChannelOp do
     c
     |> input("input")
     |> into(ElixirRunner.HybridProducerProc)
-    |> named("hybrid_indicator")
-    |> sink_with("hybrid_indicators", &__MODULE__.serialize/1)
+    |> sink_with("hybrid_indicator", &__MODULE__.serialize/1)
     |> into(ElixirRunner.HybridConsumerProc)
   end
 
@@ -344,8 +337,7 @@ defmodule ElixirRunner.PoisonProbeOp do
     |> input("input")
     |> retry_backoff_ms(25)
     |> into(ElixirRunner.PoisonProbeProc)
-    |> named("out")
-    |> sink("probe_sink")
+    |> sink("out")
   end
 end
 
@@ -396,8 +388,7 @@ defmodule ElixirRunner.WedgeProbeOp do
     c
     |> input("input")
     |> into(ElixirRunner.WedgeProbeProc)
-    |> named("out")
-    |> sink("wedge_sink")
+    |> sink("out")
   end
 end
 
@@ -449,8 +440,7 @@ defmodule ElixirRunner.BoundedMailboxDropNothingOp do
     |> input("drop_nothing_input")
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.DropNothingTestProc)
-    |> named("drop_nothing_echo")
-    |> sink("bounded_mailbox_echo")
+    |> sink("drop_nothing_echo")
   end
 end
 
@@ -466,8 +456,7 @@ defmodule ElixirRunner.BoundedMailboxDropNewestOp do
     |> input("drop_newest_input")
     |> on_full(:drop_newest)
     |> into(ElixirRunner.DropNewestTestProc)
-    |> named("drop_newest_echo")
-    |> sink("bounded_mailbox_echo")
+    |> sink("drop_newest_echo")
   end
 end
 
@@ -483,8 +472,7 @@ defmodule ElixirRunner.BoundedMailboxDropOldestOp do
     |> input("drop_oldest_input")
     |> on_full(:drop_oldest)
     |> into(ElixirRunner.DropOldestTestProc)
-    |> named("drop_oldest_echo")
-    |> sink("bounded_mailbox_echo")
+    |> sink("drop_oldest_echo")
   end
 end
 
@@ -527,9 +515,8 @@ defmodule ElixirRunner.PartitionRelayOp do
     |> input("in")
     |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
     |> into(ElixirRunner.PartitionRelayProc)
-    |> named("input")
     |> keyed()
-    |> sink("relay_out")
+    |> sink("input")
   end
 end
 
