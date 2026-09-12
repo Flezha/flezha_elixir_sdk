@@ -62,9 +62,6 @@
       "bounded_mailbox_drop_newest",
       "bounded_mailbox_drop_oldest"
     ],
-    "entry_idle": [
-      "entry_idle_probe"
-    ],
     "partitioned": [
       "partition_relay",
       "dynamic_entity"

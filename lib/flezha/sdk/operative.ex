@@ -31,7 +31,6 @@ defmodule Flezha.SDK.Operative do
     Call,
     Counters,
     Entity,
-    EntryInput,
     Hold,
     KeyGroup,
     Knob,
@@ -74,7 +73,6 @@ defmodule Flezha.SDK.Operative do
       :secondaries,
       :slots,
       :credit,
-      cells: %{},
       entities: %{},
       dynamic: %{},
       evicted: nil,
@@ -134,9 +132,6 @@ defmodule Flezha.SDK.Operative do
     state = %State{
       operative_id: Keyword.fetch!(opts, :operative_id),
       topology: topology,
-      # The entry cells, resolved once: the RunnerServer interns them before
-      # starting this process, so the delivery path below is one atomic store.
-      cells: Keyword.get_lazy(opts, :cells, fn -> EntryInput.cells_for(topology.entries) end),
       range: Keyword.fetch!(opts, :range),
       counters: counters,
       hold_cap: hold_cap,
@@ -259,11 +254,6 @@ defmodule Flezha.SDK.Operative do
         {:noreply, park_unresolved(s, requested, message)}
 
       channel ->
-        # The frame counts before it can be declined: the stamp precedes the
-        # parse. A frame that resolved no channel stamps none, having reached
-        # none.
-        EntryInput.stamp(Map.fetch!(s.cells, channel))
-
         case parse(s.topology, channel, message) do
           {:ok, value} ->
             {offset, replay} = frame_facts(s.topology, metadata)

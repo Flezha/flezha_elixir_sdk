@@ -401,91 +401,6 @@ defmodule ElixirRunner.WedgeProbeOp do
   end
 end
 
-# -- entry_idle_probe -------------------------------------------------------
-#
-# An IdleObserver has no ctx and cannot emit, so the observer counts episodes
-# and a procedure reports them as `<absent_at_boot>:<episodes>:<resumes>`. Two
-# entry channels fan into ONE procedure — unnamed mentions of one module unify,
-# so the second edge is not `named/2` — and the SDK interns one cell per channel
-# NAME, so a frame on `idle_report` leaves `idle_input`'s stamp untouched and
-# the e2e can poll without ending the silence it measures. The counters are a
-# `:counters` ref held in `:persistent_term`, written by the SDK's idle process
-# and read by the Entity process.
-
-defmodule ElixirRunner.EntryIdleCounter do
-  @moduledoc false
-  @behaviour Flezha.SDK.IdleObserver
-
-  @counters {__MODULE__, :counters}
-  @absent {__MODULE__, :absent_at_boot}
-  @watched "idle_input"
-  @threshold_ms 1_000
-
-  def watched, do: @watched
-
-  # Read the accessor before the runner starts, then watch the channel. The
-  # stamp is taken ahead of anything that can decline a frame, so "absent
-  # before the first frame" is observable here and nowhere inside a procedure.
-  # The handle is free — `create_runner/1` starts nothing — so the read costs
-  # nothing but the read.
-  def arm do
-    :persistent_term.put(@counters, :counters.new(2, [:atomics]))
-
-    absent =
-      "entry_idle_probe"
-      |> Flezha.SDK.create_runner()
-      |> Flezha.SDK.last_entry_delivery(@watched)
-      |> is_nil()
-
-    :persistent_term.put(@absent, absent)
-    [{@watched, @threshold_ms, __MODULE__}]
-  end
-
-  @impl true
-  def idle(_gap_ms), do: :counters.add(:persistent_term.get(@counters), 1, 1)
-
-  @impl true
-  def resumed(_gap_ms), do: :counters.add(:persistent_term.get(@counters), 2, 1)
-
-  def report do
-    counters = :persistent_term.get(@counters)
-    "#{:persistent_term.get(@absent)}:#{:counters.get(counters, 1)}:#{:counters.get(counters, 2)}"
-  end
-end
-
-defmodule ElixirRunner.EntryIdleProbeProc do
-  @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-
-  alias Flezha.SDK.Ctx
-
-  def name, do: "entry_idle_probe_procedure"
-  def init_state(_), do: nil
-
-  def run(_input, s, ctx) do
-    Ctx.emit(ctx, ElixirRunner.EntryIdleCounter.report())
-    {:ok, s}
-  end
-end
-
-defmodule ElixirRunner.EntryIdleProbeOp do
-  @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "entry_idle_probe"
-
-  def channels(c) do
-    import Flezha.SDK.Channels
-
-    # Both channels wire the same module: one node, fan-in.
-    c |> input(ElixirRunner.EntryIdleCounter.watched()) |> into(ElixirRunner.EntryIdleProbeProc)
-
-    c
-    |> input("idle_report")
-    |> into(ElixirRunner.EntryIdleProbeProc)
-    |> sink("entry_idle_report")
-  end
-end
-
 # -- bounded_mailbox_{drop_nothing,drop_newest,drop_oldest} ------------------------
 
 defmodule ElixirRunner.DropNothingTestProc do
@@ -632,7 +547,6 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.HybridChannelOp,
       ElixirRunner.PoisonProbeOp,
       ElixirRunner.WedgeProbeOp,
-      ElixirRunner.EntryIdleProbeOp,
       ElixirRunner.BoundedMailboxDropNothingOp,
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,

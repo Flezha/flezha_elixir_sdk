@@ -26,8 +26,6 @@ defmodule Flezha.SDK.RunnerServer do
     Credit,
     DataStream,
     Entity,
-    EntryIdle,
-    EntryInput,
     Hold,
     Jitter,
     Knob,
@@ -81,7 +79,6 @@ defmodule Flezha.SDK.RunnerServer do
       operatives: %{},
       parks: %{},
       barriers: %{},
-      idle: nil,
       held: nil,
       control: nil,
       reconnect_attempt: 0,
@@ -127,10 +124,6 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  @doc "Register an idle observer on the live runner (see `Flezha.SDK.on_entry_idle/4`)."
-  def on_entry_idle(server, channel, threshold_ms, observer),
-    do: Call.control(server, {:on_entry_idle, channel, threshold_ms, observer}, @busy)
-
   # --- server ---
 
   @impl true
@@ -144,12 +137,7 @@ defmodule Flezha.SDK.RunnerServer do
         schedule_heartbeat()
         schedule_keepalive()
 
-        {:ok,
-         Enum.reduce(Keyword.get(opts, :idle_observers, []), state, fn
-           {channel, threshold_ms, observer}, acc ->
-             {:ok, acc} = register_idle(acc, channel, threshold_ms, observer)
-             acc
-         end)}
+        {:ok, state}
 
       {:error, reason} ->
         # The one diagnosis, before this runner gives up: which of the four
@@ -239,11 +227,6 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   def handle_call(:namespace, _from, %State{} = s), do: {:reply, s.namespace, s}
-
-  def handle_call({:on_entry_idle, channel, threshold_ms, observer}, _from, %State{} = s) do
-    {reply, s} = register_idle(s, channel, threshold_ms, observer)
-    {:reply, reply, s}
-  end
 
   # --- control commands ---
 
@@ -757,18 +740,6 @@ defmodule Flezha.SDK.RunnerServer do
     bin = Codec.encode_response(ref, status, errors, raw)
     {verdict, _hold} = Hold.write({"control_command", :response}, control(s), {bin, metadata})
     verdict
-  end
-
-  # The idle process starts with the first registration and is linked here, so
-  # it ends with the runner. Interning happens in this process, one at a time.
-  defp register_idle(%State{} = s, channel, threshold_ms, observer) do
-    s = if s.idle, do: s, else: %{s | idle: start_idle()}
-    {EntryIdle.register(s.idle, channel, EntryInput.cell_for(channel), threshold_ms, observer), s}
-  end
-
-  defp start_idle do
-    {:ok, pid} = EntryIdle.start_link()
-    pid
   end
 
   defp schedule_heartbeat do

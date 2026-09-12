@@ -3,10 +3,10 @@ defmodule Flezha.SDK.Call do
   One call into one of the runner's own processes.
 
   A runner runs inside a host application, so a wedged Entity, Operative,
-  RunnerServer, local run or entry-idle watcher must refuse its caller rather
-  than exit it. Every such call goes through `Flezha.SafeCall` with a bound one
-  of the declared rows names and the caller's refusal declared as data — and
-  through this module, so the packaging boundary crosses in one file
+  RunnerServer or local run must refuse its caller rather than exit it. Every
+  such call goes through `Flezha.SafeCall` with a bound one of the declared
+  rows names and the caller's refusal declared as data — and through this
+  module, so the packaging boundary crosses in one file
   (`scripts/check-sdk-boundary.sh`).
 
   **A refusal is not a cancellation.** The request stays in the target's mailbox

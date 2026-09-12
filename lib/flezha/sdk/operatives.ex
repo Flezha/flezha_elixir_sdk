@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Operatives do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Commands, Declarations, EntryInput, KeyGroup, Operative}
+  alias Flezha.SDK.{Codec, Commands, Declarations, KeyGroup, Operative}
   alias Flezha.SDK.Workflow.{Driver, Spec}
 
   @doc """
@@ -75,7 +75,6 @@ defmodule Flezha.SDK.Operatives do
       Operative.start_link(
         operative_id: add.operative_id,
         topology: topo,
-        cells: EntryInput.cells_for(topo.entries),
         range: range,
         counters: s.counters,
         runner: self(),

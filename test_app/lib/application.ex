@@ -42,7 +42,7 @@ defmodule ElixirRunner.Application do
     # The declared set is settled before the watcher is armed: a refusal-fixture
     # row that the check refuses exits non-zero here, and an already-closed
     # standard input would otherwise halt the VM with 0 first.
-    {streams, workflows, idle_observers} = declared_set()
+    {streams, workflows} = declared_set()
     watch_stdin()
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
 
@@ -53,8 +53,7 @@ defmodule ElixirRunner.Application do
         namespace: namespace,
         streams: streams,
         workflows: workflows,
-        transport: transport,
-        idle_observers: idle_observers
+        transport: transport
       )
     ]
 
@@ -66,14 +65,11 @@ defmodule ElixirRunner.Application do
   defp declared_set do
     case System.get_env("FLEZHA_REFUSAL_FIXTURE") do
       nil ->
-        # A runner-level registration, not a declaration: armed beside the streams.
         {ElixirFactories.all() ++ ElixirRunner.Factories.all(),
-         ElixirRunner.Workflows.all() ++ ElixirRunner.WorkflowsLoop.all(),
-         ElixirRunner.EntryIdleCounter.arm()}
+         ElixirRunner.Workflows.all() ++ ElixirRunner.WorkflowsLoop.all()}
 
       topology ->
-        {streams, workflows} = ElixirRunner.Conformance.boot_classes(topology)
-        {streams, workflows, []}
+        ElixirRunner.Conformance.boot_classes(topology)
     end
   end
 
