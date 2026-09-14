@@ -81,10 +81,12 @@ defmodule Flezha.SDK.Hold do
 
   # The `Command` variant a `control_command` carries. A shutdown state ship is
   # the operative's final state and is durable; every other variant is a
-  # request or a reply whose reconnect re-issues it.
+  # request or a reply whose reconnect re-issues it, or whose caller is told the
+  # write was refused, as an admin request's is.
   @command_classes %{
     runner_shutdown_notification: :durable,
     update_factories: :control,
+    admin_request: :control,
     proc_commit: :control,
     iter_commit: :control,
     iter_park: :control,
