@@ -20,6 +20,7 @@ defmodule Echo.MixProject do
   end
 
   defp deps do
-    [{:flezha, "~> 0.1"}]
+    # TODO: change later to {:flezha, "~> 0.1.0"} when flezha is released
+    [{:flezha, path: "../../.."}]
   end
 end
