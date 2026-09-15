@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Workflow.Ctx do
   @moduledoc """
-  The context a run-sugar workflow body is handed: what it emits, and the
-  result it completes with.
+  The context a run-sugar workflow body is handed: what it emits, the result
+  it completes with, and the workflow instances it asks for.
 
   A structured class has none of this — its procedures emit through the
   ordinary `Flezha.SDK.Ctx`, and what they release is staged and journalled at
@@ -10,8 +10,10 @@ defmodule Flezha.SDK.Workflow.Ctx do
   same wire a stream operative's sink output leaves on.
   """
 
+  alias Flezha.SDK.Spawn
+
   @enforce_keys [:driver]
-  defstruct [:driver, :operative_id, channel: "out"]
+  defstruct [:driver, :operative_id, :runner, channel: "out"]
 
   @type t :: %__MODULE__{}
 
@@ -32,4 +34,13 @@ defmodule Flezha.SDK.Workflow.Ctx do
   @spec complete(t(), binary()) :: :ok
   def complete(%__MODULE__{driver: driver}, result) when is_binary(result),
     do: GenServer.cast(driver, {:sugar_result, result})
+
+  @doc """
+  Request spawn-or-deliver of a workflow instance, as
+  `Flezha.SDK.Ctx.spawn_workflow/5` does from a procedure. A body is never a
+  replay, so the request is always made.
+  """
+  @spec spawn_workflow(t(), String.t(), String.t(), binary(), Spawn.if_running()) :: Spawn.t()
+  def spawn_workflow(%__MODULE__{runner: runner}, instance_id, factory_id, payload, if_running),
+    do: Spawn.request(runner, false, instance_id, factory_id, payload, if_running)
 end

@@ -12,6 +12,7 @@ defmodule Flezha.SDK.Workflow.Instance do
   journal, the resume and the unwind all read.
   """
 
+  alias Flezha.SDK.Knob
   alias Flezha.SDK.Workflow.Spec
 
   defmodule Item do
@@ -55,6 +56,7 @@ defmodule Flezha.SDK.Workflow.Instance do
             spec: nil,
             inbox: nil,
             owed_inbox: 0,
+            park_idle_ms: nil,
             stage_entities: %{},
             journal: nil,
             iter: 0,
@@ -74,6 +76,7 @@ defmodule Flezha.SDK.Workflow.Instance do
       spec: spec,
       inbox: :queue.new(),
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
+      park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:workflow_park_idle_ms),
       journal: journal,
       iter: if(journal, do: journal.iter, else: 0),
       compensation_done: MapSet.new()
@@ -82,10 +85,10 @@ defmodule Flezha.SDK.Workflow.Instance do
 
   # --- inbox ---
 
-  @doc "Append one post-start input."
-  @spec push_inbox(t(), binary(), non_neg_integer()) :: t()
-  def push_inbox(%__MODULE__{} = i, payload, offset \\ 0) do
-    item = %Item{payload: payload, offset: offset}
+  @doc "Append one post-start input, at the durable-inbox offset its metadata carries."
+  @spec push_inbox(t(), binary(), map()) :: t()
+  def push_inbox(%__MODULE__{} = i, payload, metadata) do
+    item = %Item{payload: payload, offset: inbox_offset(metadata)}
     %{i | inbox: :queue.in(item, i.inbox), owed_inbox: max(i.owed_inbox - 1, 0)}
   end
 
@@ -98,9 +101,24 @@ defmodule Flezha.SDK.Workflow.Instance do
     end
   end
 
-  @doc "Whether the loop may park: nothing queued and nothing the bind still owes."
-  @spec may_park?(t()) :: boolean()
-  def may_park?(%__MODULE__{} = i), do: i.owed_inbox == 0 and :queue.is_empty(i.inbox)
+  @doc """
+  How long an empty inbox is waited on before the loop parks: the bound on the
+  tail a rehydrating bind still owes, else the park idle window.
+  """
+  @spec idle_ms(t()) :: non_neg_integer()
+  def idle_ms(%__MODULE__{owed_inbox: owed}) when owed > 0,
+    do: Knob.get(:sdk_owed_inbox_wait_ms)
+
+  def idle_ms(%__MODULE__{park_idle_ms: ms}), do: ms
+
+  # The controller stamps a journaled input with its offset; an unjournaled one
+  # carries none and takes `0`.
+  defp inbox_offset(metadata) do
+    case Integer.parse(Map.get(metadata, "flz.inbox_offset", "")) do
+      {offset, _rest} -> offset
+      :error -> 0
+    end
+  end
 
   # --- compensation markers ---
 

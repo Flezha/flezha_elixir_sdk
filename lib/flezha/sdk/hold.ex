@@ -87,6 +87,7 @@ defmodule Flezha.SDK.Hold do
     runner_shutdown_notification: :durable,
     update_factories: :control,
     admin_request: :control,
+    spawn_workflow_request: :control,
     proc_commit: :control,
     iter_commit: :control,
     iter_park: :control,

@@ -113,7 +113,7 @@ defmodule Flezha.SDK.Workflow.Stage do
         slots: Keyword.get(opts, :slots),
         credit: Keyword.get(opts, :credit),
         persistence_enabled: knobs.persistence_enabled,
-        ctx_opts: [operative_id: operative_id]
+        ctx_opts: [runner: Keyword.get(opts, :runner)]
       )
 
     pid

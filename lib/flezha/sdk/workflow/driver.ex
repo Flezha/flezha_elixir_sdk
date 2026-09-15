@@ -17,7 +17,9 @@ defmodule Flezha.SDK.Workflow.Driver do
   This one is event-driven, because a blocked BEAM process cannot answer the
   stop, the inbox push or the restore that must reach it while a stage is in
   flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from an
-  Entity's queue barrier, and `{:barrier_ack, ref, result, error}` from the runner.
+  Entity's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
+  and for a `:per_input` loop with nothing queued, its next input or the idle
+  window's `{:park_idle, ref}`.
   """
 
   use GenServer
@@ -73,6 +75,8 @@ defmodule Flezha.SDK.Workflow.Driver do
       sugar: nil,
       result: <<>>,
       resume_owed: 0,
+      # set while a `:per_input` loop waits for an input; its idle timer names it
+      idle: nil,
       # The rollback phase, in one field so the struct stays a flat map (credo
       # refuses a 32nd): the groups still to undo, the one in flight, and the
       # terminal the unwind is heading for — `nil` while running forward.
@@ -103,7 +107,8 @@ defmodule Flezha.SDK.Workflow.Driver do
       instance:
         Instance.new(operative_id, spec,
           journal: journal(opts),
-          owed_inbox: Keyword.get(opts, :owed_inbox, 0)
+          owed_inbox: Keyword.get(opts, :owed_inbox, 0),
+          park_idle_ms: Keyword.get(opts, :park_idle_ms)
         ),
       spec: spec,
       operative_id: operative_id,
@@ -225,16 +230,14 @@ defmodule Flezha.SDK.Workflow.Driver do
   def handle_cast({:stage_failed, node_ref, error}, %State{} = s),
     do: settle(fail(s, node_ref, error))
 
-  # A post-start input off the bound data stream. A `:per_input` loop consumes
-  # it as its next iteration; any other loop shape has no inbox to put it in,
-  # so it is counted and dropped rather than silently seeding a second run.
-  def handle_cast({:input, _channel, message, _metadata}, %State{} = s) do
+  # A post-start input off the bound data stream. A `:per_input` loop queues it
+  # and, if it was waiting for one, starts its next iteration; any other loop
+  # shape has no inbox to put it in, so it is logged and dropped rather than
+  # silently seeding a second run.
+  def handle_cast({:input, _channel, message, metadata}, %State{} = s) do
     if s.spec.knobs.loop_mode == :per_input do
-      s = %{s | instance: Instance.push_inbox(s.instance, message, 0)}
-
-      if s.frontier == [] and s.barrier == nil and s.unwind.status == nil,
-        do: settle(begin_iteration(s)),
-        else: {:noreply, s}
+      s = %{s | instance: Instance.push_inbox(s.instance, message, metadata)}
+      if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
     else
       Logger.warning(
         "[Flezha.SDK] #{s.operative_id} discarded an input: a #{s.spec.knobs.loop_mode} " <>
@@ -278,9 +281,14 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, %State{} = s), do: {:noreply, s}
 
-  def handle_info(:workflow_stop, %State{} = s), do: {:noreply, %{s | cancel: :cancelled}}
+  # A stop and the duration cap are cooperative: the run unwinds at its next
+  # step. A loop waiting for input has no next step and nothing to unwind.
+  def handle_info(stop, %State{} = s) when stop in [:workflow_stop, :max_duration] do
+    s = %{s | cancel: :cancelled}
+    if s.idle, do: settle(complete(%{s | idle: nil}, "cancelled", "")), else: {:noreply, s}
+  end
 
-  def handle_info(:max_duration, %State{} = s), do: {:noreply, %{s | cancel: :cancelled}}
+  def handle_info({:park_idle, ref}, %State{idle: ref} = s), do: settle(park(%{s | idle: nil}))
 
   def handle_info({:restored, _entity}, %State{resume_owed: owed} = s) when owed > 1,
     do: {:noreply, %{s | resume_owed: owed - 1}}
@@ -332,7 +340,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   # duration cap while it ran — and its own `emit` reaches this process as a
   # message, which a driver blocked inside the call could never receive.
   defp run_sugar(%State{spec: spec} = s) do
-    ctx = %WorkflowCtx{driver: self(), operative_id: s.operative_id}
+    ctx = %WorkflowCtx{driver: self(), operative_id: s.operative_id, runner: s.runner}
     driver = self()
 
     {pid, _ref} =
@@ -395,13 +403,36 @@ defmodule Flezha.SDK.Workflow.Driver do
     case seed(s) do
       {:seeded, s, batch} -> dispatch_frontier(fresh_iteration(s), [{s.spec.dag.root, batch}])
       {:done, s} -> complete(s, "ok", "")
-      {:park, s} -> park(s)
+      :wait -> await_input(s)
     end
   end
 
-  # Where iteration `iter` starts: the spawn args on the first pass, the
-  # previous terminal batch for a handoff-chained loop, the next inbox item
-  # for a per-input one.
+  # An empty inbox is waited on as the reference waits: for the tail a
+  # rehydrating bind still owes, else for the idle window, and the loop parks
+  # when the wait ends. A class that journals nothing cannot park, so it waits
+  # for an input or a stop.
+  defp await_input(%State{} = s) do
+    ref = make_ref()
+
+    if journals?(s),
+      do: Process.send_after(self(), {:park_idle, ref}, Instance.idle_ms(s.instance))
+
+    %{s | idle: ref}
+  end
+
+  # Where iteration `iter` starts: the next inbox item for a per-input loop,
+  # which never reads the spawn args; the args on the first pass of any other;
+  # the previous terminal batch for a handoff-chained loop.
+  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :per_input}}} = s) do
+    case Instance.pop_inbox(s.instance) do
+      {:ok, item, instance} ->
+        {:seeded, %{s | instance: instance, consumed_offset: item.offset}, [item.payload]}
+
+      {:empty, _instance} ->
+        :wait
+    end
+  end
+
   defp seed(%State{iter: 0, carry: nil} = s), do: {:seeded, s, [s.args]}
 
   defp seed(%State{spec: %Spec{knobs: %{loop_mode: :once}}} = s), do: {:done, s}
@@ -414,16 +445,6 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   defp seed(%State{spec: %Spec{knobs: %{loop_mode: :chained}}, carry: batch} = s),
     do: {:seeded, %{s | carry: nil}, batch}
-
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :per_input}}} = s) do
-    case Instance.pop_inbox(s.instance) do
-      {:ok, item, instance} ->
-        {:seeded, %{s | instance: instance, consumed_offset: item.offset}, [item.payload]}
-
-      {:empty, instance} ->
-        if Instance.may_park?(instance), do: {:park, %{s | instance: instance}}, else: {:done, s}
-    end
-  end
 
   defp fresh_iteration(%State{} = s),
     do: %{
@@ -700,7 +721,8 @@ defmodule Flezha.SDK.Workflow.Driver do
         counters: s.counters,
         secondaries: s.secondaries,
         slots: s.slots,
-        credit: s.credit
+        credit: s.credit,
+        runner: s.runner
       )
 
     %{s | entities: entities}

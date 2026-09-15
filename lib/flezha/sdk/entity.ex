@@ -517,7 +517,7 @@ defmodule Flezha.SDK.Entity do
 
       case Timers.due(timers.pending, :event_time, s.timers.high_water) do
         [] ->
-          dispatch(s, value, offset)
+          dispatch(s, value, offset, replay)
 
         due ->
           fires = Enum.map(due, &%Fire{kind: :event_time, at: &1})
@@ -529,11 +529,11 @@ defmodule Flezha.SDK.Entity do
       {:buffer, at} -> Tier.buffer(s, rewrap(value, offset, :member), at)
       # A raising extractor rides the ladder and parks as any bad input; a
       # beyond-window arrival dispatches without moving the high-water.
-      _other -> dispatch(s, value, offset)
+      _other -> dispatch(s, value, offset, replay)
     end
   end
 
-  defp admit_value(%State{} = s, value, offset, _replay), do: dispatch(s, value, offset)
+  defp admit_value(%State{} = s, value, offset, replay), do: dispatch(s, value, offset, replay)
 
   # A value going back on the queue keeps what it arrived with.
   defp rewrap(value, nil, nil), do: value
@@ -550,12 +550,12 @@ defmodule Flezha.SDK.Entity do
   # ONE wedged Entity visible to the controller, so a dispatch that unwinds
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
-  defp dispatch(%State{} = s, item, offset) do
+  defp dispatch(%State{} = s, item, offset, replay \\ nil) do
     identity = identity(s.operative_id, s.node_ref, s.entity_key)
     Counters.dispatch_started(s.counters, identity)
 
     try do
-      case run_ladder(s, item, 1) do
+      case run_ladder(s, item, ctx_opts(s, item, replay), 1) do
         {:ok, new_proc_state, facts} ->
           complete(s, new_proc_state, facts, offset)
 
@@ -584,10 +584,6 @@ defmodule Flezha.SDK.Entity do
     s
   end
 
-  # Under the tier the invocation's whole effect is ONE record: its changes,
-  # the outputs it captured itself, the offset it consumed and its timer ops,
-  # so state, outputs and the offset can never tear. Only an inter-procedure
-  # emit still leaves through the router.
   # Under the tier the invocation's whole effect is ONE record: its changes,
   # the outputs it captured itself, the offset it consumed and its timer ops,
   # so state, outputs and the offset can never tear. Only an inter-procedure
@@ -631,12 +627,10 @@ defmodule Flezha.SDK.Entity do
   # ctx is bound before the call, so a raise inside `run/3` still reaches the
   # arm that discards it — the ref is the only handle its dictionary slots
   # have.
-  defp run_ladder(%State{} = s, item, attempt) do
+  defp run_ladder(%State{} = s, item, opts, attempt) do
     outcome =
       with {:ok, ctx} <-
-             guarded(fn ->
-               Ctx.new(s.module, s.entity_key, clock_now(s, item), ctx_opts(s, item))
-             end),
+             guarded(fn -> Ctx.new(s.module, s.entity_key, clock_now(s, item), opts) end),
            {:ok, result} <- guarded(fn -> call(s, item, ctx) end, ctx) do
         {:result, ctx, result}
       end
@@ -665,11 +659,11 @@ defmodule Flezha.SDK.Entity do
 
       {:result, ctx, {:error, reason}} ->
         Ctx.discard(ctx)
-        retry_or_park(s, item, attempt, format_error(reason))
+        retry_or_park(s, item, opts, attempt, format_error(reason))
 
       {:raised, ctx, message} ->
         if ctx, do: Ctx.discard(ctx)
-        retry_or_park(s, item, attempt, message)
+        retry_or_park(s, item, opts, attempt, message)
     end
   end
 
@@ -706,17 +700,17 @@ defmodule Flezha.SDK.Entity do
   defp clock_now(_s, %Fire{at: at}), do: at
   defp clock_now(%State{} = s, value), do: Clock.now(s, value)
   # The invocation's timer session opens over the live pending set; a firing's
-  # opens on its own removal.
-  defp ctx_opts(%State{} = s, item),
-    do: [timers: s.timers.pending, firing: firing(item)] ++ s.ctx_opts
+  # opens on its own removal. A replayed input's spawn requests issue nothing.
+  defp ctx_opts(%State{} = s, item, replay),
+    do: [timers: s.timers.pending, firing: firing(item), replay: replay != nil] ++ s.ctx_opts
 
   defp firing(%Fire{kind: kind, at: at}), do: {kind, at}
   defp firing(_value), do: nil
 
-  defp retry_or_park(%State{retry_max: max}, _value, attempt, error) when attempt >= max,
+  defp retry_or_park(%State{retry_max: max}, _value, _opts, attempt, error) when attempt >= max,
     do: {:park, error, attempt}
 
-  defp retry_or_park(%State{} = s, value, attempt, error) do
+  defp retry_or_park(%State{} = s, value, opts, attempt, error) do
     Logger.debug(
       "[Flezha.SDK] #{State.label(s)} attempt #{attempt}/#{s.retry_max} failed: #{error}; retrying"
     )
@@ -727,7 +721,7 @@ defmodule Flezha.SDK.Entity do
     })
 
     Knob.wait(:sdk_retry, attempt, s.operative_id, base: s.retry_backoff_ms)
-    run_ladder(s, value, attempt + 1)
+    run_ladder(s, value, opts, attempt + 1)
   end
 
   # Under the tier a park IS a record: the entry, the offset it consumed and a

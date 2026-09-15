@@ -32,9 +32,13 @@ defmodule Flezha.SDK.Ctx do
   close its staged interval, and `stable_id/1` answers a replay-stable id
   derived from the Entity's wire identity, the change seq the invocation
   started at and a per-invocation ordinal.
+
+  `spawn_workflow/5` asks the runner for a workflow instance and answers a
+  `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
+  nothing.
   """
 
-  alias Flezha.SDK.{Procedure, Timers}
+  alias Flezha.SDK.{Procedure, Spawn, Timers}
 
   @enforce_keys [:module, :entity_key, :now_ms, :ref]
   defstruct [
@@ -46,8 +50,10 @@ defmodule Flezha.SDK.Ctx do
     :timers,
     :timer_policy,
     :firing,
+    :runner,
     identity: <<>>,
     seq: 0,
+    replay?: false,
     keyed_sink?: false,
     key_required?: false
   ]
@@ -71,7 +77,9 @@ defmodule Flezha.SDK.Ctx do
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
   (`key_required?`), the Entity's pending timers (`timers`, empty by default),
   the procedure's timer policy (`timer_policy`, resolved from `module` by
-  default) and the firing this invocation is (`firing`, `{kind, at}` or nil).
+  default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
+  runner a spawn request goes to (`runner`, nil for none) and whether the input
+  is a replay (`replay`), which issues no spawn.
   """
   def new(module, entity_key, now_ms, opts \\ []) do
     # Nothing is written here: every reader of a slot defaults to empty, so an
@@ -88,8 +96,10 @@ defmodule Flezha.SDK.Ctx do
       timer_policy:
         Keyword.get_lazy(opts, :timer_policy, fn -> Procedure.timer_policy(module) end),
       firing: Keyword.get(opts, :firing),
+      runner: Keyword.get(opts, :runner),
       identity: Keyword.get(opts, :identity, <<>>),
       seq: Keyword.get(opts, :seq, 0),
+      replay?: Keyword.get(opts, :replay, false),
       keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
       key_required?: Keyword.get(opts, :key_required?, false)
     }
@@ -161,6 +171,18 @@ defmodule Flezha.SDK.Ctx do
 
   @doc "The owning Entity's key, or nil for a Single Entity."
   def entity_key(%__MODULE__{entity_key: k}), do: k
+
+  @doc """
+  Request spawn-or-deliver of a workflow instance in this runner's namespace:
+  `instance_id` of `factory_id` starts with `payload` as its first input when
+  the id is free; while it runs, `:deliver` hands it `payload` as one more
+  input and `:error` resolves `already_running`. Answers a `Flezha.SDK.Spawn`
+  handle without waiting, read with `Flezha.SDK.Spawn.await/2` or
+  `Flezha.SDK.Spawn.try_result/1` inside this invocation, or not at all.
+  """
+  @spec spawn_workflow(t(), String.t(), String.t(), binary(), Spawn.if_running()) :: Spawn.t()
+  def spawn_workflow(%__MODULE__{} = ctx, instance_id, factory_id, payload, if_running),
+    do: Spawn.request(ctx.runner, ctx.replay?, instance_id, factory_id, payload, if_running)
 
   @doc """
   Close the staged checkpoint interval at the end of this invocation. A no-op

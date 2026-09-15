@@ -13,6 +13,8 @@ defmodule Flezha.SDK.RunnerServer do
   read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
   off this loop, operatives start and stop through `Flezha.SDK.Operatives`, and
   a graceful stop ships every operative's state before the connection closes.
+  A caller waiting on a controller reply is kept in
+  `Flezha.SDK.RunnerServer.Waiters` until the reply settles it.
   """
 
   use GenServer
@@ -32,9 +34,11 @@ defmodule Flezha.SDK.RunnerServer do
     Operatives,
     Park,
     PersistentId,
+    Spawn,
     Transport
   }
 
+  alias Flezha.SDK.RunnerServer.Waiters
   alias Flezha.SDK.Workflow.Driver
   alias Flezha.Transport.Server, as: TransportServer
 
@@ -78,7 +82,7 @@ defmodule Flezha.SDK.RunnerServer do
       secondaries: [],
       operatives: %{},
       parks: %{},
-      barriers: %{},
+      waiters: %{},
       held: nil,
       control: nil,
       reconnect_attempt: 0,
@@ -107,8 +111,8 @@ defmodule Flezha.SDK.RunnerServer do
 
   A cast rather than a call: the controller may have to start an operative
   before it can answer, and the runner must keep serving while it does. The
-  reply reaches the caller on the same `barriers` table a workflow commit's ack
-  rides.
+  reply reaches the caller through `Flezha.SDK.RunnerServer.Waiters`, as a
+  workflow commit's ack does.
   """
   @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
           {:ok, String.t()} | {:error, term()}
@@ -328,6 +332,10 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info({:data_stream_closed, pid, _reason}, %State{} = s),
     do: {:noreply, if(pid in s.primaries, do: teardown_streams(s), else: s)}
 
+  # A spawn request's deadline. One already answered finds nothing to settle.
+  def handle_info({:spawn_deadline, reference_id}, %State{} = s),
+    do: settle(s, reference_id, :timeout, "")
+
   def handle_info({:EXIT, _pid, _reason}, %State{} = s), do: {:noreply, s}
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
@@ -346,8 +354,6 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_cast({:record, _payload_id, _frame} = write, %State{} = s),
     do: {:noreply, ship_write(s, write)}
 
-  # The same table a workflow barrier uses, because it answers the same
-  # question: which caller is waiting on this reference id.
   def handle_cast({:admin, caller, ref, verb, args}, %State{} = s) do
     reference_id = "admin-" <> Integer.to_string(System.unique_integer([:positive]))
 
@@ -360,6 +366,26 @@ defmodule Flezha.SDK.RunnerServer do
         {:noreply, s}
     end
   end
+
+  # A procedure's spawn request owns its deadline, because nothing but a settle
+  # removes a waiter. With no control handle `ship_request/3` answers `:ok`
+  # although nothing will ever reply, so that case is answered as a refused
+  # write is.
+  def handle_cast({:spawn, caller, %Spawn{} = spawn, payload, if_running}, %State{} = s) do
+    %Spawn{reference_id: id, instance_id: instance_id, factory_id: factory_id} = spawn
+    command = Codec.spawn_workflow_request_command(instance_id, factory_id, payload, if_running)
+
+    if s.control_handle != nil and ship_request(s, id, command) == :ok do
+      Process.send_after(self(), {:spawn_deadline, id}, spawn.deadline, abs: true)
+      {:noreply, await_reply(s, id, caller, id, spawn)}
+    else
+      Spawn.answer(caller, spawn, :unavailable, "")
+      {:noreply, s}
+    end
+  end
+
+  def handle_cast({:claim_spawn, reference_id}, %State{} = s),
+    do: {:noreply, %{s | waiters: Waiters.claim(s.waiters, reference_id)}}
 
   def handle_cast({:notify, command}, %State{} = s) do
     ship_request(s, "wf-" <> Integer.to_string(System.unique_integer([:positive])), command)
@@ -487,6 +513,9 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, error)
+
+  defp dispatch({:spawn_workflow_response, %{outcome: outcome, error: error}}, ref, s),
+    do: settle(s, ref, outcome, error)
 
   # A terminal disconnect is the rung of the controller's convergence ladder
   # that ends a wedged process: nothing else clears it, and only the
@@ -709,18 +738,15 @@ defmodule Flezha.SDK.RunnerServer do
     verdict
   end
 
-  # Remember who waits on `reference_id`, and under which message tag their
-  # answer reaches them.
   defp await_reply(%State{} = s, reference_id, waiter, ref, tag),
-    do: %{s | barriers: Map.put(s.barriers, reference_id, {waiter, ref, tag})}
+    do: %{s | waiters: Waiters.await(s.waiters, reference_id, waiter, ref, tag)}
 
   defp settle(%State{} = s, reference_id, result, error) do
-    case Map.pop(s.barriers, reference_id) do
-      {{waiter, ref, tag}, barriers} ->
-        send(waiter, {tag, ref, result, error})
-        {:noreply, %{s | barriers: barriers}}
+    case Waiters.settle(s.waiters, reference_id, result, error) do
+      {:ok, waiters} ->
+        {:noreply, %{s | waiters: waiters}}
 
-      {nil, _barriers} ->
+      :unknown ->
         Logger.debug("[Flezha.SDK] controller reply for an unknown reference #{reference_id}")
         {:noreply, s}
     end

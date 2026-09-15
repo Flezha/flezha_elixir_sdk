@@ -33,7 +33,7 @@ defmodule Flezha.SDK.Local do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Counters, KeyGroup, Operative, Topology, WorkflowOperative}
+  alias Flezha.SDK.{Call, Counters, KeyGroup, Operative, Spawn, Topology, WorkflowOperative}
   alias Flezha.SDK.Operative.Inbox
   alias Flezha.Transport.Local.Stream, as: LocalStream
   alias Flezha.Transport.Stream, as: TransportStream
@@ -233,6 +233,15 @@ defmodule Flezha.SDK.Local do
 
     {:noreply, s}
   end
+
+  # A procedure's spawn request. Local mode has no control plane, so it is
+  # answered as a runner whose session is down answers it.
+  def handle_cast({:spawn, caller, spawn, _payload, _if_running}, s) do
+    Spawn.answer(caller, spawn, :unavailable, "")
+    {:noreply, s}
+  end
+
+  def handle_cast({:claim_spawn, _reference_id}, s), do: {:noreply, s}
 
   @impl true
   # A sink output: the router writes it under the operative's own payload id.

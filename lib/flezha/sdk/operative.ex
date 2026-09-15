@@ -580,7 +580,7 @@ defmodule Flezha.SDK.Operative do
       credit: s.credit,
       persistence_enabled: topo.persistence_enabled?,
       tier: tier_facts(topo, node_ref),
-      ctx_opts: ctx_opts(topo, node_ref, key)
+      ctx_opts: [runner: s.runner] ++ ctx_opts(topo, node_ref, key)
     )
   end
 

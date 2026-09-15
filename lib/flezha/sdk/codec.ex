@@ -119,6 +119,23 @@ defmodule Flezha.SDK.Codec do
     {:admin_request, %RunnerCommands.AdminRequest{verb: verb, args: args}}
   end
 
+  @doc """
+  The `SpawnWorkflowRequest` command tuple. No namespace rides it: the
+  controller resolves the request in the namespace of the connection it
+  arrived on.
+  """
+  @spec spawn_workflow_request_command(String.t(), String.t(), binary(), :deliver | :error) ::
+          {atom(), struct()}
+  def spawn_workflow_request_command(instance_id, factory_id, payload, if_running) do
+    {:spawn_workflow_request,
+     %RunnerCommands.SpawnWorkflowRequest{
+       instance_id: instance_id,
+       factory_id: factory_id,
+       payload: payload,
+       if_running: Atom.to_string(if_running)
+     }}
+  end
+
   @doc "The `ProcCommit` command tuple for one completed stage."
   @spec proc_commit_command(
           String.t(),
