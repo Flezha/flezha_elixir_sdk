@@ -50,29 +50,13 @@ defmodule Flezha.SDK.WorkflowOperative do
   `spawn_workflow/3,4` for a `run/2` one.
   """
   defmacro __using__(opts) do
-    known = [:factory_id | @use_options]
-
-    opts =
-      Procedure.__validate__(
-        opts,
-        known,
-        __MODULE__,
-        {:factory_id, "the id the controller places by"}
-      )
-
-    callbacks = Procedure.__callbacks__(opts, @use_options, __MODULE__)
+    base = Procedure.__operative_using__(opts, @use_options, __MODULE__)
 
     quote do
-      @behaviour Flezha.SDK.WorkflowOperative
-      import Flezha.SDK.Channels
+      unquote(base)
 
       import Flezha.SDK.Workflow.Ctx,
         only: [emit: 2, emit_on: 3, complete: 2, spawn_workflow: 3, spawn_workflow: 4]
-
-      @impl Flezha.SDK.WorkflowOperative
-      def factory_id, do: unquote(Keyword.fetch!(opts, :factory_id))
-
-      unquote_splicing(callbacks)
     end
   end
 

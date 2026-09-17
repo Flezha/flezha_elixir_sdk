@@ -60,14 +60,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "a misspelt option fails to compile, naming it" do
     error =
-      assert_raise CompileError, fn ->
-        Code.compile_string("""
-        defmodule Flezha.SDK.AuthoringMacrosTest.Misspelt do
-          use Flezha.SDK.Procedure, name: "p", max_entites: 10
-          def run(_i, s, _c), do: {:ok, s}
-        end
-        """)
-      end
+      refused("""
+      use Flezha.SDK.Procedure, name: "p", max_entites: 10
+      def run(_i, s, _c), do: {:ok, s}
+      """)
 
     assert error.description =~ "max_entites"
   end
@@ -157,26 +153,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "an operative macro refuses an unknown option and a missing factory_id" do
     unknown =
-      assert_raise CompileError, fn ->
-        Code.compile_string("""
-        defmodule Flezha.SDK.AuthoringMacrosTest.BadKnob do
-          use Flezha.SDK.StreamOperative, factory_id: "x", persistance_enabled: false
-          def channels(_c), do: :ok
-        end
-        """)
-      end
+      refused("""
+      use Flezha.SDK.StreamOperative, factory_id: "x", persistance_enabled: false
+      def channels(_c), do: :ok
+      """)
 
     assert unknown.description =~ "persistance_enabled"
 
     missing =
-      assert_raise CompileError, fn ->
-        Code.compile_string("""
-        defmodule Flezha.SDK.AuthoringMacrosTest.NoFactoryId do
-          use Flezha.SDK.StreamOperative, description: "no id"
-          def channels(_c), do: :ok
-        end
-        """)
-      end
+      refused("""
+      use Flezha.SDK.StreamOperative, description: "no id"
+      def channels(_c), do: :ok
+      """)
 
     assert missing.description =~ "factory_id"
   end
@@ -313,18 +301,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "the block owns apply_change and state_from_json" do
     for callback <- ["def apply_change(state, _c), do: state", "def state_from_json(j), do: j"] do
       error =
-        assert_raise CompileError, fn ->
-          Code.compile_string("""
-          defmodule Flezha.SDK.AuthoringMacrosTest.Conflicting#{:erlang.unique_integer([:positive])} do
-            use Flezha.SDK.Procedure, name: "conflicting"
-            state do
-              field(:qty, :integer, default: 0)
-            end
-            #{callback}
-            def run(_i, s, _c), do: {:ok, s}
-          end
-          """)
+        refused("""
+        use Flezha.SDK.Procedure, name: "conflicting"
+        state do
+          field(:qty, :integer, default: 0)
         end
+        #{callback}
+        def run(_i, s, _c), do: {:ok, s}
+        """)
 
       assert error.description =~ "state" and error.description =~ "block"
     end
@@ -464,14 +448,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     for {refusal, options} <- cases do
       error =
-        assert_raise CompileError, fn ->
-          Code.compile_string("""
-          defmodule Flezha.SDK.AuthoringMacrosTest.Refused#{:erlang.unique_integer([:positive])} do
-            use Flezha.SDK.Procedure, #{options}
-            def run(_i, s, _c), do: {:ok, s}
-          end
-          """)
-        end
+        refused("""
+        use Flezha.SDK.Procedure, #{options}
+        def run(_i, s, _c), do: {:ok, s}
+        """)
 
       assert String.starts_with?(error.description, refusal),
              "expected the message to begin with #{refusal}, read: #{error.description}"
@@ -488,6 +468,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   # --- driving a procedure through the ctx -----------------------------------
+
+  # The `CompileError` a module body earns, compiled under a name of its own so
+  # one test can refuse several bodies.
+  defp refused(body) do
+    assert_raise CompileError, fn ->
+      Code.compile_string("""
+      defmodule Flezha.SDK.AuthoringMacrosTest.Refused#{System.unique_integer([:positive])} do
+      #{body}
+      end
+      """)
+    end
+  end
 
   # What one input recorded, and the state it left. `Ctx.take_changes/1` is the
   # runtime's own read of the journal, so the test reads it the way a commit

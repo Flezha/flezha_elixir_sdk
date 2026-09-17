@@ -33,27 +33,7 @@ defmodule Flezha.SDK.StreamOperative do
   written with no module prefix.
   """
   defmacro __using__(opts) do
-    known = [:factory_id | @use_options]
-
-    opts =
-      Procedure.__validate__(
-        opts,
-        known,
-        __MODULE__,
-        {:factory_id, "the id the controller places by"}
-      )
-
-    callbacks = Procedure.__callbacks__(opts, @use_options, __MODULE__)
-
-    quote do
-      @behaviour Flezha.SDK.StreamOperative
-      import Flezha.SDK.Channels
-
-      @impl Flezha.SDK.StreamOperative
-      def factory_id, do: unquote(Keyword.fetch!(opts, :factory_id))
-
-      unquote_splicing(callbacks)
-    end
+    Procedure.__operative_using__(opts, @use_options, __MODULE__)
   end
 
   @callback factory_id() :: String.t()

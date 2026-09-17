@@ -288,6 +288,34 @@ defmodule Flezha.SDK.Procedure do
     end
   end
 
+  # Everything `use` on an operative module emits: the behaviour, the builder
+  # import, the required `factory_id`, and one callback per option written. The
+  # two kinds differ only in their option list and in what else they import, so
+  # this is the one place that states what an operative declaration expands to.
+  @doc false
+  def __operative_using__(opts, use_options, behaviour) do
+    opts =
+      __validate__(
+        opts,
+        [:factory_id | use_options],
+        behaviour,
+        {:factory_id, "the id the controller places by"}
+      )
+
+    callbacks = __callbacks__(opts, use_options, behaviour)
+    factory_id = Keyword.fetch!(opts, :factory_id)
+
+    quote do
+      @behaviour unquote(behaviour)
+      import Flezha.SDK.Channels
+
+      @impl unquote(behaviour)
+      def factory_id, do: unquote(factory_id)
+
+      unquote_splicing(callbacks)
+    end
+  end
+
   # Everything a `sink` decides: which operative behaviour the module gains, or
   # which refusal the declaration earns.
   defp short_form(opts) do
