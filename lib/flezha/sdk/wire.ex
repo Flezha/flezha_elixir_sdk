@@ -26,9 +26,7 @@ defmodule Flezha.SDK.Wire do
   alias Flezha.SDK.RecordFrame
 
   @header_size RecordFrame.header_size()
-
-  # Header byte 9 (`format_id`): 1 = plain postcard change, 2 = effect record.
-  @format_id_effect_record 2
+  @format_id_effect_record RecordFrame.format_id(:effect_record)
 
   @spec payload_id_entity_state_change() :: binary()
   def payload_id_entity_state_change(), do: @payload_id_entity_state_change
@@ -87,9 +85,6 @@ defmodule Flezha.SDK.Wire do
   """
   @spec payload_id_park_payload() :: binary()
   def payload_id_park_payload(), do: @payload_id_park_payload
-
-  @spec header_size() :: pos_integer()
-  def header_size(), do: @header_size
 
   @doc """
   Encode an `entity_id` triple into its on-wire byte form.

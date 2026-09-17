@@ -9,7 +9,8 @@ defmodule Flezha.SDK.MixProject do
       app: :flezha_sdk,
       version: @version,
       elixir: "~> 1.17",
-      description: "The Elixir SDK for Flezha: stream and workflow operatives run by a Flezha controller",
+      description:
+        "The Elixir SDK for Flezha: stream and workflow operatives run by a Flezha controller",
       source_url: @source_url,
       package: package(),
       elixirc_paths: elixirc_paths(Mix.env()),

@@ -56,13 +56,6 @@ fn send_frame<'a>(
     })
 }
 
-/// A client stream is active from birth: its reader delivers every frame to the
-/// current owner, so there is nothing to switch on.
-#[rustler::nif]
-fn set_active(env: Env, _stream: ClientStreamArc) -> NifResult<Term> {
-    Ok(atoms::ok().encode(env))
-}
-
 #[rustler::nif]
 fn close(env: Env, stream: ClientStreamArc) -> NifResult<Term> {
     let _ = stream.commands.send(Command::Close);

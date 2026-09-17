@@ -116,9 +116,10 @@ defmodule Flezha.SDK.Transport do
   def send_frame(ref, payload_id, message, metadata),
     do: Native.send_frame(ref, payload_id, message, metadata)
 
+  @doc "Deliver the stream's frames to its owner. A socket stream already does, from birth."
   @spec set_active(handle()) :: :ok | {:error, term()}
   def set_active(%LocalStream{} = handle), do: LocalStream.set_active(handle)
-  def set_active(ref), do: Native.set_active(ref)
+  def set_active(_ref), do: :ok
 
   @spec close(handle()) :: :ok | {:error, term()}
   def close(%LocalStream{} = handle), do: LocalStream.close(handle)

@@ -122,9 +122,6 @@ defmodule Flezha.SDK.Native do
   @doc "Queue one frame; `{:error, :driver_gone}` when the stream's writer has ended."
   def send_frame(_stream, _payload_id, _message, _metadata), do: :erlang.nif_error(:not_loaded)
 
-  @doc "A client stream delivers from birth; activating it is a no-op kept for the handle's contract."
-  def set_active(_stream), do: :erlang.nif_error(:not_loaded)
-
   @doc "Close the stream."
   def close(_stream), do: :erlang.nif_error(:not_loaded)
 

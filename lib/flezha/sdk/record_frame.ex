@@ -302,8 +302,14 @@ defmodule Flezha.SDK.RecordFrame do
   The one exception a source carries: a payload was shipped whole, so it has no
   torn tail to repair and the crc branch of `repairable?/3` does not apply to it.
   """
-  @spec stop_or_refuse(source(), non_neg_integer(), integer(), atom(), non_neg_integer() | nil,
-          non_neg_integer()) :: {:stop, non_neg_integer()} | {:error, refusal()}
+  @spec stop_or_refuse(
+          source(),
+          non_neg_integer(),
+          integer(),
+          atom(),
+          non_neg_integer() | nil,
+          non_neg_integer()
+        ) :: {:stop, non_neg_integer()} | {:error, refusal()}
   def stop_or_refuse({:payload, name}, position, last_seq, :crc_mismatch, _extent, _size),
     do: refuse(name, :crc_mismatch, last_seq, position)
 

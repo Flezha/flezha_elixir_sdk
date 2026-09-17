@@ -17,6 +17,8 @@ defmodule Flezha.SDK.Knob do
   the Rust runtime caps it, the value capped always, and, for a jittered ladder,
   spread uniformly over `[d/2, 3d/2)` before the cap. Every wait and every reset
   is announced on `[:flezha, :backoff, :wait]` and `[:flezha, :backoff, :reset]`.
+  The arithmetic and the announcements are the controller's too: its ladder table
+  waits through `delay/3` with rows of its own.
 
   The names, variables, types, defaults and ladders are the ones Flezha's
   configuration table declares for the Elixir SDK, and the core's suite holds
@@ -158,26 +160,54 @@ defmodule Flezha.SDK.Knob do
   def ladder(ladder), do: Map.fetch!(@ladders, ladder)
 
   @doc """
-  The wait before `attempt` (1-based) of `ladder`. `opts` may carry `:base`, the
-  caller's own knob for the first rung, and `:rand`, the determinism seam a test
-  injects in place of `:rand.uniform/1`.
+  The wait before `attempt` (1-based) of a ladder: one this SDK declares, by name, or a row
+  whose bounds are numbers, which is how the controller's own table waits by this same
+  arithmetic. A row is `rungs` indexed by the attempt and held at the last, or a geometric
+  `base` growing by `factor` (2 unless the row says) with the exponent held at
+  `exponent_cap` when it names one, and capped at `cap` always. `opts` may carry `:base`,
+  the caller's own first rung, and `:rand`, the determinism seam a test injects in place
+  of `:rand.uniform/1`.
   """
-  @spec delay(ladder(), pos_integer(), keyword()) :: non_neg_integer()
-  def delay(ladder, attempt, opts \\ []) do
-    row = ladder(ladder)
-    base = opts[:base] || row.base
-    exponent = attempt - 1
-    exponent = if row.exponent_cap, do: min(exponent, row.exponent_cap), else: exponent
-    plain = min(round(base * Float.pow(2.0, exponent / 1)), row.cap)
+  @spec delay(ladder() | map(), pos_integer(), keyword()) :: non_neg_integer()
+  def delay(ladder, attempt, opts \\ [])
+  def delay(ladder, attempt, opts) when is_atom(ladder), do: delay(ladder(ladder), attempt, opts)
 
-    if row.jitter, do: min(jitter(plain, opts[:rand]), row.cap), else: plain
+  def delay(%{} = row, attempt, opts) do
+    plain = rung(row, attempt, opts)
+
+    if row[:jitter], do: min(jitter(plain, opts[:rand]), cap(row)), else: plain
+  end
+
+  defp rung(%{rungs: rungs}, attempt, _opts) when is_list(rungs),
+    do: Enum.at(rungs, attempt - 1) || List.last(rungs)
+
+  defp rung(row, attempt, opts) do
+    exponent = if row[:exponent_cap], do: min(attempt - 1, row.exponent_cap), else: attempt - 1
+    factor = row[:factor] || 2
+
+    min(round((opts[:base] || row.base) * Float.pow(factor / 1, exponent / 1)), cap(row))
+  end
+
+  defp cap(row), do: row[:cap] || List.last(row.rungs)
+
+  @doc "Uniform in `[value/2, value · 3/2)`, the one jitter rule every ladder spreads by."
+  @spec jitter(non_neg_integer(), (pos_integer() -> pos_integer()) | nil) :: non_neg_integer()
+  def jitter(value, rand \\ nil) do
+    rand = rand || (&:rand.uniform/1)
+    div(value, 2) + rand.(max(value, 1))
   end
 
   @doc "The wait before `attempt` against `target`, announced — for a site that arms a timer."
   @spec arm(ladder(), pos_integer(), term(), keyword()) :: non_neg_integer()
-  def arm(ladder, attempt, target, opts \\ []) do
-    delay = delay(ladder, attempt, opts)
+  def arm(ladder, attempt, target, opts \\ []),
+    do: announce(ladder, attempt, target, delay(ladder, attempt, opts))
 
+  @doc """
+  Announce a wait of `delay` before `attempt` against `target` on the ladder named `ladder`,
+  and answer the delay. Every ladder in this VM announces here, the controller's included.
+  """
+  @spec announce(atom(), pos_integer(), term(), non_neg_integer()) :: non_neg_integer()
+  def announce(ladder, attempt, target, delay) do
     :telemetry.execute(@wait_event, %{delay_ms: delay, attempt: attempt}, %{
       ladder: ladder,
       target: target
@@ -192,14 +222,9 @@ defmodule Flezha.SDK.Knob do
     do: ladder |> arm(attempt, target, opts) |> Process.sleep()
 
   @doc "Announce that `target` succeeded on `ladder`; answers the attempt count a reset leaves."
-  @spec reset(ladder(), term()) :: 0
+  @spec reset(atom(), term()) :: 0
   def reset(ladder, target) do
     :telemetry.execute(@reset_event, %{attempt: 0}, %{ladder: ladder, target: target})
     0
-  end
-
-  defp jitter(value, rand) do
-    rand = rand || (&:rand.uniform/1)
-    div(value, 2) + rand.(max(value, 1))
   end
 end

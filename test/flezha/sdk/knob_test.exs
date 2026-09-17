@@ -88,10 +88,14 @@ defmodule Flezha.SDK.KnobTest do
       on_exit(fn -> :telemetry.detach(ref) end)
 
       assert Knob.arm(:park_resend, 1, "p-1") == 2_000
-      assert_receive {[:flezha, :backoff, :wait], %{delay_ms: 2_000, attempt: 1}, %{ladder: :park_resend, target: "p-1"}}
+
+      assert_receive {[:flezha, :backoff, :wait], %{delay_ms: 2_000, attempt: 1},
+                      %{ladder: :park_resend, target: "p-1"}}
 
       assert Knob.reset(:sdk_reconnect, "r-1") == 0
-      assert_receive {[:flezha, :backoff, :reset], %{attempt: 0}, %{ladder: :sdk_reconnect, target: "r-1"}}
+
+      assert_receive {[:flezha, :backoff, :reset], %{attempt: 0},
+                      %{ladder: :sdk_reconnect, target: "r-1"}}
     end
   end
 

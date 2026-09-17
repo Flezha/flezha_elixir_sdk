@@ -78,9 +78,7 @@ defmodule Flezha.SDK.LocalStream do
 
   defp call_if_alive(pid, msg) do
     if Process.alive?(pid) do
-      SafeCall.bounded(pid, msg, Knob.get(:local_stream_call_ms),
-        on_error: {:error, :closed}
-      )
+      SafeCall.bounded(pid, msg, Knob.get(:local_stream_call_ms), on_error: {:error, :closed})
     else
       {:error, :closed}
     end
