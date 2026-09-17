@@ -33,7 +33,7 @@ defmodule Flezha.SDK.Ctx do
   derived from the Entity's wire identity, the change seq the invocation
   started at and a per-invocation ordinal.
 
-  `spawn_workflow/5` asks the runner for a workflow instance and answers a
+  `spawn_workflow/4` asks the runner for a workflow instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
   nothing.
   """
@@ -173,16 +173,26 @@ defmodule Flezha.SDK.Ctx do
   def entity_key(%__MODULE__{entity_key: k}), do: k
 
   @doc """
-  Request spawn-or-deliver of a workflow instance in this runner's namespace:
-  `instance_id` of `factory_id` starts with `payload` as its first input when
-  the id is free; while it runs, `:deliver` hands it `payload` as one more
-  input and `:error` resolves `already_running`. Answers a `Flezha.SDK.Spawn`
-  handle without waiting, read with `Flezha.SDK.Spawn.await/2` or
-  `Flezha.SDK.Spawn.try_result/1` inside this invocation, or not at all.
+  Request spawn-or-deliver of a workflow instance of `factory_id` in this
+  runner's namespace, with `payload` as its first input. Answers a
+  `Flezha.SDK.Spawn` handle without waiting, read with
+  `Flezha.SDK.Spawn.await/2` or `Flezha.SDK.Spawn.try_result/1` inside this
+  invocation, or not at all.
+
+  With `id:` the instance starts under that id when it is free; while it runs,
+  `if_running: :deliver` (the default) hands it `payload` as one more input and
+  `if_running: :error` resolves `already_running`. `if_running:` without `id:`
+  raises `ArgumentError` and sends nothing.
+
+  Without `id:` the controller generates one, and every call starts a new
+  instance: it never delivers into a running one, a call reissued after a lost
+  or timed-out answer starts a second instance, and a replayed invocation
+  resolves an empty id. Pass `id:` for at most one instance, or for the id on a
+  replay.
   """
-  @spec spawn_workflow(t(), String.t(), String.t(), binary(), Spawn.if_running()) :: Spawn.t()
-  def spawn_workflow(%__MODULE__{} = ctx, instance_id, factory_id, payload, if_running),
-    do: Spawn.request(ctx.runner, ctx.replay?, instance_id, factory_id, payload, if_running)
+  @spec spawn_workflow(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
+  def spawn_workflow(%__MODULE__{} = ctx, factory_id, payload, opts \\ []),
+    do: Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts)
 
   @doc """
   Close the staged checkpoint interval at the end of this invocation. A no-op

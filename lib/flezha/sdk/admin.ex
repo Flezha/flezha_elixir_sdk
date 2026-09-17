@@ -23,17 +23,27 @@ defmodule Flezha.SDK.Admin do
   @typedoc "A runner handle, or the server behind one."
   @type runner :: Flezha.SDK.t() | pid() | atom()
 
-  @doc "Start an operative, on the specification `flz operative start` takes."
-  @spec start_operative(runner(), String.t(), String.t(), keyword()) ::
-          {:ok, term()} | {:error, term()}
-  def start_operative(runner, operative_id, factory_id, opts \\ []) do
+  @doc """
+  Start an operative of `factory_id`, on the specification `flz operative start`
+  takes: `id:`, `kind:`, `init_values:` and `opts:`, each optional. Answers the
+  id it runs under, the generated one when no `id:` was given, and whether this
+  call started it or found a live instance already holding the id.
+
+  Without `id:` every call starts a new operative, so a start retried after a
+  lost answer starts a second one, and a second stream runs until it is stopped.
+  Pass `id:` when the start may be retried.
+  """
+  @spec start_operative(runner(), String.t(), keyword()) ::
+          {:ok, %{id: String.t(), outcome: :started | :already_running}} | {:error, term()}
+  def start_operative(runner, factory_id, opts \\ []) do
     fields =
-      %{"id" => operative_id, "factory_id" => factory_id}
+      %{"factory_id" => factory_id}
+      |> put_given("id", Keyword.get(opts, :id))
       |> put_given("kind", Keyword.get(opts, :kind))
       |> put_given("init_values", Keyword.get(opts, :init_values))
       |> put_given("opts", Keyword.get(opts, :opts))
 
-    call(runner, "Operative.start", [fields])
+    with {:ok, answer} <- call(runner, "Operative.start", [fields]), do: started(answer)
   end
 
   @doc "Stop an operative, or the whole partition group it names."
@@ -89,6 +99,13 @@ defmodule Flezha.SDK.Admin do
 
   defp server(server) when is_pid(server) or is_atom(server), do: {:ok, server}
   defp server(runner), do: Flezha.SDK.server(runner)
+
+  defp started(%{"id" => id, "outcome" => "started"}), do: {:ok, %{id: id, outcome: :started}}
+
+  defp started(%{"id" => id, "outcome" => "already_running"}),
+    do: {:ok, %{id: id, outcome: :already_running}}
+
+  defp started(other), do: {:error, "controller answered an unreadable start: #{inspect(other)}"}
 
   defp put_given(fields, _key, nil), do: fields
   defp put_given(fields, key, value), do: Map.put(fields, key, value)

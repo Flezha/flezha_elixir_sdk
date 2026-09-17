@@ -30,7 +30,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     # A spawn request, answered as a controller that started the instance would.
     def handle_cast({:spawn, caller, spawn, payload, if_running}, s) do
       send(s.test, {:spawn_requested, payload, if_running})
-      Spawn.answer(caller, %{spawn | claimed?: true}, "spawned", "")
+      Spawn.answer(caller, %{spawn | claimed?: true}, {"spawned", spawn.instance_id}, "")
       {:noreply, s}
     end
 
@@ -187,7 +187,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def factory_id, do: "spawning_sugar"
 
     def run(ctx, args) do
-      handle = WorkflowCtx.spawn_workflow(ctx, "child-" <> args, "worker", args, :deliver)
+      handle = WorkflowCtx.spawn_workflow(ctx, "worker", args, id: "child-" <> args)
       send(:workflow_driver_test_collector, {:spawned, Spawn.await(handle, 5_000)})
       :ok
     end
@@ -200,7 +200,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def init_state(_), do: nil
 
     def run(input, state, ctx) do
-      handle = Ctx.spawn_workflow(ctx, "child-" <> input, "worker", input, :error)
+      handle = Ctx.spawn_workflow(ctx, "worker", input, id: "child-" <> input, if_running: :error)
       Ctx.emit(ctx, inspect(Spawn.await(handle, 5_000)))
       {:ok, state}
     end
@@ -278,7 +278,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a run-sugar body's spawn reaches the runner and its handle resolves" do
     messages = drive(SpawningSugar, args: "go")
     assert {:spawn_requested, "go", :deliver} in messages
-    assert {:spawned, {:ok, :spawned}} in messages
+    assert {:spawned, {:ok, %{id: "child-go", outcome: :spawned}}} in messages
     assert %{status: "ok"} = completion(messages)
   end
 
@@ -288,7 +288,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert [commit] = commits(messages)
 
     assert commit.handoff |> hd() |> Map.get(:payload) |> Resume.decode() ==
-             inspect({:ok, :spawned})
+             inspect({:ok, %{id: "child-go", outcome: :spawned}})
   end
 
   # --- the structured chain ---

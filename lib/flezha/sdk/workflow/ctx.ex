@@ -36,11 +36,11 @@ defmodule Flezha.SDK.Workflow.Ctx do
     do: GenServer.cast(driver, {:sugar_result, result})
 
   @doc """
-  Request spawn-or-deliver of a workflow instance, as
-  `Flezha.SDK.Ctx.spawn_workflow/5` does from a procedure. A body is never a
+  Request spawn-or-deliver of a workflow instance, with the options
+  `Flezha.SDK.Ctx.spawn_workflow/4` takes from a procedure. A body is never a
   replay, so the request is always made.
   """
-  @spec spawn_workflow(t(), String.t(), String.t(), binary(), Spawn.if_running()) :: Spawn.t()
-  def spawn_workflow(%__MODULE__{runner: runner}, instance_id, factory_id, payload, if_running),
-    do: Spawn.request(runner, false, instance_id, factory_id, payload, if_running)
+  @spec spawn_workflow(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
+  def spawn_workflow(%__MODULE__{runner: runner}, factory_id, payload, opts \\ []),
+    do: Spawn.request(runner, false, factory_id, payload, opts)
 end

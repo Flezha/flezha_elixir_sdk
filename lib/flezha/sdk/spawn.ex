@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Spawn do
   @moduledoc """
   Procedure-requested spawn of a workflow instance: the request a procedure
-  makes with `Flezha.SDK.Ctx.spawn_workflow/5`, or a run-sugar body with
-  `Flezha.SDK.Workflow.Ctx.spawn_workflow/5`, the handle it gets back at once,
+  makes with `Flezha.SDK.Ctx.spawn_workflow/4`, or a run-sugar body with
+  `Flezha.SDK.Workflow.Ctx.spawn_workflow/4`, the handle it gets back at once,
   and what the controller's answer resolves to.
 
   The request is a cast to the runner, which ships `SpawnWorkflowRequest` and
@@ -33,18 +33,26 @@ defmodule Flezha.SDK.Spawn do
   ]
 
   @typedoc """
-  A request's handle. `result` is set when the answer was known without asking:
-  a replay, or no runner. `deadline` is a monotonic millisecond shared with the
-  runner, which settles the request there. `claimed?` is read on the runner's
-  copy: whether a reader asked for the answer before it arrived.
+  A request's handle. `instance_id` is the caller's id, or `""` when the
+  controller is to generate one. `result` is set when the answer was known
+  without asking: a replay, or no runner. `deadline` is a monotonic millisecond
+  shared with the runner, which settles the request there. `claimed?` is read
+  on the runner's copy: whether a reader asked for the answer before it arrived.
   """
   @type t :: %__MODULE__{}
 
   @typedoc "What a running instance id gets: the payload, or `already_running`."
   @type if_running :: :deliver | :error
 
+  @typedoc """
+  `id:` names the instance; without it the controller generates one and the
+  request always starts a new instance. `if_running:` needs an `id:` and
+  defaults to `:deliver`.
+  """
+  @type option :: {:id, String.t()} | {:if_running, if_running()}
+
   @type result ::
-          {:ok, :spawned | :delivered | :skipped_on_replay}
+          {:ok, %{id: String.t(), outcome: :spawned | :delivered | :skipped_on_replay}}
           | {:error,
              {:already_running, String.t()}
              | {:factory_unknown, String.t()}
@@ -53,10 +61,11 @@ defmodule Flezha.SDK.Spawn do
              | :unavailable}
 
   @doc false
-  @spec request(pid() | nil, boolean(), String.t(), String.t(), binary(), if_running()) :: t()
-  def request(runner, replay?, instance_id, factory_id, payload, if_running)
-      when is_binary(instance_id) and is_binary(factory_id) and is_binary(payload) and
-             if_running in [:deliver, :error] do
+  @spec request(pid() | nil, boolean(), String.t(), binary(), [option()]) :: t()
+  def request(runner, replay?, factory_id, payload, opts)
+      when is_binary(factory_id) and is_binary(payload) and is_list(opts) do
+    {instance_id, if_running} = options!(opts)
+
     handle = %__MODULE__{
       reference_id: "spawn-workflow-#{instance_id}-#{System.unique_integer([:positive])}",
       instance_id: instance_id,
@@ -65,7 +74,7 @@ defmodule Flezha.SDK.Spawn do
 
     cond do
       replay? ->
-        %{handle | result: {:ok, :skipped_on_replay}}
+        %{handle | result: {:ok, %{id: instance_id, outcome: :skipped_on_replay}}}
 
       runner == nil ->
         %{handle | result: {:error, :unavailable}}
@@ -75,6 +84,33 @@ defmodule Flezha.SDK.Spawn do
         handle = %{handle | runner: runner, deadline: deadline}
         GenServer.cast(runner, {:spawn, self(), handle, payload, if_running})
         handle
+    end
+  end
+
+  # An empty instance id is the wire's request for a generated one. A policy is
+  # refused without an id, because a request without one never finds a running
+  # instance to apply it to.
+  defp options!(opts) do
+    opts = Keyword.validate!(opts, [:id, :if_running])
+
+    case {opts[:id], opts[:if_running]} do
+      {nil, nil} ->
+        {"", :deliver}
+
+      {nil, _policy} ->
+        raise ArgumentError,
+              "spawn_workflow: `if_running` needs an `id`; without one every spawn starts a new instance"
+
+      {id, _policy} when not is_binary(id) or id == "" ->
+        raise ArgumentError,
+              "spawn_workflow: `id` must be a non-empty string, got: #{inspect(id)}"
+
+      {id, policy} when policy in [nil, :deliver, :error] ->
+        {id, policy || :deliver}
+
+      {_id, policy} ->
+        raise ArgumentError,
+              "spawn_workflow: `if_running` must be :deliver or :error, got: #{inspect(policy)}"
     end
   end
 
@@ -103,16 +139,18 @@ defmodule Flezha.SDK.Spawn do
   @doc false
   # The one place an answer is sent, so the reply and the unread warning cannot
   # disagree: the runner server's settle, its refusal with no control plane and
-  # local mode all answer through here.
-  @spec answer(pid(), t(), String.t() | :timeout | :unavailable, String.t()) :: :ok
-  def answer(caller, %__MODULE__{} = spawn, outcome, error) do
-    send(caller, {:spawn_reply, spawn.reference_id, outcome, error})
+  # local mode all answer through here. A controller's reply is its outcome word
+  # and the instance id the request resolved to.
+  @spec answer(pid(), t(), {String.t(), String.t()} | :timeout | :unavailable, String.t()) ::
+          :ok
+  def answer(caller, %__MODULE__{} = spawn, reply, error) do
+    send(caller, {:spawn_reply, spawn.reference_id, reply, error})
 
     with false <- spawn.claimed?,
-         {:error, reason} <- interpret(spawn, outcome, error) do
+         {:error, reason} <- interpret(spawn, reply, error) do
       Logger.warning(
-        "[Flezha.SDK] spawn_workflow(#{spawn.instance_id}, #{spawn.factory_id}) failed: " <>
-          inspect(reason)
+        "[Flezha.SDK] spawn_workflow(factory `#{spawn.factory_id}`, " <>
+          "id `#{spawn.instance_id}`) failed: " <> inspect(reason)
       )
     end
 
@@ -125,27 +163,29 @@ defmodule Flezha.SDK.Spawn do
     GenServer.cast(handle.runner, {:claim_spawn, id})
 
     receive do
-      {:spawn_reply, ^id, outcome, error} -> interpret(handle, outcome, error)
+      {:spawn_reply, ^id, reply, error} -> interpret(handle, reply, error)
     after
       wait -> nothing
     end
   end
 
   # As the reference maps a reply: an error is a refusal whatever the outcome
-  # says, `already_running` and `factory_unknown` name the id they are about,
-  # and a word this SDK does not know is a refusal naming it.
-  defp interpret(_spawn, outcome, _error) when outcome in [:timeout, :unavailable],
-    do: {:error, outcome}
+  # says, a success carries the id the controller resolved, `already_running`
+  # and `factory_unknown` name the id they are about, and a word this SDK does
+  # not know is a refusal naming it.
+  defp interpret(_spawn, reply, _error) when reply in [:timeout, :unavailable],
+    do: {:error, reply}
 
-  defp interpret(_spawn, _outcome, error) when error != "", do: {:error, {:refused, error}}
-  defp interpret(_spawn, "spawned", _error), do: {:ok, :spawned}
-  defp interpret(_spawn, "delivered", _error), do: {:ok, :delivered}
+  defp interpret(_spawn, _reply, error) when error != "", do: {:error, {:refused, error}}
+  defp interpret(_spawn, {"spawned", id}, _error), do: {:ok, %{id: id, outcome: :spawned}}
+  defp interpret(_spawn, {"delivered", id}, _error), do: {:ok, %{id: id, outcome: :delivered}}
 
-  defp interpret(spawn, "already_running", _error),
+  defp interpret(spawn, {"already_running", _id}, _error),
     do: {:error, {:already_running, spawn.instance_id}}
 
-  defp interpret(spawn, "factory_unknown", _error),
+  defp interpret(spawn, {"factory_unknown", _id}, _error),
     do: {:error, {:factory_unknown, spawn.factory_id}}
 
-  defp interpret(_spawn, other, _error), do: {:error, {:refused, "unknown outcome `#{other}`"}}
+  defp interpret(_spawn, {other, _id}, _error),
+    do: {:error, {:refused, "unknown outcome `#{other}`"}}
 end

@@ -598,6 +598,50 @@ defmodule ElixirRunner.PartitionRelayOp do
   end
 end
 
+# -- spawn_requester --------------------------------------------------------
+
+defmodule ElixirRunner.SpawnRequesterProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.{Ctx, Spawn}
+
+  @workflow "stateless_loop_workflow"
+
+  def name, do: "spawn_requester_procedure"
+  def init_state(_), do: nil
+
+  # The results are printed because the runner's stdout is the only place the
+  # scenario can read them.
+  def run(input, s, ctx) do
+    unnamed = Ctx.spawn_workflow(ctx, @workflow, input)
+    named = Ctx.spawn_workflow(ctx, @workflow, input, id: input)
+    report("unnamed", Spawn.await(unnamed))
+    report("named", Spawn.await(named))
+    {:ok, s}
+  end
+
+  defp report(label, {:ok, %{id: id, outcome: outcome}}),
+    do: IO.puts("spawn_result #{label} #{id} #{outcome}")
+
+  defp report(label, {:error, reason}),
+    do: IO.puts("spawn_result #{label} error #{inspect(reason)}")
+end
+
+defmodule ElixirRunner.SpawnRequesterOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "spawn_requester"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("in")
+    |> into(ElixirRunner.SpawnRequesterProc)
+  end
+end
+
 defmodule ElixirRunner.Factories do
   @moduledoc "The e2e factory operatives this standalone runner advertises."
 
@@ -617,7 +661,8 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.BoundedMailboxDropNothingOp,
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,
-      ElixirRunner.PartitionRelayOp
+      ElixirRunner.PartitionRelayOp,
+      ElixirRunner.SpawnRequesterOp
     ] ++ ElixirRunner.FactoriesState.all()
   end
 end

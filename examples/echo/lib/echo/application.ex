@@ -30,7 +30,7 @@ defmodule Echo.Application do
     #
     # alias Flezha.SDK.Admin
     # runner = Flezha.SDK.RunnerServer
-    # {:ok, _} = Admin.start_operative(runner, "my_echo", "echo")
+    # {:ok, %{id: "my_echo"}} = Admin.start_operative(runner, "echo", id: "my_echo")
     #
     # {:ok, _} =
     #   Admin.enable_plugin(runner, "writer", %{

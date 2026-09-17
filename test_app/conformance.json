@@ -121,7 +121,8 @@
       "bench_chain_4",
       "bench_chain_16",
       "bench_chain_optout_4",
-      "bench_loop_workflow"
+      "bench_loop_workflow",
+      "spawn_requester"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"

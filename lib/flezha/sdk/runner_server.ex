@@ -511,8 +511,8 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, error)
 
-  defp dispatch({:spawn_workflow_response, %{outcome: outcome, error: error}}, ref, s),
-    do: settle(s, ref, outcome, error)
+  defp dispatch({:spawn_workflow_response, answer}, ref, s),
+    do: settle(s, ref, {answer.outcome, answer.instance_id}, answer.error)
 
   # A terminal disconnect is the rung of the controller's convergence ladder
   # that ends a wedged process: nothing else clears it, and only the
