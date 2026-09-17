@@ -26,8 +26,7 @@ defmodule Flezha.SDK.Workflow.Compensation do
 
   alias Flezha.SDK.{Entity, Procedure, Record}
   alias Flezha.SDK.Workflow.{Commit, Instance, Spec}
-  alias Flezha.State.Wire
-
+  alias Flezha.SDK.Wire
   @doc """
   Begin the unwind of `state`, or answer `:nothing_to_undo` when the class
   declares no hook on anything that ran.

@@ -1,0 +1,58 @@
+defmodule Flezha.SDK.MixProject do
+  use Mix.Project
+
+  @version "0.1.0"
+  @source_url "https://github.com/flezha/flezha_elixir_sdk"
+
+  def project do
+    [
+      app: :flezha_sdk,
+      version: @version,
+      elixir: "~> 1.17",
+      description: "The Elixir SDK for Flezha: stream and workflow operatives run by a Flezha controller",
+      source_url: @source_url,
+      package: package(),
+      elixirc_paths: elixirc_paths(Mix.env()),
+      deps: deps(),
+      docs: [main: "Flezha.SDK", source_ref: "v#{@version}"]
+    ]
+  end
+
+  def application, do: [extra_applications: [:logger]]
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  defp deps do
+    [
+      {:jason, "~> 1.4"},
+      {:telemetry, "~> 1.0"},
+      {:protox, "~> 2.0"},
+      {:rustler_precompiled, "~> 0.8"},
+      # A source build of the socket NIF: a host the checksum file names no
+      # precompiled artefact for, or `FLEZHA_SDK_BUILD_NIF=1`. Not optional, so
+      # a project depending on this package can take that path too.
+      {:rustler, "~> 0.37", runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
+    ]
+  end
+
+  # The schema is read at compile time, so the package carries the one file of
+  # the contract set it compiles.
+  defp package do
+    [
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => @source_url},
+      files: ~w(
+        lib
+        native/flz_sdk_nif/src
+        native/flz_sdk_nif/Cargo.toml
+        contract/protobufs/runner_commands.proto
+        checksum-Elixir.Flezha.SDK.Native.exs
+        mix.exs
+        README.md
+        LICENSE
+      )
+    ]
+  end
+end

@@ -1,11 +1,16 @@
 defmodule Flezha.SDK.KeyGroup do
   @moduledoc """
-  The partition key-group range twin of the Rust `KeyGroupRange`, decoded from
+  Key groups: the hash that puts a routing key in one of #{256} groups, and the
+  partition key-group range twin of the Rust `KeyGroupRange`, decoded from
   `AddOperative` fields 7–10. `partition_count < 2` is unpartitioned (one
-  comparison). The hash is a direct call to `Flezha.Partition.group_of/1` — the
-  controller's own pinned FNV-1a-128 — reached through this SDK seam so the
-  packaging extraction stays mechanical.
+  comparison).
+
+  The hash is FNV-1a-128 with the constants frozen by every SDK's `StableId`.
+  The controller splits and assigns ranges with this same hash, so a key a
+  partition admits here is a key the controller routed to it.
   """
+
+  import Bitwise
 
   @enforce_keys [:index, :count, :from, :to]
   defstruct [:index, :count, :from, :to]
@@ -18,6 +23,36 @@ defmodule Flezha.SDK.KeyGroup do
         }
 
   @key_groups 256
+
+  @offset_basis 0x6C62272E07BB014262B821756295C58D
+  @prime 0x0000000001000000000000000000013B
+  @mask 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+
+  @doc "How many key groups the space is divided into."
+  @spec key_groups() :: pos_integer()
+  def key_groups, do: @key_groups
+
+  @doc """
+  FNV-1a-128 over `bytes`, starting from the frozen offset basis.
+  """
+  @spec fnv1a128(binary()) :: non_neg_integer()
+  def fnv1a128(bytes) when is_binary(bytes), do: fnv1a128(@offset_basis, bytes)
+
+  @doc """
+  FNV-1a-128 continuing from `hash` — the chaining form the `StableId` fixture
+  vectors are built from (identity, then big-endian seq, then ordinal).
+  """
+  @spec fnv1a128(non_neg_integer(), binary()) :: non_neg_integer()
+  def fnv1a128(hash, <<byte, rest::binary>>),
+    do: fnv1a128(band(bxor(hash, byte) * @prime, @mask), rest)
+
+  def fnv1a128(hash, <<>>), do: hash
+
+  @doc """
+  The key group a routing key belongs to: `fnv1a128(key) mod 256`.
+  """
+  @spec group_of(binary()) :: non_neg_integer()
+  def group_of(key) when is_binary(key), do: band(fnv1a128(key), @key_groups - 1)
 
   @doc "Decode `{partition_index, partition_count, key_group_from, key_group_to}`."
   @spec decode(non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: t()
@@ -37,7 +72,7 @@ defmodule Flezha.SDK.KeyGroup do
   def admit(%__MODULE__{count: count}, _key) when count < 2, do: :ok
 
   def admit(%__MODULE__{index: index, count: count, from: from, to: to}, key) do
-    group = Flezha.Partition.group_of(key)
+    group = group_of(key)
 
     if group >= from and group <= to do
       :ok

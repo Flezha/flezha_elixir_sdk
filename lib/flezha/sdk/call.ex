@@ -4,10 +4,8 @@ defmodule Flezha.SDK.Call do
 
   A runner runs inside a host application, so a wedged Entity, Operative,
   RunnerServer or local run must refuse its caller rather than exit it. Every
-  such call goes through `Flezha.SafeCall` with a bound one of the declared
-  rows names and the caller's refusal declared as data — and through this
-  module, so the packaging boundary crosses in one file
-  (`scripts/check-sdk-boundary.sh`).
+  such call goes through `Flezha.SDK.SafeCall`, through this module, with a
+  bound one of the declared rows names and the caller's refusal declared as data.
 
   **A refusal is not a cancellation.** The request stays in the target's mailbox
   and the work still runs, so a bound that fires turns "slow" into "reported
@@ -21,7 +19,7 @@ defmodule Flezha.SDK.Call do
   is deliberately not answering until a condition holds.
   """
 
-  alias Flezha.SafeCall
+  alias Flezha.SDK.SafeCall
   alias Flezha.SDK.Knob
 
   # What an Entity that will not answer tells its caller: the token the
@@ -42,7 +40,7 @@ defmodule Flezha.SDK.Call do
 
   `:timeout` names the bound for a call whose duration grows with the state
   rather than with the queue in front of it; every other option is
-  `Flezha.SafeCall.bounded/4`'s, and the refusal defaults to the `entity_busy`
+  `Flezha.SDK.SafeCall.bounded/4`'s, and the refusal defaults to the `entity_busy`
   token.
   """
   @spec entity(pid(), term(), keyword()) :: term()

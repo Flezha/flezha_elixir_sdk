@@ -1,19 +1,20 @@
 defmodule Flezha.SDK.Transport do
   @moduledoc """
   The client-transport seam: connect + `ConnectSocket` establishment, differing
-  by mode, with everything above it shared. `:native` opens `Local.Stream` pairs
-  and reaches the in-node controller through `Flezha.Transport.Server`; `:socket`
-  dials the binary protocol over UDS/QUIC via the `flz_nif` client entry points.
-  The connection parameters come from `flz_transport` through
-  `Native.resolve_connect/1` — the same ladder and the same candidate list a
-  Rust, Java or Node runner resolves, asked for rather than re-derived here.
+  by mode, with everything above it shared, and the per-stream operations over
+  whichever handle a connect returned. `:native` opens `LocalStream` pairs and
+  reaches the controller in this VM through the `Flezha.SDK.Connect`
+  implementation it registered; `:uds` and `:quic` dial the binary protocol
+  through this package's own NIF, `Flezha.SDK.Native`. The connection parameters
+  come from `flz_transport` through `Native.resolve_connect/0` — the same ladder
+  and the same candidate list a Rust, Java or Node runner resolves, asked for
+  rather than re-derived here.
   """
 
-  alias Flezha.SDK.{Hold, Knob}
-  alias Flezha.Transport.Local
-  alias Flezha.Transport.Native
-  alias Flezha.Transport.Server, as: TransportServer
-  alias Flezha.Transport.Stream, as: TStream
+  alias Flezha.SDK.{Connect, Hold, Knob, LocalStream, Native}
+
+  @typedoc "A stream handle: an in-node stream, or a socket stream of this package's NIF."
+  @type handle :: LocalStream.t() | reference()
 
   @doc """
   Connect the control channel. `owner` receives inbound control frames. Returns
@@ -23,13 +24,15 @@ defmodule Flezha.SDK.Transport do
   @spec connect(:native | :uds | :quic, map(), pid()) ::
           {:ok, term(), term()} | {:error, term()}
   def connect(:native, payload, owner) do
-    {sdk, controller} = Local.Stream.open()
-    :ok = Flezha.Transport.Stream.controlling_process(sdk, owner)
-    :ok = Flezha.Transport.Stream.set_active(sdk)
+    with {:ok, controller_vm} <- Connect.implementation() do
+      {sdk, controller} = LocalStream.open()
+      :ok = controlling_process(sdk, owner)
+      :ok = set_active(sdk)
 
-    case TransportServer.connect(payload, controller) do
-      {:ok, _runner_id} -> {:ok, sdk, nil}
-      {:error, reason} -> {:error, reason}
+      case controller_vm.connect(payload, controller) do
+        {:ok, _runner_id} -> {:ok, sdk, nil}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -70,14 +73,16 @@ defmodule Flezha.SDK.Transport do
   @spec connect_sockets(:native | :uds | :quic, term(), non_neg_integer(), pid(), term()) ::
           {:ok, [term()], [term()]} | {:error, term()}
   def connect_sockets(:native, runner_id, count, _owner, _conn) do
-    # `bind_data_stream/3` closes a stream it has no channel for.
-    dial_pairs(count, fn type ->
-      {sdk, controller} = Local.Stream.open()
+    with {:ok, controller_vm} <- Connect.implementation() do
+      # `bind_data_stream/3` closes a stream it has no channel for.
+      dial_pairs(count, fn type ->
+        {sdk, controller} = LocalStream.open()
 
-      with {:ok, _type, _channel} <-
-             TransportServer.bind_data_stream(runner_id, type_byte(type), controller),
-           do: {:ok, sdk}
-    end)
+        with {:ok, _type, _channel} <-
+               controller_vm.bind_data_stream(runner_id, type_byte(type), controller),
+             do: {:ok, sdk}
+      end)
+    end
   end
 
   def connect_sockets(:uds, runner_id, count, owner, _conn) do
@@ -91,7 +96,7 @@ defmodule Flezha.SDK.Transport do
 
   def connect_sockets(:quic, _runner_id, count, owner, conn) do
     # A single cell holding the next payload index. One cell has no slot
-    # layout to declare, so it is not a `Flezha.Process.Counters` table.
+    # layout to declare, so it is not a `Flezha.SDK.CounterTable` table.
     idx = :counters.new(1, [])
 
     dial_pairs(count, fn type ->
@@ -100,6 +105,34 @@ defmodule Flezha.SDK.Transport do
       Native.client_open_stream(conn, type_byte(type), i, owner)
     end)
   end
+
+  # --- per-stream operations ---
+
+  @doc "Send one frame; a socket stream frames it in the NIF."
+  @spec send_frame(handle(), binary(), term(), map()) :: :ok | {:error, term()}
+  def send_frame(%LocalStream{} = handle, payload_id, message, metadata),
+    do: LocalStream.send_frame(handle, payload_id, message, metadata)
+
+  def send_frame(ref, payload_id, message, metadata),
+    do: Native.send_frame(ref, payload_id, message, metadata)
+
+  @spec set_active(handle()) :: :ok | {:error, term()}
+  def set_active(%LocalStream{} = handle), do: LocalStream.set_active(handle)
+  def set_active(ref), do: Native.set_active(ref)
+
+  @spec close(handle()) :: :ok | {:error, term()}
+  def close(%LocalStream{} = handle), do: LocalStream.close(handle)
+  def close(ref), do: Native.close(ref)
+
+  @spec controlling_process(handle(), pid()) :: :ok | {:error, term()}
+  def controlling_process(%LocalStream{} = handle, pid),
+    do: LocalStream.controlling_process(handle, pid)
+
+  def controlling_process(ref, pid), do: Native.controlling_process(ref, pid)
+
+  @spec stream_id(handle()) :: non_neg_integer()
+  def stream_id(%LocalStream{} = handle), do: LocalStream.stream_id(handle)
+  def stream_id(ref), do: Native.stream_id(ref)
 
   # --- helpers ---
 
@@ -113,7 +146,7 @@ defmodule Flezha.SDK.Transport do
           {:cont, Map.update!(opened, type, &[handle | &1])}
 
         {:error, _} = refused ->
-          opened |> Map.values() |> Enum.concat() |> Enum.each(&TStream.close/1)
+          opened |> Map.values() |> Enum.concat() |> Enum.each(&close/1)
           {:halt, refused}
       end
     end)
@@ -149,7 +182,7 @@ defmodule Flezha.SDK.Transport do
   # The ladder and the candidate list, resolved by `flz_transport` — never
   # re-derived here, so the SDK and a Rust runner in the same environment
   # cannot disagree about where the controller is.
-  defp resolve_connect, do: Native.resolve_connect("runner")
+  defp resolve_connect, do: Native.resolve_connect()
 
   defp socket_base do
     with {:ok, dir, _quic} <- resolve_connect(), do: {:ok, dir}
@@ -161,7 +194,7 @@ defmodule Flezha.SDK.Transport do
 
   # The name is `flz_transport`'s, reached through the NIF: this SDK is its own
   # core and inherits nothing from `flz_core`, so it asks for the composition
-  # rather than repeating the controller's spelling of it.
+  # rather than spelling it.
   defp control_socket_path do
     with {:ok, base} <- socket_base(), do: Native.control_socket_path_in(base)
   end

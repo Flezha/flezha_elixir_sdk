@@ -4,7 +4,7 @@ defmodule Flezha.SDK.Timers do
   the kernel's pending set and timer session re-expressed in this SDK's own
   core. One ordered set per kind; registering a pending timestamp again
   changes nothing. Every registration, cancellation and firing is an op — the
-  map `Flezha.State.Wire` encodes for a `format_id = 3` record — so the set is
+  map `Flezha.SDK.Wire` encodes for a `format_id = 3` record — so the set is
   folded state: `apply/2` is the one mutation seam, live and on restore, and
   `register_ops/1` re-states the whole set after a compaction. A session works
   on a COPY of the set, so a failed attempt's registrations do not survive its

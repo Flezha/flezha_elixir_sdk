@@ -30,9 +30,8 @@ defmodule Flezha.SDK.Hold do
 
   require Logger
 
-  alias Flezha.SDK.{Counters, Credit, Knob}
-  alias Flezha.State.Wire
-  alias Flezha.Transport.Stream, as: TransportStream
+  alias Flezha.SDK.{Counters, Credit, Knob, Transport}
+  alias Flezha.SDK.Wire
 
   @typedoc "The guarantee a frame is owed, or `:probe` for one owed none."
   @type class :: :control | :durable | :output | :probe
@@ -247,7 +246,7 @@ defmodule Flezha.SDK.Hold do
     # reconnect for ever.
     delivered? =
       Enum.reduce(hold.streams, false, fn handle, acc ->
-        TransportStream.send_frame(handle, payload_id(key), body, meta) == :ok or acc
+        Transport.send_frame(handle, payload_id(key), body, meta) == :ok or acc
       end)
 
     if delivered?, do: {:ok, %{hold | misses: []}}, else: note_miss(hold)
@@ -268,7 +267,7 @@ defmodule Flezha.SDK.Hold do
     # so a frame that reaches no wire costs nothing and a replayed one debits
     # the session that takes it.
     if credit && id in @credited, do: Credit.acquire(credit, byte_size(body))
-    TransportStream.send_frame(secondary_for(streams, route), id, body, meta)
+    Transport.send_frame(secondary_for(streams, route), id, body, meta)
   end
 
   # A shed is a real loss and is counted where every drop-oldest on this wire

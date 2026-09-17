@@ -1,14 +1,13 @@
 # Echo: the Elixir hello world
 
 The Elixir hello world, as a standalone project. Nothing here depends on the
-Flezha source tree: `mix.exs` names one released version of `flezha`, the way
-your own project would.
+Flezha source tree: `mix.exs` names one released version of `flezha_sdk`, the
+way your own project would.
 
 It is a runner of its own, a separate BEAM node that connects to a controller
-over its socket. The `flezha` package is the controller and the SDK in one, so
-`config/config.exs` switches the controller half off. Code running inside the
-controller's own node is the other way to run the SDK, described in
-[`docs/sdk/elixir_sdk.md`](../../../docs/sdk/elixir_sdk.md).
+over its socket. Code running inside the controller's own node is the other way
+to run the SDK, described in
+[`docs/sdk/elixir_sdk.md`](../../../../docs/sdk/elixir_sdk.md).
 
 Three files, one for each part the guides describe:
 
@@ -21,7 +20,7 @@ Three files, one for each part the guides describe:
 ## Run it
 
 You need a controller running and reachable first
-([`docs/guides/controller_deployment.md`](../../../docs/guides/controller_deployment.md)).
+([`docs/guides/controller_deployment.md`](../../../../docs/guides/controller_deployment.md)).
 From this folder:
 
 ```sh
@@ -52,21 +51,20 @@ identity across restarts.
 ## Building from a checkout
 
 The package is not on Hex yet. Until it is, point the dependency in `mix.exs` at
-your checkout:
+the package in your checkout:
 
 ```elixir
 defp deps do
-  [{:flezha, path: "../../.."}]
+  [{:flezha_sdk, path: "../.."}]
 end
 ```
 
-A copy of this folder outside the checkout names the checkout's absolute path
-instead. The first `mix deps.get` then fetches the controller's own dependencies,
-and the first compile builds its native library with a Rust toolchain, so it
-takes a few minutes.
+A copy of this folder outside the checkout names the package's absolute path
+instead. With no release to download it from, the first compile builds the
+package's socket client with a Rust toolchain, so it takes a few minutes.
 
 ## Where to go next
 
-[`docs/guides/runner_deployment.md`](../../../docs/guides/runner_deployment.md)
+[`docs/guides/runner_deployment.md`](../../../../docs/guides/runner_deployment.md)
 walks through what each of the three parts is and why the split is the way it
 is.

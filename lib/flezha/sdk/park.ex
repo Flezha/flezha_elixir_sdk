@@ -1,11 +1,11 @@
 defmodule Flezha.SDK.Park do
   @moduledoc """
   Shared construction of the tier-off DLQ `ParkBody` map (the input to
-  `Flezha.State.Wire.encode_park_body/1`). Every park path — an exhausted Entity,
+  `Flezha.SDK.Wire.encode_park_body/1`). Every park path — an exhausted Entity,
   an entry-parse failure, a partition mis-route — routes its body through here so
   the shape stays in one place. Payload bytes are recoverable for binary inputs
   only (Rust parity); other terms park without bytes. This module also owns the
-  postcard-encoding seam (`Flezha.State.Wire`) for the `park_payload` frame, and
+  postcard-encoding seam (`Flezha.SDK.Wire`) for the `park_payload` frame, and
   `ship/4`, the one hop a park takes towards the runner that owns its ack.
 
   `ship/4`'s `{:park, …}` is answered by `Flezha.SDK.Operative.handle_cast/2`
@@ -13,8 +13,7 @@ defmodule Flezha.SDK.Park do
   `Flezha.SDK.RunnerServer.handle_cast/2` when it is the runner.
   """
 
-  alias Flezha.State.Wire
-
+  alias Flezha.SDK.Wire
   @spec body(binary(), binary(), binary(), non_neg_integer(), term()) :: map()
   def body(park_id, channel, error, attempts, payload),
     do:

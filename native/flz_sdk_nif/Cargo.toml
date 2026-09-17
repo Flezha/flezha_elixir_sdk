@@ -1,0 +1,23 @@
+[package]
+name = "flz_sdk_nif"
+version = "0.1.0"
+edition = "2021"
+description = "The Elixir SDK's socket client: a Rustler NIF over flz_transport's UDS and QUIC client"
+license = "Apache-2.0"
+repository = "https://github.com/flezha/flezha_elixir_sdk"
+publish = false
+
+[lib]
+name = "flz_sdk_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+crossbeam = "0.8"
+flz_transport = { git = "https://github.com/flezha/flezha", tag = "v0.1.0" }
+rustler = "0.35"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_analyzer)", "cfg(loom)"] }
+
+[lints.clippy]
+cognitive_complexity = "warn"

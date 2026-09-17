@@ -1,12 +1,11 @@
 defmodule Flezha.SDK.Codec do
   @moduledoc """
   The single protobuf seam for the Elixir SDK's control channel. Encodes and
-  decodes `RunnerCommands.CommandRequest`/`CommandResponse` via the already
-  compiled `Flezha.Runner.CommandsProto` Protox modules. No other SDK or
-  native-transport module may reference Protox or `RunnerCommands` — the
-  packaging-boundary gate (`scripts/check-sdk-boundary.sh`) enforces it, so the
-  later hex extraction swaps only this module's internals.
+  decodes `RunnerCommands.CommandRequest`/`CommandResponse` through the modules
+  `Flezha.SDK.Proto` generates.
   """
+
+  alias Flezha.SDK.Proto.RunnerCommands
 
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of

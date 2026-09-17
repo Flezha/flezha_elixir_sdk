@@ -33,10 +33,19 @@ defmodule Flezha.SDK.Local do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Counters, KeyGroup, Operative, Spawn, Topology, WorkflowOperative}
+  alias Flezha.SDK.{
+    Call,
+    Counters,
+    KeyGroup,
+    LocalStream,
+    Operative,
+    Spawn,
+    Topology,
+    Transport,
+    WorkflowOperative
+  }
+
   alias Flezha.SDK.Operative.Inbox
-  alias Flezha.Transport.Local.Stream, as: LocalStream
-  alias Flezha.Transport.Stream, as: TransportStream
 
   @silent "the local run did not answer"
 
@@ -48,7 +57,7 @@ defmodule Flezha.SDK.Local do
 
   @counters_key {__MODULE__, :counters}
 
-  use Flezha.Process.Counters,
+  use Flezha.SDK.CounterTable,
     table: :counter,
     slots: [
       [name: :notices, kind: :count],
@@ -160,8 +169,8 @@ defmodule Flezha.SDK.Local do
   def init({%Topology{} = topology, opts}) do
     Process.flag(:trap_exit, true)
     {sdk_side, controller_side} = LocalStream.open()
-    :ok = TransportStream.controlling_process(controller_side, self())
-    :ok = TransportStream.set_active(controller_side)
+    :ok = Transport.controlling_process(controller_side, self())
+    :ok = Transport.set_active(controller_side)
     counters = Counters.new()
     id = Keyword.get(opts, :operative_id, "#{topology.factory_id}-local")
 
@@ -276,7 +285,7 @@ defmodule Flezha.SDK.Local do
   @impl true
   def terminate(_reason, s) do
     if Process.alive?(s.op), do: Operative.stop(s.op)
-    TransportStream.close(s.stream)
+    Transport.close(s.stream)
     :ok
   end
 

@@ -1,7 +1,7 @@
 defmodule ElixirRunner.Application do
   @moduledoc """
-  Boots the standalone Elixir SDK runner: flezha starts runner-only (config), then
-  this app runs the SDK under its own supervision tree over the transport named by
+  Boots the standalone Elixir SDK runner: this app runs the SDK under its own
+  supervision tree over the transport named by
   `FLEZHA_TRANSPORT`. The namespace is `argv[1]` (default `"default"`), matching
   rust_runner/java_runner. A standard-input watcher halts the VM when the e2e
   harness closes the port (`Port.close/1`) — omitting it orphans every spawned
@@ -15,7 +15,7 @@ defmodule ElixirRunner.Application do
   use Application
   require Logger
 
-  alias Mix.Tasks.Bench.ElixirFactories
+  alias ElixirRunner.BenchFactories
 
   def start(_type, _args) do
     # The report path rides the environment: this app launches through
@@ -65,7 +65,7 @@ defmodule ElixirRunner.Application do
   defp declared_set do
     case System.get_env("FLEZHA_REFUSAL_FIXTURE") do
       nil ->
-        {ElixirFactories.all() ++ ElixirRunner.Factories.all(),
+        {BenchFactories.all() ++ ElixirRunner.Factories.all(),
          ElixirRunner.Workflows.all() ++ ElixirRunner.WorkflowsLoop.all()}
 
       topology ->

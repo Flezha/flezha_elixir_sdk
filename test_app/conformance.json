@@ -15,8 +15,8 @@
     ]
   },
   "build": {
-    "test": "cd test/apps/elixir_runner && MIX_ENV=dev mix compile",
-    "bench": "cd test/apps/elixir_runner && MIX_ENV=prod mix compile"
+    "test": "cd test/apps/elixir_runner && mix deps.get && MIX_ENV=dev mix compile",
+    "bench": "cd test/apps/elixir_runner && mix deps.get && MIX_ENV=prod mix compile"
   },
   "connect_timeout_ms": 120000,
   "transports": [

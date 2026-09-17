@@ -40,7 +40,6 @@ defmodule Flezha.SDK.RunnerServer do
 
   alias Flezha.SDK.RunnerServer.Waiters
   alias Flezha.SDK.Workflow.Driver
-  alias Flezha.Transport.Server, as: TransportServer
 
   @name __MODULE__
   # What a server that will not answer tells its caller.
@@ -134,7 +133,6 @@ defmodule Flezha.SDK.RunnerServer do
   def init(opts) do
     Process.flag(:trap_exit, true)
     state = initial_state(opts)
-    if state.transport == :native, do: TransportServer.ensure_started(:native)
 
     case do_connect(state) do
       {:ok, state} ->
@@ -443,11 +441,10 @@ defmodule Flezha.SDK.RunnerServer do
       "pending_push_oldest_ms" => pending_push_oldest_ms
     }
 
-    # Walk the declared key list rather than restating it. Every
-    # other key is a counter slot of the same name, so a key added to the
-    # layout is carried here with no edit — which is what stops this runtime
-    # drifting a key behind the six that share `flz_core`'s builder.
-    Map.new(Knob.heartbeat_keys(), fn key ->
+    # Walk the declared key list rather than restating it. Every other key is a
+    # counter slot of the same name, so a slot added to the table is carried
+    # here with no edit.
+    Map.new(Counters.heartbeat_keys(), fn key ->
       {key, Integer.to_string(Map.get_lazy(scanned, key, fn -> slot_value(counters, key) end))}
     end)
   end
@@ -553,7 +550,7 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch({:runner_disconnect, _}, ref, s) do
     reply(s, ref, "success")
     s = teardown_streams(s)
-    Flezha.Transport.Stream.close(s.control_handle)
+    Transport.close(s.control_handle)
     {:noreply, %{s | control_handle: nil, stopped?: true}}
   end
 
@@ -580,8 +577,8 @@ defmodule Flezha.SDK.RunnerServer do
       {:ok, primaries, secondaries} ->
         # Own the secondaries for close detection; primaries get reader processes.
         Enum.each(secondaries, fn h ->
-          Flezha.Transport.Stream.controlling_process(h, self())
-          Flezha.Transport.Stream.set_active(h)
+          Transport.controlling_process(h, self())
+          Transport.set_active(h)
         end)
 
         readers =
@@ -612,7 +609,7 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp teardown_streams(%State{} = s) do
     Enum.each(s.primaries, fn pid -> if Process.alive?(pid), do: GenServer.stop(pid, :normal) end)
-    Enum.each(s.secondaries, &Flezha.Transport.Stream.close/1)
+    Enum.each(s.secondaries, &Transport.close/1)
     %{s | primaries: [], secondaries: []}
   end
 
@@ -690,7 +687,7 @@ defmodule Flezha.SDK.RunnerServer do
   defp complete_handshake(%State{} = s), do: s
 
   defp stream_id(nil), do: nil
-  defp stream_id(handle), do: Flezha.Transport.Stream.stream_id(handle)
+  defp stream_id(handle), do: Transport.stream_id(handle)
 
   # --- connect + helpers ---
 

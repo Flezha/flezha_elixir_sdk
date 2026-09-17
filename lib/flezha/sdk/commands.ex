@@ -19,8 +19,7 @@ defmodule Flezha.SDK.Commands do
   require Logger
 
   alias Flezha.SDK.{Call, Codec, Credit, Entity, Hold, Knob, Operative}
-  alias Flezha.State.Wire
-
+  alias Flezha.SDK.Wire
   # A serialise's wait for a mid-dispatch Entity, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
   @change_seq_key Wire.change_seq_key()

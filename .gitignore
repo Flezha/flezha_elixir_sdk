@@ -1,0 +1,14 @@
+/_build/
+/deps/
+/doc/
+*.ez
+flezha_sdk-*.tar
+/native/flz_sdk_nif/target/
+/priv/native/
+# Fetched from a core release and checked against its manifest: the fake
+# controller, and the contract set the fixture tests and the codec resolve against.
+/.core/
+/contract/
+# Copied from a core release by `scripts/fetch-core.sh`; a Hex release carries it.
+/checksum-Elixir.Flezha.SDK.Native.exs
+/native/flz_sdk_nif/Cargo.lock

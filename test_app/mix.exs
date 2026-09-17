@@ -1,17 +1,17 @@
 defmodule ElixirRunner.MixProject do
   use Mix.Project
 
-  # A standalone Elixir SDK runner node: depends on flezha as a library (path
-  # dep, sharing the repo's resolved dep set and lockfile) and boots it
-  # runner-only (`controller_enabled: false`). This is the third runtime in the
-  # e2e matrix beside rust_runner and java_runner. `mix run --no-halt -- <ns>`.
+  # A standalone Elixir SDK runner node: depends on the package in the directory
+  # above, sharing its resolved dependency set and lockfile. This is the Elixir
+  # runtime in the e2e matrix beside every other SDK's test app.
+  # `mix run --no-halt -- <ns>`.
   def project do
     [
       app: :elixir_runner,
       version: "0.1.0",
       elixir: "~> 1.17",
-      deps_path: Path.expand("../../../deps", __DIR__),
-      lockfile: Path.expand("../../../mix.lock", __DIR__),
+      deps_path: Path.expand("../deps", __DIR__),
+      lockfile: Path.expand("../mix.lock", __DIR__),
       build_path: Path.expand("_build", __DIR__),
       deps: deps()
     ]
@@ -22,6 +22,6 @@ defmodule ElixirRunner.MixProject do
   end
 
   defp deps do
-    [{:flezha, path: Path.expand("../../..", __DIR__)}]
+    [{:flezha_sdk, path: Path.expand("..", __DIR__)}]
   end
 end

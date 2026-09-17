@@ -4,7 +4,7 @@ defmodule Flezha.SDK.Record do
   core: the 16-byte header the shared contract fixes (`sdk_lang` 3, the SDK's
   version, the Procedure's schema version, the Erlang External Term Format id,
   a CRC over the body), the frame the controller's
-  `Flezha.State.Wire.decode_frame/1` reads for changes and snapshots alike, and
+  `Flezha.SDK.Wire.decode_frame/1` reads for changes and snapshots alike, and
   the fold that rebuilds an Entity from a `RestoreInitState` — the snapshot
   first, then the change log in the controller's on-disk framing, each record
   checked and its header resolved language first, then format, then schema,
@@ -19,9 +19,8 @@ defmodule Flezha.SDK.Record do
   """
 
   alias Flezha.SDK.{Codec, Procedure, Timers}
-  alias Flezha.State.RecordFrame
-  alias Flezha.State.Wire
-
+  alias Flezha.SDK.RecordFrame
+  alias Flezha.SDK.Wire
   # Allocated in `flz_core::header` and mirrored once, in the frame seam.
   @format_id_etf RecordFrame.format_id(:etf)
   @format_id_timer_ops RecordFrame.format_id(:timer_ops)

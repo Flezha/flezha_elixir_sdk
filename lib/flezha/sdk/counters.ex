@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Counters do
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
 
-  use Flezha.Process.Counters,
+  use Flezha.SDK.CounterTable,
     table: :counter,
     backend: :atomics,
     new_opts: [signed: false],
@@ -74,6 +74,18 @@ defmodule Flezha.SDK.Counters do
 
   @spec new() :: t()
   def new, do: counter_new()
+
+  @doc """
+  The keys this runner's data heartbeat carries: every slot of the table under
+  its own name, then the handout and deferred-push reports the two start-time
+  blocks answer. The controller mirrors a declared key set, and the core's
+  conformance gate holds it equal to this one.
+  """
+  @spec heartbeat_keys() :: [String.t()]
+  def heartbeat_keys,
+    do:
+      Enum.map(counter_rows(), &Atom.to_string(Keyword.fetch!(&1, :name))) ++
+        ~w(inflight inflight_oldest_ms pending_pushes pending_push_oldest_ms)
 
   @spec inc_dispatches(t()) :: :ok
   def inc_dispatches(ref), do: counter_bump(ref, :dispatches)

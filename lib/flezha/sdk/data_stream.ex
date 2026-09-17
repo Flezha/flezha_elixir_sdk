@@ -21,8 +21,8 @@ defmodule Flezha.SDK.DataStream do
       runner: Keyword.fetch!(opts, :runner)
     }
 
-    :ok = Flezha.Transport.Stream.controlling_process(state.handle, self())
-    :ok = Flezha.Transport.Stream.set_active(state.handle)
+    :ok = Flezha.SDK.Transport.controlling_process(state.handle, self())
+    :ok = Flezha.SDK.Transport.set_active(state.handle)
     {:ok, state}
   end
 
