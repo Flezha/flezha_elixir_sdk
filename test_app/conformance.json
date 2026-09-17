@@ -32,7 +32,9 @@
   "topology_surfaces": [
     "workflow",
     "sync_durability",
-    "merge"
+    "merge",
+    "shorthand",
+    "shorthand_omittable_sink"
   ],
   "deferred": [],
   "fixtures": {
@@ -45,8 +47,6 @@
       "do_nothing"
     ],
     "graph_builder": [
-      "sugar_do_nothing",
-      "sugar_store_input",
       "sugar_static_entity",
       "static_entity",
       "mixed_operative",
@@ -55,6 +55,12 @@
       "transform_chain",
       "entity_stress",
       "bench_keyed_nopersist"
+    ],
+    "shorthand": [
+      "sugar_do_nothing",
+      "sugar_store_input",
+      "sugar_named_input",
+      "sugar_workflow"
     ],
     "liveness": [
       "wedge_probe"

@@ -2,8 +2,8 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`, `merge` with `Flezha.SDK.Merge`,
-  and `route_latest`/`route_latest_named`), per-edge knobs
+  (`into`/`into_named`/`sink`/`sink_with`, `merge` with `from`, and
+  `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
   identity on the plugin wire the handle reaches) and the class-level tier
   declarations (`effectively_once`, the three checkpoint options and the two
@@ -174,23 +174,69 @@ defmodule Flezha.SDK.Channels do
   def map(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:map, f})
   def filter(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:filter, f})
   def flat_map(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:flat_map, f})
+
+  @doc """
+  Key an edge, or key a merged node on the mapped value.
+
+  A merge's key is declared once, on the merge, and runs on every source's
+  mapped value. A second declaration is recorded as a second key on every
+  source, which the check refuses as `DuplicateKeyBy`.
+  """
+  @spec key_by(Stream.t() | Merge.t(), (term() -> term())) :: Stream.t() | Merge.t()
+  def key_by(handle, f)
   def key_by(%Stream{} = s, f) when is_function(f, 1), do: link(s, {:key, f})
+  def key_by(%Merge{} = m, f) when is_function(f, 1), do: %{m | keys: m.keys ++ [f]}
 
   # --- consumers ---
 
-  @doc "Route into a procedure node. Unnamed mentions of one module unify (fan-in)."
+  @doc """
+  Route into a procedure node, or close a merge on one. Unnamed mentions of one
+  module unify (fan-in).
+  """
+  @spec into(Stream.t() | Merge.t(), module()) :: Stream.t()
+  def into(handle, module)
   def into(%Stream{} = s, module), do: do_into(s, module, nil)
+  def into(%Merge{} = m, module), do: close_merge(m, module, nil)
 
-  @doc "Route into a named procedure node (identity collisions refuse)."
+  @doc """
+  Route into a named procedure node, or close a merge on one. Identity
+  collisions refuse.
+  """
+  @spec into_named(Stream.t() | Merge.t(), module(), String.t()) :: Stream.t()
+  def into_named(handle, module, name)
+
   def into_named(%Stream{} = s, module, name) when is_binary(name),
     do: do_into(s, module, name)
 
+  def into_named(%Merge{} = m, module, name) when is_binary(name),
+    do: close_merge(m, module, name)
+
   @doc """
   Open a merge: one procedure fed by several source streams, each under its own
-  mapping, closed with `Flezha.SDK.Merge.into/2`.
+  mapping, closed with `into/2`.
+
+      c
+      |> merge()
+      |> from(ticks, &{:tick, &1})
+      |> from(quotes, &{:quote, &1})
+      |> key_by(&symbol_of/1)
+      |> into(Detector)
+
+  One import writes the whole pipe: `from/3`, `key_by/2`, `into/2` and
+  `into_named/3` all dispatch on the handle they receive, so a merge step needs
+  no module prefix of its own.
   """
   @spec merge(t()) :: Merge.t()
   def merge(%__MODULE__{ref: ref}), do: %Merge{builder: ref}
+
+  @doc """
+  Add a source stream to a merge and the mapping that lifts its value into the
+  merged input. The mapping is recorded on that source's own chain, after any
+  transform the handle already carries.
+  """
+  @spec from(Merge.t(), Stream.t(), (term() -> term())) :: Merge.t()
+  def from(%Merge{} = m, %Stream{} = source, mapping) when is_function(mapping, 1),
+    do: %{m | sources: m.sources ++ [map(source, mapping)]}
 
   @doc """
   Hand every key `key_fn` reads off `traffic` each distinct document on
@@ -215,8 +261,8 @@ defmodule Flezha.SDK.Channels do
        when is_function(key_fn, 1) do
     c
     |> merge()
-    |> Merge.from(documents, &{:document, &1})
-    |> Merge.from(map(traffic, key_fn), &{:traffic, &1})
+    |> from(documents, &{:document, &1})
+    |> from(map(traffic, key_fn), &{:traffic, &1})
     |> close_merge(RouteLatest, name)
   end
 
@@ -366,7 +412,7 @@ defmodule Flezha.SDK.Channels do
     %Stream{builder: ref, source: {:node, node_ref}}
   end
 
-  # The one body behind `Merge.into/2`, `Merge.into_named/3` and the router.
+  # The one body behind `into/2`, `into_named/3` and the router.
   # The node resolves as `into/2`'s does; every source chain takes the merge's
   # keys after its mapping, so a key reads the mapped value, and closes on the
   # node under one group.

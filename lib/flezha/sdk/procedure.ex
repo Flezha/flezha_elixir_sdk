@@ -110,6 +110,252 @@ defmodule Flezha.SDK.Procedure do
   # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_ENTITY`.
   @default_max_timers_per_entity 10_000
 
+  # The scalar settings `use` takes, each named after the callback it defines.
+  # An option not written defines nothing, so every default stays resolved by
+  # `function_exported?` exactly as it is for a hand-written module — the
+  # mailbox knob's included.
+  @use_options [
+    :entity_keys,
+    :mailbox_capacity,
+    :max_entities,
+    :entity_idle_ttl_ms,
+    :compact_after_bytes,
+    :schema_version,
+    :min_readable_schema_version,
+    :clock,
+    :max_timers_per_entity
+  ]
+
+  # The §5 short form's options. `sink` is what makes one; `kind` and `input`
+  # describe the operative it generates.
+  @short_form_options [:kind, :sink, :input]
+
+  # `Flezha.SDK.Ctx`'s authoring surface, imported by `use`. `apply/3` is
+  # deliberately absent: importing it would shadow `Kernel.apply/3` in every
+  # procedure body. A `state` block's recorders call it by its full name.
+  @ctx_imports [
+    emit: 2,
+    emit_with_meta: 3,
+    emit_keyed: 3,
+    emit_keyed_with_meta: 4,
+    now: 1,
+    timer_after: 2,
+    timer_at_event_time: 2,
+    cancel_processing_time_timer: 2,
+    cancel_event_time_timer: 2,
+    entity_key: 1,
+    spawn_workflow: 3,
+    spawn_workflow: 4,
+    checkpoint: 1,
+    stable_id: 1
+  ]
+
+  @doc """
+  Write a procedure as a declaration rather than as nine one-line callbacks.
+
+      use Flezha.SDK.Procedure, name: "position", max_entities: 50_000
+
+      def run(input, state, ctx), do: {:ok, state}
+
+  `name` is required. Every other option is one of the zero-arity callbacks
+  above, under its own name, and **only the options written define anything**:
+  a module that does not write `mailbox_capacity` exports none, so
+  `FLEZHA_MAILBOX_CAPACITY` still decides its mailbox. Callbacks that take
+  arguments — `run/3`, `entities_for/1`, `event_time_of/1`, `on_timer/4`,
+  `compensate/3`, `migrate_state/2`, `migrate_change/2` — stay `def`s the
+  author writes. An unknown option is a `CompileError` naming it.
+
+  `state do field … end` and `defchange` are available here too; see
+  `Flezha.SDK.State`. A module with neither a `state` block nor its own
+  `init_state/1` gets `def init_state(_), do: nil`, so a stateless procedure
+  writes only `run/3`.
+
+  ## The §5 short form
+
+  With `sink`, this one procedure is a whole operative of the written `kind`:
+
+      use Flezha.SDK.Procedure, name: "upcase", kind: :stream, sink: "out"
+
+  The module then also implements `Flezha.SDK.StreamOperative` (or
+  `Flezha.SDK.WorkflowOperative` for `kind: :workflow`), wiring an entry
+  channel named `"input"` — or the `input` option's value — into itself and
+  itself to the `sink` plugin channel, with `factory_id/0` equal to `name` and
+  every other operative callback left undefined so its default applies. It is
+  registered as any operative is: listed under `operatives:` in the child spec,
+  or passed to `Flezha.SDK.register_factory/2`.
+
+  Three refusals are `CompileError`s whose message begins with the contract's
+  name for them: `SinkWithoutId` for a `sink` with no `name`, `SinkWithoutKind`
+  for a `sink` with no `kind`, and `ShorthandKeyWithoutSink` for a `kind` or
+  `input` with no `sink`. Elixir cannot see a procedure's output type, so it
+  owes no `SinkWithoutOutput` and its manifest does not list
+  `shorthand_typed_output`.
+
+  A workflow short form started by a spawn does not see its payload yet; that
+  is `KB-381`, not a property of the short form.
+
+  ## Nesting
+
+  A procedure nested inside an operative module inherits that module's imports
+  lexically, so `use` writes `import Flezha.SDK.Channels, only: []` to take
+  `input/2` and `sink/2` back — a nested procedure defining its own `input/0`
+  would otherwise clash. A nested procedure must be written **before** the
+  `channels/1` that names it, which is how Elixir aliases resolve.
+  """
+  defmacro __using__(opts) do
+    known = @use_options ++ @short_form_options ++ [:name]
+
+    opts =
+      __validate__(opts, known, __MODULE__, {:name, "the procedure's node identity"})
+
+    callbacks = __callbacks__(opts, @use_options, __MODULE__)
+    short_form = short_form(opts)
+    ctx_imports = @ctx_imports
+
+    quote do
+      @behaviour Flezha.SDK.Procedure
+      use Flezha.SDK.State
+
+      import Flezha.SDK.Ctx, only: unquote(ctx_imports)
+      # A nested procedure inherits its operative module's imports; the builder
+      # is not part of a procedure's surface and `input/2` would clash with a
+      # procedure's own `input/0`.
+      import Flezha.SDK.Channels, only: []
+
+      @impl true
+      def name, do: unquote(Keyword.fetch!(opts, :name))
+
+      unquote_splicing(callbacks)
+      unquote(short_form)
+
+      @before_compile Flezha.SDK.Procedure
+    end
+  end
+
+  @doc false
+  defmacro __before_compile__(env) do
+    # A stateless procedure writes only `run/3`: the block's `init_state/1` and
+    # the author's own both win over this one. The block's is generated by
+    # `Flezha.SDK.State`'s own `@before_compile`, which may not have run yet, so
+    # the block is read from the attribute rather than from what is defined.
+    has_own? =
+      Module.defines?(env.module, {:init_state, 1}) or
+        Module.get_attribute(env.module, :flezha_state_block, false)
+
+    unless has_own? do
+      quote do
+        @impl true
+        def init_state(_entity_key), do: nil
+      end
+    end
+  end
+
+  # The option checks all three `use` macros make: a keyword list, no unknown
+  # option, and the one option that macro requires. `required` is
+  # `{key, what_it_is}`, so the refusal says what the author is being asked for.
+  @doc false
+  def __validate__(opts, known, macro, {required, what}) do
+    unless Keyword.keyword?(opts) do
+      raise CompileError,
+        description: "`use #{inspect(macro)}` takes a keyword list, read #{inspect(opts)}"
+    end
+
+    for {key, _value} <- opts, key not in known do
+      raise CompileError,
+        description:
+          "`use #{inspect(macro)}` has no option #{inspect(key)}; it takes " <>
+            Enum.map_join(Enum.sort(known), ", ", &inspect/1)
+    end
+
+    unless Keyword.has_key?(opts, required) do
+      raise CompileError,
+        description: "`use #{inspect(macro)}` requires `#{required}:`, #{what}"
+    end
+
+    opts
+  end
+
+  # One zero-arity callback per option written, and nothing for an option that
+  # is not. `behaviour` is what each `@impl` names, because a short-form module
+  # implements two.
+  @doc false
+  def __callbacks__(opts, known, behaviour) do
+    for {key, value} <- opts, key in known do
+      quote do
+        @impl unquote(behaviour)
+        def unquote(key)(), do: unquote(Macro.escape(value))
+      end
+    end
+  end
+
+  # Everything a `sink` decides: which operative behaviour the module gains, or
+  # which refusal the declaration earns.
+  defp short_form(opts) do
+    sink = Keyword.get(opts, :sink)
+    kind = Keyword.get(opts, :kind)
+    name = Keyword.fetch!(opts, :name)
+    entry = Keyword.get(opts, :input, "input")
+
+    cond do
+      is_nil(sink) ->
+        refuse_keys_without_sink(opts)
+        nil
+
+      name in [nil, ""] ->
+        raise CompileError,
+          description:
+            "SinkWithoutId: a `sink` makes this module a whole operative, whose factory id is " <>
+              "an address an operator types; write it as `name:`"
+
+      kind not in [:stream, :workflow] ->
+        raise CompileError,
+          description:
+            "SinkWithoutKind: a `sink` makes this module a whole operative; write " <>
+              "`kind: :stream` or `kind: :workflow`"
+
+      true ->
+        operative(kind, name, entry, sink)
+    end
+  end
+
+  defp refuse_keys_without_sink(opts) do
+    keys = for key <- [:kind, :input], Keyword.has_key?(opts, key), do: key
+
+    if keys != [] do
+      raise CompileError,
+        description:
+          "ShorthandKeyWithoutSink: #{Enum.map_join(keys, ", ", &"`#{&1}`")} name(s) of the " <>
+            "operative a `sink` generates; this module declares no `sink`, so there is nothing " <>
+            "for them to describe"
+    end
+  end
+
+  # The operative the short form generates: one entry channel into this module,
+  # this module to one plugin sink, and every other operative callback left
+  # undefined so its default applies.
+  defp operative(kind, name, entry, sink) do
+    {behaviour, declaration} =
+      case kind do
+        :stream -> {Flezha.SDK.StreamOperative, :channels}
+        :workflow -> {Flezha.SDK.WorkflowOperative, :procedures}
+      end
+
+    quote do
+      @behaviour unquote(behaviour)
+
+      @impl unquote(behaviour)
+      def factory_id, do: unquote(name)
+
+      @impl unquote(behaviour)
+      def unquote(declaration)(c) do
+        c
+        |> Flezha.SDK.Channels.input(unquote(entry))
+        |> Flezha.SDK.Channels.into(__MODULE__)
+        |> Flezha.SDK.Channels.sink(unquote(sink))
+      end
+    end
+  end
+
   @doc """
   Whether this procedure declares a saga undo hook. A workflow that unwinds
   runs `compensate/3` on every Entity whose procedure completed forward; a

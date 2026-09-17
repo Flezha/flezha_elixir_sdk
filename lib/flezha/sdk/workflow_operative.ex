@@ -15,6 +15,67 @@ defmodule Flezha.SDK.WorkflowOperative do
 
   alias Flezha.SDK.Procedure
 
+  # The scalar settings `use` takes, each named after the callback it defines.
+  @use_options [
+    :description,
+    :max_duration_ms,
+    :self_terminating?,
+    :loop_mode,
+    :wake_after_ms,
+    :retry_attempts,
+    :retry_backoff_ms,
+    :barrier_retry_attempts,
+    :rollback_mode,
+    :persistence_enabled,
+    :sync_durability
+  ]
+
+  @doc """
+  Write a workflow operative as a declaration rather than as one-line callbacks.
+
+      use Flezha.SDK.WorkflowOperative, factory_id: "checkout", loop_mode: :chained
+
+      @impl true
+      def procedures(c) do
+        c |> input("in") |> into(Reserve) |> into(Charge) |> sink("receipts")
+      end
+
+  `factory_id` is required; every knob above is optional, and **only the
+  options written define anything**, so a default stays where the reader
+  functions resolve it. `run/2` and `procedures/1` take arguments and stay
+  `def`s the author writes. An unknown option is a `CompileError` naming it.
+
+  `Flezha.SDK.Channels` is imported for a structured body, and
+  `Flezha.SDK.Workflow.Ctx`'s `emit/2`, `emit_on/3`, `complete/2` and
+  `spawn_workflow/3,4` for a `run/2` one.
+  """
+  defmacro __using__(opts) do
+    known = [:factory_id | @use_options]
+
+    opts =
+      Procedure.__validate__(
+        opts,
+        known,
+        __MODULE__,
+        {:factory_id, "the id the controller places by"}
+      )
+
+    callbacks = Procedure.__callbacks__(opts, @use_options, __MODULE__)
+
+    quote do
+      @behaviour Flezha.SDK.WorkflowOperative
+      import Flezha.SDK.Channels
+
+      import Flezha.SDK.Workflow.Ctx,
+        only: [emit: 2, emit_on: 3, complete: 2, spawn_workflow: 3, spawn_workflow: 4]
+
+      @impl Flezha.SDK.WorkflowOperative
+      def factory_id, do: unquote(Keyword.fetch!(opts, :factory_id))
+
+      unquote_splicing(callbacks)
+    end
+  end
+
   @type loop_mode :: :once | :per_input | :chained
   @type rollback_mode :: :all_or_nothing | :keep_progress
 

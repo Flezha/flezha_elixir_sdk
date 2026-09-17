@@ -109,6 +109,30 @@ defmodule ElixirRunner.Conformance.Row do
   def sync_durability, do: ElixirRunner.Conformance.context().sync_durability
 end
 
+# The refusal table's `shorthand_duplicate_id` pair: a stream short form and a
+# workflow short form under one factory id, which is what proves the two kinds
+# share one namespace. Nothing but that row registers them.
+
+defmodule ElixirRunner.ShorthandDupStream do
+  @moduledoc false
+  use Flezha.SDK.Procedure, name: "plain", kind: :stream, sink: "out"
+
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
+  end
+end
+
+defmodule ElixirRunner.ShorthandDupWorkflow do
+  @moduledoc false
+  use Flezha.SDK.Procedure, name: "plain", kind: :workflow, sink: "twin_sink"
+
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
+  end
+end
+
 defmodule ElixirRunner.Conformance do
   @moduledoc """
   The Elixir arm of the refusal table: every row of
@@ -131,7 +155,7 @@ defmodule ElixirRunner.Conformance do
   """
 
   alias ElixirRunner.Conformance.Row
-  alias Flezha.SDK.{Channels, Merge, Topology}
+  alias Flezha.SDK.{Channels, Topology}
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
@@ -161,12 +185,11 @@ defmodule ElixirRunner.Conformance do
   end
 
   @doc """
-  The class set `FLEZHA_REFUSAL_FIXTURE` selects: only that row's topology, as
-  `{streams, workflows}`. A refused row never reaches a connected runner — its
-  refusal names are printed and the VM exits non-zero, which is what the drill
-  reads.
+  The class list `FLEZHA_REFUSAL_FIXTURE` selects: only that row's topology. A
+  refused row never reaches a connected runner — its refusal names are printed
+  and the VM exits non-zero, which is what the drill reads.
   """
-  @spec boot_classes(String.t()) :: {[module()], [module()]}
+  @spec boot_classes(String.t()) :: [module()]
   def boot_classes(topology) do
     row = Enum.find(rows(), &(&1.topology == topology))
 
@@ -176,6 +199,9 @@ defmodule ElixirRunner.Conformance do
 
       skip_reason(row, surfaces()) != nil ->
         die("row #{topology} needs #{row.needs}, which this builder does not carry")
+
+      shorthand_steps(row) != [] ->
+        boot_shorthand(row)
 
       true ->
         register(row)
@@ -187,8 +213,7 @@ defmodule ElixirRunner.Conformance do
     put_context(row)
 
     case Topology.build(module, declare) do
-      {:ok, _topology} when declare == :channels -> {[module], []}
-      {:ok, _topology} -> {[], [module]}
+      {:ok, _topology} -> [module]
       {:error, {:invalid_topology, issues}} -> die(rejection(row.topology, issues))
     end
   end
@@ -219,6 +244,13 @@ defmodule ElixirRunner.Conformance do
   end
 
   defp outcome(row) do
+    case shorthand_steps(row) do
+      [] -> built(row)
+      declarations -> judge_shorthand(row, declarations)
+    end
+  end
+
+  defp built(row) do
     {module, declare} = class_of(row)
     put_context(row)
 
@@ -236,6 +268,103 @@ defmodule ElixirRunner.Conformance do
   end
 
   defp class_of(row), do: Map.get(@cited, row.topology, {Row, :channels})
+
+  # --- the §5 short form ---
+  #
+  # Elixir refuses a malformed short form where `use Flezha.SDK.Procedure`
+  # expands, so a module that earns one cannot be compiled and the row is
+  # answered by citing the test that compiles it from a string and asserts the
+  # `CompileError`. The one runtime refusal, a duplicate factory id, boots for
+  # real.
+
+  @macro_test "sdk/elixir/test/flezha/sdk/authoring_macros_test.exs"
+
+  # The `shorthand(<id>|-, <kind>|-, <sink>|-, <input>|-)` steps of a row.
+  defp shorthand_steps(row) do
+    row.steps
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.filter(&String.starts_with?(&1, "shorthand("))
+    |> Enum.map(&parse_shorthand/1)
+  end
+
+  defp parse_shorthand(step) do
+    {body, noout?} =
+      case String.replace_suffix(step, ".noout", "") do
+        ^step -> {step, false}
+        trimmed -> {trimmed, true}
+      end
+
+    fields =
+      body
+      |> argument()
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(fn
+        "-" -> nil
+        field -> field
+      end)
+
+    unless length(fields) == 4 do
+      die("a shorthand step declares four fields: read `#{step}`")
+    end
+
+    [name, kind, sink, input] = fields
+    %{name: name, kind: kind, sink: sink, input: input, noout?: noout?}
+  end
+
+  # The refusal a declaration earns. A `sink` is what makes a short form, so its
+  # absence is judged first; the identity and the kind follow.
+  defp refusal_of(%{sink: nil}), do: "ShorthandKeyWithoutSink"
+  defp refusal_of(%{name: nil}), do: "SinkWithoutId"
+  defp refusal_of(%{kind: nil}), do: "SinkWithoutKind"
+
+  defp judge_shorthand(row, [_one]) do
+    %{
+      "topology" => row.topology,
+      "outcome" => "cited",
+      "names" => [refusal_of(hd(shorthand_steps(row)))],
+      "citation" => @macro_test
+    }
+  end
+
+  defp judge_shorthand(row, _pair) do
+    case drive_duplicate() do
+      :ok -> %{"topology" => row.topology, "outcome" => "accepted"}
+      {:error, name} -> %{"topology" => row.topology, "outcome" => "refused", "names" => [name]}
+    end
+  end
+
+  # The duplicate row's pair, registered on a handle that never connects.
+  defp drive_duplicate do
+    handle =
+      "conformance_shorthand"
+      |> Flezha.SDK.create_runner()
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupStream)
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupWorkflow)
+
+    case handle do
+      %Flezha.SDK{} -> :ok
+      {:error, {:duplicate_factory_id, _id}} -> {:error, "DuplicateFactoryId"}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp boot_shorthand(row) do
+    case shorthand_steps(row) do
+      [_one] ->
+        die(
+          "#{row.topology}: #{refusal_of(hd(shorthand_steps(row)))} is a compile error here; " <>
+            "pinned by #{@macro_test}"
+        )
+
+      _pair ->
+        case drive_duplicate() do
+          :ok -> die("#{row.topology}: the runner accepted a second operative under one id")
+          {:error, name} -> die("#{row.topology}: #{name}")
+        end
+    end
+  end
 
   # The refusal names, read off the verdict as data: a refusal is a tagged
   # tuple whose tag IS the reference's name.
@@ -315,9 +444,9 @@ defmodule ElixirRunner.Conformance do
     out =
       sources
       |> Enum.reduce(Channels.merge(acc.token), fn source, merge ->
-        Merge.from(merge, Map.fetch!(acc.handles, source), & &1)
+        Channels.from(merge, Map.fetch!(acc.handles, source), & &1)
       end)
-      |> Merge.into(procedure(role))
+      |> Channels.into(procedure(role))
 
     %{acc | handles: Map.put(acc.handles, role, out)}
   end

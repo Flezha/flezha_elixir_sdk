@@ -5,8 +5,8 @@ defmodule Echo.Application do
 
   The runner is a child of this application's supervision tree, so a crash
   restarts it and it reconnects under the same identity. Declare every operative
-  you want served in `streams:`; `workflows:` is the same list for the workflow
-  kind.
+  you want served in `operatives:`, whichever kind it is: the kind is read from
+  the module, never named by the list.
   """
   use Application
 
@@ -18,7 +18,7 @@ defmodule Echo.Application do
     children = [
       # `:uds` because this node is not the controller's. The default, `:native`,
       # is for code running inside the controller's own node.
-      {Flezha.SDK, namespace: namespace, streams: [Echo.Operative], transport: :uds}
+      {Flezha.SDK, namespace: namespace, operatives: [Echo.Operative], transport: :uds}
     ]
 
     {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)

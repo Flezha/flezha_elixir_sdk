@@ -362,9 +362,9 @@ defmodule Flezha.SDK.LocalTest do
     assert Local.notices_emitted() == before + 2
   end
 
-  test "the same module is accepted by local mode and by define_stream/2" do
+  test "the same module is accepted by local mode and by register_factory/2" do
     assert %Flezha.SDK{classes: [{WordCount, _topology}]} =
-             "local-mode" |> Flezha.SDK.create_runner() |> Flezha.SDK.define_stream(WordCount)
+             "local-mode" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(WordCount)
 
     assert is_pid(start_run(WordCount))
   end

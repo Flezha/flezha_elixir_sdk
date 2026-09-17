@@ -10,6 +10,52 @@ defmodule Flezha.SDK.StreamOperative do
 
   alias Flezha.SDK.Procedure
 
+  # The scalar settings `use` takes, each named after the callback it defines.
+  @use_options [:description, :persistence_enabled]
+
+  @doc """
+  Write a stream operative as a declaration rather than as one-line callbacks.
+
+      use Flezha.SDK.StreamOperative, factory_id: "market"
+
+      @impl true
+      def channels(c) do
+        c |> input("trades") |> into(Candle) |> sink("candles")
+      end
+
+  `factory_id` is required; `description` and `persistence_enabled` are
+  optional, and **only the options written define anything**, so a default
+  stays where `function_exported?` resolves it. `channels/1` takes arguments
+  and stays a `def` the author writes. An unknown option is a `CompileError`
+  naming it.
+
+  `Flezha.SDK.Channels` is imported, so a whole pipe — a merge included — is
+  written with no module prefix.
+  """
+  defmacro __using__(opts) do
+    known = [:factory_id | @use_options]
+
+    opts =
+      Procedure.__validate__(
+        opts,
+        known,
+        __MODULE__,
+        {:factory_id, "the id the controller places by"}
+      )
+
+    callbacks = Procedure.__callbacks__(opts, @use_options, __MODULE__)
+
+    quote do
+      @behaviour Flezha.SDK.StreamOperative
+      import Flezha.SDK.Channels
+
+      @impl Flezha.SDK.StreamOperative
+      def factory_id, do: unquote(Keyword.fetch!(opts, :factory_id))
+
+      unquote_splicing(callbacks)
+    end
+  end
+
   @callback factory_id() :: String.t()
   @callback channels(Flezha.SDK.Channels.t()) :: any()
   @callback description() :: String.t()

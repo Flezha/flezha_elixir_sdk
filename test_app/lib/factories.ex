@@ -178,67 +178,67 @@ defmodule ElixirRunner.MixedOp do
   end
 end
 
-# -- sugar_do_nothing / sugar_store_input -----------------------------------
+# -- the §5 short forms -----------------------------------------------------
+#
+# One `use` each: the `sink` makes the procedure a whole operative of its
+# `kind`, and `application.ex` lists it under `operatives:`. No hand-written
+# operative stands beside them.
 
-defmodule ElixirRunner.SugarDoNothingProc do
+defmodule ElixirRunner.SugarDoNothing do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  use Flezha.SDK.Procedure,
+    name: "sugar_do_nothing",
+    kind: :stream,
+    sink: "sugar_do_nothing_echo"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "sugar_do_nothing"
-  def init_state(_), do: nil
-
-  def run(input, s, ctx),
-    do:
-      (
-        Ctx.emit(ctx, input)
-        {:ok, s}
-      )
-end
-
-defmodule ElixirRunner.SugarDoNothingOp do
-  @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "sugar_do_nothing"
-
-  def channels(c) do
-    import Flezha.SDK.Channels
-
-    c
-    |> input("input")
-    |> into(ElixirRunner.SugarDoNothingProc)
-    |> sink("sugar_do_nothing_echo")
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
   end
 end
 
-defmodule ElixirRunner.SugarStoreInputProc do
+defmodule ElixirRunner.SugarStoreInput do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  use Flezha.SDK.Procedure,
+    name: "sugar_store_input",
+    kind: :stream,
+    sink: "sugar_store_sink"
 
-  alias Flezha.SDK.Ctx
+  state do
+    field(:text_inputs, :list, default: [])
+  end
 
-  def name, do: "sugar_store_input"
-  def init_state(_), do: %{text_inputs: []}
-
-  def run(input, s, ctx) do
-    Ctx.emit(ctx, input)
-    {:ok, %{s | text_inputs: [input | s.text_inputs]}}
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, push_text_inputs(state, ctx, input)}
   end
 end
 
-defmodule ElixirRunner.SugarStoreInputOp do
+defmodule ElixirRunner.SugarNamedInput do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "sugar_store_input"
+  use Flezha.SDK.Procedure,
+    name: "sugar_named_input",
+    kind: :stream,
+    sink: "sugar_named_input_sink",
+    input: "prices"
 
-  def channels(c) do
-    import Flezha.SDK.Channels
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
+  end
+end
 
-    c
-    |> input("input")
-    |> into(ElixirRunner.SugarStoreInputProc)
-    |> sink("sugar_store_sink")
+defmodule ElixirRunner.SugarWorkflow do
+  @moduledoc false
+  use Flezha.SDK.Procedure,
+    name: "sugar_workflow",
+    kind: :workflow,
+    sink: "sugar_workflow_placed",
+    input: "order"
+
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
   end
 end
 
@@ -327,17 +327,16 @@ defmodule ElixirRunner.MergedInputOp do
   # merge keys on the symbol the mapping read.
   def channels(c) do
     import Flezha.SDK.Channels
-    alias Flezha.SDK.Merge
 
     ticks = input(c, "ticks")
     quotes = input(c, "quotes")
 
     c
     |> merge()
-    |> Merge.from(ticks, &tagged("ticks", &1))
-    |> Merge.from(quotes, &tagged("quotes", &1))
-    |> Merge.key_by(& &1.symbol)
-    |> Merge.into(ElixirRunner.MergeLabelProc)
+    |> from(ticks, &tagged("ticks", &1))
+    |> from(quotes, &tagged("quotes", &1))
+    |> key_by(& &1.symbol)
+    |> into(ElixirRunner.MergeLabelProc)
     |> keyed()
     |> sink("merged")
   end
@@ -651,8 +650,6 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.StaticEntityOp,
       ElixirRunner.SugarStaticEntityOp,
       ElixirRunner.MixedOp,
-      ElixirRunner.SugarDoNothingOp,
-      ElixirRunner.SugarStoreInputOp,
       ElixirRunner.HybridChannelOp,
       ElixirRunner.MergedInputOp,
       ElixirRunner.TransformChainOp,
@@ -664,5 +661,18 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.PartitionRelayOp,
       ElixirRunner.SpawnRequesterOp
     ] ++ ElixirRunner.FactoriesState.all()
+  end
+
+  @doc """
+  The §5 short forms this app advertises: each is the procedure module itself,
+  whose `sink` makes it a whole operative.
+  """
+  def shorthand do
+    [
+      ElixirRunner.SugarDoNothing,
+      ElixirRunner.SugarStoreInput,
+      ElixirRunner.SugarNamedInput,
+      ElixirRunner.SugarWorkflow
+    ]
   end
 end

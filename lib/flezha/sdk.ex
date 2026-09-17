@@ -39,58 +39,41 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc "Declare a stream operative. Legal before and after `start/1`."
-  @spec define_stream(result(), module()) :: result()
-  def define_stream({:error, _} = e, _module), do: e
-
-  def define_stream(%__MODULE__{} = h, module) do
-    with :ok <- validate_operative(module),
-         {:ok, topo} <- Topology.build(module),
-         :ok <- not_duplicate(h, topo.factory_id) do
-      if h.server do
-        case RunnerServer.define(h.server, module, topo) do
-          :ok -> %{h | classes: h.classes ++ [{module, topo}]}
-          {:error, _} = e -> e
-        end
-      else
-        %{h | classes: h.classes ++ [{module, topo}]}
-      end
-    end
-  end
-
   @doc """
-  Declare a workflow operative. Legal before and after `start/1`. A workflow
-  class rides the same declared set a stream class does — the controller places
-  by factory id and learns the kind from the `AddOperative` it sends, not from
-  the advertisement — so the two share every downstream reader.
-  """
-  @spec define_workflow(result(), module()) :: result()
-  def define_workflow({:error, _} = e, _module), do: e
+  Declare an operative of either kind. Legal before and after `start/1`.
 
-  def define_workflow(%__MODULE__{} = h, module) do
-    with :ok <- validate_workflow(module),
-         {:ok, spec} <- Spec.build(module),
-         :ok <- not_duplicate(h, spec.factory_id) do
+  The kind is read from the callbacks the module exports, never named by the
+  call: `channels/1` makes a stream, `procedures/1` or `run/2` a workflow. A
+  module exporting both is refused `{:AmbiguousOperativeKind, module}` and one
+  exporting neither `{:UnknownOperativeKind, module}`.
+
+  Both kinds ride the same declared set — the controller places by factory id
+  and learns the kind from the `AddOperative` it sends, not from the
+  advertisement — so the two share every downstream reader.
+  """
+  @spec register_factory(result(), module()) :: result()
+  def register_factory({:error, _} = e, _module), do: e
+
+  def register_factory(%__MODULE__{} = h, module) do
+    with {:ok, kind} <- operative_kind(module),
+         {:ok, class} <- build_class(kind, module),
+         :ok <- not_duplicate(h, class.factory_id) do
       if h.server do
-        case RunnerServer.define(h.server, module, spec) do
-          :ok -> %{h | classes: h.classes ++ [{module, spec}]}
+        case RunnerServer.define(h.server, module, class) do
+          :ok -> %{h | classes: h.classes ++ [{module, class}]}
           {:error, _} = e -> e
         end
       else
-        %{h | classes: h.classes ++ [{module, spec}]}
+        %{h | classes: h.classes ++ [{module, class}]}
       end
     end
   end
 
-  @doc "Remove a declared workflow operative."
-  @spec remove_workflow(result(), module()) :: result()
-  def remove_workflow(h, module), do: remove_stream(h, module)
+  @doc "Remove a declared operative — the inverse of `register_factory/2`, taking what it took."
+  @spec unregister_factory(result(), module()) :: result()
+  def unregister_factory({:error, _} = e, _module), do: e
 
-  @doc "Remove a declared stream operative."
-  @spec remove_stream(result(), module()) :: result()
-  def remove_stream({:error, _} = e, _module), do: e
-
-  def remove_stream(%__MODULE__{server: nil} = h, module) do
+  def unregister_factory(%__MODULE__{server: nil} = h, module) do
     fid = module.factory_id()
 
     if Enum.any?(h.classes, fn {_m, t} -> t.factory_id == fid end) do
@@ -100,7 +83,7 @@ defmodule Flezha.SDK do
     end
   end
 
-  def remove_stream(%__MODULE__{} = h, module) do
+  def unregister_factory(%__MODULE__{} = h, module) do
     case RunnerServer.remove(h.server, module) do
       :ok -> %{h | classes: Enum.reject(h.classes, fn {m, _t} -> m == module end)}
       {:error, _} = e -> e
@@ -212,17 +195,10 @@ defmodule Flezha.SDK do
 
     handle =
       Enum.reduce(
-        Keyword.get(opts, :streams, []),
+        Keyword.get(opts, :operatives, []),
         create_runner(namespace, transport: transport),
-        fn module, acc ->
-          define_stream(acc, module)
-        end
+        fn module, acc -> register_factory(acc, module) end
       )
-
-    handle =
-      Enum.reduce(Keyword.get(opts, :workflows, []), handle, fn module, acc ->
-        define_workflow(acc, module)
-      end)
 
     case start(handle) do
       %__MODULE__{server: pid} -> {:ok, pid}
@@ -232,23 +208,26 @@ defmodule Flezha.SDK do
 
   # --- helpers ---
 
-  defp validate_operative(module) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :factory_id, 0) and
-         function_exported?(module, :channels, 1) do
-      :ok
-    else
-      {:error, {:not_a_stream_operative, module}}
+  # The kind a module declares, read from the callbacks it exports. A module of
+  # both kinds, or of neither, cannot be placed and says so by the contract's
+  # name for it (`docs/sdk/authoring_contract.md` §5.1).
+  defp operative_kind(module) do
+    loaded = Code.ensure_loaded?(module) and function_exported?(module, :factory_id, 0)
+    stream? = loaded and function_exported?(module, :channels, 1)
+
+    workflow? =
+      loaded and (WorkflowOperative.structured?(module) or WorkflowOperative.run_sugar?(module))
+
+    case {stream?, workflow?} do
+      {true, true} -> {:error, {:AmbiguousOperativeKind, module}}
+      {true, false} -> {:ok, :stream}
+      {false, true} -> {:ok, :workflow}
+      {false, false} -> {:error, {:UnknownOperativeKind, module}}
     end
   end
 
-  defp validate_workflow(module) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :factory_id, 0) and
-         (WorkflowOperative.structured?(module) or WorkflowOperative.run_sugar?(module)) do
-      :ok
-    else
-      {:error, {:not_a_workflow_operative, module}}
-    end
-  end
+  defp build_class(:stream, module), do: Topology.build(module)
+  defp build_class(:workflow, module), do: Spec.build(module)
 
   defp not_duplicate(%__MODULE__{classes: classes}, fid) do
     if Enum.any?(classes, fn {_m, t} -> t.factory_id == fid end),
