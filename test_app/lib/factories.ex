@@ -301,6 +301,84 @@ defmodule ElixirRunner.HybridChannelOp do
   def serialize(v), do: <<v::unsigned-big-32>>
 end
 
+# -- merged_input / transform_chain -----------------------------------------
+
+defmodule ElixirRunner.MergeLabelProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "merge_label_procedure"
+  def init_state(_), do: nil
+
+  def run(%{source: source, payload: payload}, s, ctx) do
+    Ctx.emit(ctx, "#{source}:#{payload}")
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.MergedInputOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "merged_input"
+
+  # Each source's mapping tags the value with the channel it came from, and the
+  # merge keys on the symbol the mapping read.
+  def channels(c) do
+    import Flezha.SDK.Channels
+    alias Flezha.SDK.Merge
+
+    ticks = input(c, "ticks")
+    quotes = input(c, "quotes")
+
+    c
+    |> merge()
+    |> Merge.from(ticks, &tagged("ticks", &1))
+    |> Merge.from(quotes, &tagged("quotes", &1))
+    |> Merge.key_by(& &1.symbol)
+    |> Merge.into(ElixirRunner.MergeLabelProc)
+    |> keyed()
+    |> sink("merged")
+  end
+
+  defp tagged(source, payload), do: %{source: source, symbol: prefix(payload), payload: payload}
+
+  @doc false
+  # The text before the first `:`, which both stream-graph fixtures key on.
+  def prefix(value), do: value |> String.split(":", parts: 2) |> hd()
+end
+
+defmodule ElixirRunner.TransformLabelProc do
+  @moduledoc false
+  @behaviour Flezha.SDK.Procedure
+  def name, do: "transform_label_procedure"
+  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamProc
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamProc
+end
+
+defmodule ElixirRunner.TransformChainOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "transform_chain"
+
+  # Every value transform on one edge: `drop` is filtered out, a comma list fans
+  # out into one value per element, each is upper-cased and keyed on its prefix.
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("trades")
+    |> filter(&(&1 != "drop"))
+    |> flat_map(&String.split(&1, ","))
+    |> map(&String.upcase/1)
+    |> key_by(&ElixirRunner.MergedInputOp.prefix/1)
+    |> into(ElixirRunner.TransformLabelProc)
+    |> keyed()
+    |> sink("transformed")
+  end
+end
+
 # -- poison_probe / wedge_probe ---------------------------------------------
 
 defmodule ElixirRunner.PoisonProbeProc do
@@ -532,6 +610,8 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.SugarDoNothingOp,
       ElixirRunner.SugarStoreInputOp,
       ElixirRunner.HybridChannelOp,
+      ElixirRunner.MergedInputOp,
+      ElixirRunner.TransformChainOp,
       ElixirRunner.PoisonProbeOp,
       ElixirRunner.WedgeProbeOp,
       ElixirRunner.BoundedMailboxDropNothingOp,

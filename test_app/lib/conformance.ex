@@ -131,7 +131,7 @@ defmodule ElixirRunner.Conformance do
   """
 
   alias ElixirRunner.Conformance.Row
-  alias Flezha.SDK.{Channels, Topology}
+  alias Flezha.SDK.{Channels, Merge, Topology}
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
@@ -307,6 +307,21 @@ defmodule ElixirRunner.Conformance do
     %{acc | handles: Map.put(acc.handles, name, Channels.input(acc.token, name))}
   end
 
+  # `merge(<proc>, <x>…)`: one identity mapping per listed source, a repeated
+  # one included, closed on the procedure, whose output its role addresses.
+  defp step("merge(" <> _ = step, acc) do
+    [role | sources] = step |> argument() |> String.split(",") |> Enum.map(&String.trim/1)
+
+    out =
+      sources
+      |> Enum.reduce(Channels.merge(acc.token), fn source, merge ->
+        Merge.from(merge, Map.fetch!(acc.handles, source), & &1)
+      end)
+      |> Merge.into(procedure(role))
+
+    %{acc | handles: Map.put(acc.handles, role, out)}
+  end
+
   defp step(step, acc) do
     [head | links] = String.split(step, ".")
     dotted(head, links, acc)
@@ -331,16 +346,8 @@ defmodule ElixirRunner.Conformance do
 
   defp link(link, {stream, acc}) do
     case call(link) do
-      {"map", _} -> {Channels.map(stream, & &1), acc}
-      {"key", _} -> {Channels.key_by(stream, & &1), acc}
-      {"keyed", _} -> {Channels.keyed(stream), acc}
-      {"named", name} -> {Channels.named(stream, name), acc}
-      {"sink", ""} -> {Channels.sink(stream), acc}
-      {"sink", name} -> {Channels.sink(stream, name), acc}
-      {"retry_max", n} -> {Channels.retry_max(stream, integer(n)), acc}
-      {"on_full", policy} -> {Channels.on_full(stream, overflow(policy)), acc}
       {"into", role} -> into(stream, role, acc)
-      {other, _} -> raise "the fixture spells a link this interpreter does not map: #{other}"
+      {verb, argument} -> {stream_link(verb, argument, stream), acc}
     end
   end
 
@@ -349,6 +356,20 @@ defmodule ElixirRunner.Conformance do
     out = Channels.into(stream, procedure(role))
     {out, %{acc | handles: Map.put(acc.handles, role, out)}}
   end
+
+  defp stream_link("map", _, stream), do: Channels.map(stream, & &1)
+  defp stream_link("filter", _, stream), do: Channels.filter(stream, fn _value -> true end)
+  defp stream_link("flat_map", _, stream), do: Channels.flat_map(stream, &[&1])
+  defp stream_link("key", _, stream), do: Channels.key_by(stream, & &1)
+  defp stream_link("keyed", _, stream), do: Channels.keyed(stream)
+  defp stream_link("named", name, stream), do: Channels.named(stream, name)
+  defp stream_link("sink", "", stream), do: Channels.sink(stream)
+  defp stream_link("sink", name, stream), do: Channels.sink(stream, name)
+  defp stream_link("retry_max", n, stream), do: Channels.retry_max(stream, integer(n))
+  defp stream_link("on_full", policy, stream), do: Channels.on_full(stream, overflow(policy))
+
+  defp stream_link(other, _, _stream),
+    do: raise("the fixture spells a link this interpreter does not map: #{other}")
 
   defp class_flag("persistent", _value, acc), do: acc
   defp class_flag("sync_durability", _value, acc), do: acc

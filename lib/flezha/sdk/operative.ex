@@ -564,8 +564,8 @@ defmodule Flezha.SDK.Operative do
       operative_id: s.operative_id,
       node_ref: node_ref,
       node_name: topo.node_name[node_ref],
-      # The channel this Entity consumes from — what a park reports, matching
-      # the reference SDK. v1 has no merge, so one source per node.
+      # The channel this Entity consumes from: what a park reports, matching
+      # the reference SDK.
       input_channel: inbound_channel(topo, node_ref),
       module: module,
       entity_key: key,
@@ -640,7 +640,7 @@ defmodule Flezha.SDK.Operative do
 
   # The channel a node consumes from — an entry channel by its own name, an
   # inter-procedure edge by the producing node's output name. A static
-  # topology fact: v1 has no merge, so a node has one source.
+  # topology fact: a node several channels feed reports the first route found.
   defp inbound_channel(topo, node_ref) do
     Enum.find_value(topo.routes, fn {source, routes} ->
       if Enum.any?(routes, &(&1.to == {:node, node_ref})) do

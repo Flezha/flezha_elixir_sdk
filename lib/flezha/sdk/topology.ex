@@ -13,7 +13,8 @@ defmodule Flezha.SDK.Topology do
     1. the chain rules, per channel and left to right — a link after a plugin
        sink, a transform after a key, a second key, a chain nothing closes, a
        repeated plugin wire, an edge re-declared where either side carries a
-       link;
+       link, a merge over fewer than two distinct sources or over one source
+       twice;
     2. the derivation those chains determine — the consumer edges in chain
        order, the plugin wire, the channel's `named/2` name applied once for
        every terminator, and the checkpoint granularity `Channels` implies
@@ -21,9 +22,8 @@ defmodule Flezha.SDK.Topology do
     3. the topology and class facts over the derived shape.
 
   `test/fixtures/reference_topologies.txt` is the contract both this and the
-  core are measured against. Three of its rows name a surface the v1 subset
-  does not carry (`branch`, `merge`), so `BranchTooFewArms`,
-  `MergeTooFewSources` and `DuplicateMergeSource` are absent here by design
+  core are measured against. One of its rows names a surface the v1 subset
+  does not carry (`branch`), so `BranchTooFewArms` is absent here by design
   rather than missing. Two more of its class-fact rows this SDK does not judge:
   a workflow class here DOES declare the effectively-once tier — the
   `commit_block_chain` twin of that same file is one — and the checkpoint-hold
@@ -137,20 +137,26 @@ defmodule Flezha.SDK.Topology do
   # --- stages one and two: the chain rules, and what they derive ---
 
   # One walk per channel: the chain rules judged left to right while the
-  # consumers, the plugin wire and the knobs they determine are read off.
+  # consumers, the plugin wire and the knobs they determine are read off. The
+  # merge groups fill across channels, so they are judged once every channel
+  # has been walked.
   defp derive(acc) do
     by_channel = Enum.group_by(acc.chains, & &1.channel)
 
-    acc
-    |> sources()
-    |> Enum.map_reduce([], fn source, issues ->
-      {channel, found} = derive_channel(acc, source, Map.get(by_channel, source, []))
-      {channel, issues ++ found}
-    end)
+    {channels, {issues, merges}} =
+      acc
+      |> sources()
+      |> Enum.map_reduce({[], []}, fn source, {issues, merges} ->
+        {channel, found, joined} = derive_channel(acc, source, Map.get(by_channel, source, []))
+        {channel, {issues ++ found, merges ++ joined}}
+      end)
+
+    {channels, issues ++ refuse_merges(acc, merges)}
   end
 
   # Every channel of the class in declaration order: the entry channels the
-  # author opened, then the output channel of every node an `into` created.
+  # author opened, then the output channel of every node an `into` or a merge
+  # created.
   defp sources(acc) do
     entries = acc.entry_order |> Enum.uniq() |> Enum.map(&{:entry, &1})
     nodes = Enum.map(nodes_in_order(acc), fn {ref, _node} -> {:node, ref} end)
@@ -159,7 +165,7 @@ defmodule Flezha.SDK.Topology do
 
   defp derive_channel(acc, source, chains) do
     name = Channels.channel_name(acc, source)
-    seed = %{name: name, sinks: [], consumers: [], issues: []}
+    seed = %{name: name, sinks: [], consumers: [], merges: [], issues: []}
     state = Enum.reduce(chains, seed, &walk_chain(acc, &1, &2))
 
     channel = %{
@@ -170,7 +176,7 @@ defmodule Flezha.SDK.Topology do
       consumers: Enum.reverse(state.consumers)
     }
 
-    {channel, Enum.reverse(state.issues)}
+    {channel, Enum.reverse(state.issues), Enum.reverse(state.merges)}
   end
 
   # A chain's own links, left to right. `wired?` is the chain's own plugin
@@ -238,8 +244,19 @@ defmodule Flezha.SDK.Topology do
      %{walk | wired?: true, closed?: true}}
   end
 
-  defp walk_link(acc, chain, {:into, node_ref}, {state, steps, walk}) do
-    edge = %{to: node_ref, declares: walk.transform? or walk.key?, knobs: chain.knobs}
+  defp walk_link(acc, chain, {:into, node_ref}, {state, steps, walk}),
+    do: close_on_node(acc, chain, node_ref, walk.transform? or walk.key?, {state, steps, walk})
+
+  # A merge source is one more consumer edge, remembered under its group. It
+  # always declares one, so the same channel wired into the same node by a bare
+  # `into/2` is refused rather than taken for fan-in.
+  defp walk_link(acc, chain, {:merge, node_ref, group}, {state, steps, walk}) do
+    state = %{state | merges: [{{group, node_ref}, chain.channel} | state.merges]}
+    close_on_node(acc, chain, node_ref, true, {state, steps, walk})
+  end
+
+  defp close_on_node(acc, chain, node_ref, declares?, {state, steps, walk}) do
+    edge = %{to: node_ref, declares: declares?, knobs: chain.knobs}
     {wire(acc, state, edge, steps), steps, %{walk | closed?: true}}
   end
 
@@ -285,6 +302,29 @@ defmodule Flezha.SDK.Topology do
           do: issue(state, {:EdgeAlreadyWired, state.name, node_label(acc, edge.to)}),
           else: state
     end
+  end
+
+  # A merge consumes two or more distinct channels: one source is a plain
+  # `into/2`, and a repeated one has no second mapping to carry. Groups in the
+  # order they were closed, each one's sources in the order the walk met them.
+  defp refuse_merges(acc, merges) do
+    merges
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.sort()
+    |> Enum.flat_map(fn {{_group, node_ref}, sources} ->
+      distinct = Enum.uniq(sources)
+
+      repeated =
+        for source <- sources -- distinct,
+            do: {:DuplicateMergeSource, Channels.channel_name(acc, source)}
+
+      too_few =
+        if length(distinct) < 2,
+          do: [{:MergeTooFewSources, node_label(acc, node_ref), length(distinct)}],
+          else: []
+
+      repeated ++ too_few
+    end)
   end
 
   defp issue(state, found), do: %{state | issues: [found | state.issues]}

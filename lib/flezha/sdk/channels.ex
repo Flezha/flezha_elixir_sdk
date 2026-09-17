@@ -2,7 +2,8 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`/`sealed`), per-edge knobs
+  (`into`/`into_named`/`sink`/`sink_with`, `merge` with `Flezha.SDK.Merge`,
+  and `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
   identity on the plugin wire the handle reaches) and the class-level tier
   declarations (`effectively_once`, the three checkpoint options and the two
@@ -11,8 +12,9 @@ defmodule Flezha.SDK.Channels do
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
   to the chain its handle carries — a transform, a key, a plugin sink, an edge
-  into a procedure — and the record is kept in the process dictionary for the
-  duration of `channels/1` (the twin of the Rust builder's `pending`).
+  into a procedure, a merge source closing on one — and the record is kept in
+  the process dictionary for the duration of `channels/1` (the twin of the Rust
+  builder's `pending`).
   `Flezha.SDK.Topology.build/2` then judges the finished record in the three
   stages `flz_core::host::register::check` judges its own: the chain rules,
   the derivation, then the topology and class facts. The Elixir SDK inherits
@@ -24,7 +26,7 @@ defmodule Flezha.SDK.Channels do
   end for, and neither reaches the record.
   """
 
-  alias Flezha.SDK.Stream
+  alias Flezha.SDK.{Merge, RouteLatest, Stream}
 
   @enforce_keys [:ref]
   defstruct [:ref]
@@ -41,6 +43,7 @@ defmodule Flezha.SDK.Channels do
           | :keyed
           | {:sink, String.t(), (term() -> binary())}
           | {:into, reference()}
+          | {:merge, reference(), non_neg_integer()}
 
   # --- build lifecycle (used by Topology.build/2) ---
 
@@ -56,6 +59,7 @@ defmodule Flezha.SDK.Channels do
       node_names: %{},
       chains: %{},
       chain_seq: 0,
+      merge_groups: 0,
       tier: %{effectively_once: false, checkpoint: nil, correction: nil},
       issues: []
     })
@@ -182,6 +186,41 @@ defmodule Flezha.SDK.Channels do
     do: do_into(s, module, name)
 
   @doc """
+  Open a merge: one procedure fed by several source streams, each under its own
+  mapping, closed with `Flezha.SDK.Merge.into/2`.
+  """
+  @spec merge(t()) :: Merge.t()
+  def merge(%__MODULE__{ref: ref}), do: %Merge{builder: ref}
+
+  @doc """
+  Hand every key `key_fn` reads off `traffic` each distinct document on
+  `documents` once, on that key's own next traffic item, as `{key, document}`.
+  Expands to a merge into the packaged `Flezha.SDK.RouteLatest` node, named
+  `route_latest`, and answers its output stream.
+  """
+  @spec route_latest(t(), Stream.t(), Stream.t(), (term() -> String.t())) :: Stream.t()
+  def route_latest(%__MODULE__{} = c, documents, traffic, key_fn),
+    do: wire_route_latest(c, documents, traffic, key_fn, nil)
+
+  @doc "`route_latest/4` into a router node of the given name."
+  @spec route_latest_named(t(), Stream.t(), Stream.t(), (term() -> String.t()), String.t()) ::
+          Stream.t()
+  def route_latest_named(%__MODULE__{} = c, documents, traffic, key_fn, name)
+      when is_binary(name),
+      do: wire_route_latest(c, documents, traffic, key_fn, name)
+
+  # The traffic value is replaced by its key on its own edge, so the payload
+  # never reaches the router's state.
+  defp wire_route_latest(c, %Stream{} = documents, %Stream{} = traffic, key_fn, name)
+       when is_function(key_fn, 1) do
+    c
+    |> merge()
+    |> Merge.from(documents, &{:document, &1})
+    |> Merge.from(map(traffic, key_fn), &{:traffic, &1})
+    |> close_merge(RouteLatest, name)
+  end
+
+  @doc """
   Terminate the channel on the plugin layer with default serialization
   (bytes/UTF-8/JSON), naming it. The string written here IS the channel's name
   everywhere one appears; `sink/1` leaves it derived as it would be without a
@@ -235,9 +274,6 @@ defmodule Flezha.SDK.Channels do
     update(ref, fn acc -> claim_name(acc, name, node_ref) end)
     s
   end
-
-  @doc "Type-level terminator; adds no topology."
-  def sealed(%Stream{} = s), do: s
 
   # --- per-edge knobs (ride the chain; applied to the edges it closes) ---
 
@@ -327,6 +363,24 @@ defmodule Flezha.SDK.Channels do
   defp do_into(%Stream{builder: ref} = s, module, name) do
     node_ref = resolve_node(ref, module, name)
     _ = link(s, {:into, node_ref})
+    %Stream{builder: ref, source: {:node, node_ref}}
+  end
+
+  # The one body behind `Merge.into/2`, `Merge.into_named/3` and the router.
+  # The node resolves as `into/2`'s does; every source chain takes the merge's
+  # keys after its mapping, so a key reads the mapped value, and closes on the
+  # node under one group.
+  @doc false
+  def close_merge(%Merge{builder: ref, sources: sources, keys: keys}, module, name) do
+    node_ref = resolve_node(ref, module, name)
+    group = resolve(ref, &{%{&1 | merge_groups: &1.merge_groups + 1}, &1.merge_groups})
+
+    for source <- sources do
+      keys
+      |> Enum.reduce(source, &key_by(&2, &1))
+      |> link({:merge, node_ref, group})
+    end
+
     %Stream{builder: ref, source: {:node, node_ref}}
   end
 
@@ -438,11 +492,12 @@ defmodule Flezha.SDK.Channels do
   defp update(ref, fun), do: Process.put(acc_key(ref), fun.(Process.get(acc_key(ref))))
 
   # The one write that also answers: node resolution has to hand the caller the
-  # ref it settled on, and that ref is only known inside the update.
+  # ref it settled on, and a merge the group it took, and each is only known
+  # inside the update.
   defp resolve(ref, fun) do
-    {acc, node_ref} = fun.(Process.get(acc_key(ref)))
+    {acc, answer} = fun.(Process.get(acc_key(ref)))
     Process.put(acc_key(ref), acc)
-    node_ref
+    answer
   end
 
   defp acc_key(ref), do: {__MODULE__, ref}
