@@ -36,8 +36,9 @@ defmodule Flezha.SDK.Workflow.Instance do
     @moduledoc """
     The committed proc-journal state one bind carried: the iteration to resume
     at, the procedures committed inside it with what each released, the
-    previous terminal batch, and every forward commit the compensation planner
-    needs.
+    previous terminal batch, every forward commit the compensation planner
+    needs, and the result the last committed iteration ended the instance
+    with (`nil` when it did not).
     """
     defstruct committed_proc_idxs: [],
               iter: 0,
@@ -45,7 +46,8 @@ defmodule Flezha.SDK.Workflow.Instance do
               proc_handoffs: %{},
               committed_procs: [],
               consumed_offset: 0,
-              rewind_undo: []
+              rewind_undo: [],
+              completion: nil
 
     @type t :: %__MODULE__{}
   end

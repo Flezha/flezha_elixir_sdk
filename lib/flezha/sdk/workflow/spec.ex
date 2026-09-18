@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Workflow.Spec do
   @moduledoc """
   The frozen registration-time result of authoring a workflow class: a
-  run-sugar body or a validated procedure DAG, plus the class's loop, rollback
-  and durability facts.
+  validated procedure DAG, plus the class's loop, rollback and durability
+  facts.
 
   A structured class authors on the same builder a stream class does, so its
   topology is compiled by `Flezha.SDK.Topology.build/2` and only the refusals a
@@ -49,9 +49,8 @@ defmodule Flezha.SDK.Workflow.Spec do
         }
 
   @doc """
-  Compile `module` into a workflow spec, or refuse it. A class declaring
-  `procedures/1` takes the structured path; one declaring only `run/2` takes
-  the run-sugar path and carries no topology.
+  Compile `module` into a workflow spec, or refuse it. A class that declares
+  no `procedures/1` has no body to run and is refused `NoWorkflowBody`.
   """
   @spec build(module()) :: {:ok, t()} | {:error, {:invalid_workflow, [term()]}}
   def build(module) do
@@ -59,27 +58,9 @@ defmodule Flezha.SDK.Workflow.Spec do
     base = %__MODULE__{factory_id: module.factory_id(), module: module, knobs: knobs}
     class_issues = class_refusals(module, knobs)
 
-    cond do
-      WorkflowOperative.structured?(module) ->
-        structured(module, base, class_issues)
-
-      WorkflowOperative.run_sugar?(module) ->
-        run_sugar(base, knobs, class_issues)
-
-      true ->
-        refuse([{:NoWorkflowBody, mod_name(module)} | class_issues])
-    end
-  end
-
-  # --- the two bodies ---
-
-  defp run_sugar(%__MODULE__{} = spec, knobs, issues) do
-    issues =
-      if knobs.loop_mode == :once,
-        do: issues,
-        else: [{:LoopWithoutChain, spec.factory_id, knobs.loop_mode} | issues]
-
-    if issues == [], do: {:ok, %{spec | dag: empty_dag()}}, else: refuse(issues)
+    if WorkflowOperative.structured?(module),
+      do: structured(module, base, class_issues),
+      else: refuse([{:NoWorkflowBody, mod_name(module)} | class_issues])
   end
 
   defp structured(module, %__MODULE__{} = spec, issues) do
@@ -158,7 +139,7 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   defp check_chained_loop(is, _factory_id, _dag, _knobs), do: is
 
-  # --- class facts, shared by both bodies ---
+  # --- class facts ---
 
   defp class_refusals(module, knobs) do
     factory_id = module.factory_id()
@@ -222,9 +203,6 @@ defmodule Flezha.SDK.Workflow.Spec do
     |> Map.take([:order, :pos, :parents, :children])
     |> Map.merge(%{root: List.first(roots), leaves: leaves})
   end
-
-  defp empty_dag,
-    do: %{order: [], pos: %{}, parents: %{}, children: %{}, root: nil, leaves: []}
 
   # The procedures an entry channel feeds, in declaration order.
   defp entry_roots(topo) do

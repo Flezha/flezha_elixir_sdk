@@ -26,10 +26,9 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   require Logger
 
-  alias Flezha.SDK.{Channels, Entity, Topology}
+  alias Flezha.SDK.{Entity, Topology}
   alias Flezha.SDK.Operative.{Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
-  alias Flezha.SDK.Workflow.Ctx, as: WorkflowCtx
 
   defmodule State do
     @moduledoc false
@@ -71,9 +70,9 @@ defmodule Flezha.SDK.Workflow.Driver do
       consumed_offset: 0,
       iter: 0,
       cancel: nil,
-      # the process running a run-sugar body, and what it completes with
-      sugar: nil,
-      result: <<>>,
+      # proc_idx => {entity_key, result}: each procedure's completion this
+      # iteration, the one of its Entity whose key sorts last
+      completions: %{},
       resume_owed: 0,
       # set while a `:per_input` loop waits for an input; its idle timer names it
       idle: nil,
@@ -137,9 +136,6 @@ defmodule Flezha.SDK.Workflow.Driver do
   # arriving right after the `AddOperative` ack always finds its Entity
   # registered rather than racing the first stage into existence.
   @impl true
-  def handle_continue(:bootstrap, %State{spec: %Spec{topology: nil}} = s),
-    do: settle(run_sugar(s))
-
   def handle_continue(:bootstrap, %State{} = s) do
     s = build_stage_entities(s)
     if s.resume_owed > 0, do: settle(s), else: settle(resume_bound(s))
@@ -152,13 +148,6 @@ defmodule Flezha.SDK.Workflow.Driver do
   # rather than a node. A stage's Entities are built before anything runs, so
   # nothing here materialises — a lookup either finds one or names why not.
   @impl true
-  def handle_call(
-        {:lookup, _procedure, _key, _materialise?},
-        _from,
-        %State{spec: %Spec{topology: nil}} = s
-      ),
-      do: {:reply, {:error, :procedure_not_found}, s}
-
   def handle_call({:lookup, procedure, key, _materialise?}, _from, %State{} = s) do
     case Topology.node_of(s.spec.topology, procedure) do
       {:ok, node_ref} ->
@@ -179,8 +168,6 @@ defmodule Flezha.SDK.Workflow.Driver do
     do:
       {:reply, :ok,
        %{s | instance: Instance.note_compensation(s.instance, identity, intent, done)}}
-
-  def handle_call(:entities, _from, %State{spec: %Spec{topology: nil}} = s), do: {:reply, [], s}
 
   def handle_call(:entities, _from, %State{spec: spec} = s) do
     listing =
@@ -248,15 +235,21 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  # A run-sugar body's own output: the run has no stages to stage it at, so it
-  # leaves on the runner's secondary stream as it is produced.
-  def handle_cast({:sugar_emit, channel, value}, %State{} = s) do
-    bytes = if is_binary(value), do: value, else: Channels.default_serialize(value)
-    Commit.output(s.runner, s.operative_id, %{"channel" => channel}, bytes)
-    {:noreply, s}
-  end
+  # A procedure asked to end the instance. Each procedure keeps the request of
+  # its Entity whose key sorts last, so which Entity answered first never
+  # decides the result; the iteration ends with the procedure latest in the
+  # chain's commit order (`completion/1`).
+  def handle_cast({:complete, node_ref, entity_key, result}, %State{} = s) do
+    proc_idx = Map.fetch!(s.spec.dag.pos, node_ref)
 
-  def handle_cast({:sugar_result, result}, %State{} = s), do: {:noreply, %{s | result: result}}
+    case s.completions do
+      %{^proc_idx => {kept, _result}} when kept > entity_key ->
+        {:noreply, s}
+
+      completions ->
+        {:noreply, %{s | completions: Map.put(completions, proc_idx, {entity_key, result})}}
+    end
+  end
 
   @impl true
   def handle_info({:stage_done, ref, _pid}, %State{} = s) do
@@ -270,16 +263,6 @@ defmodule Flezha.SDK.Workflow.Driver do
     do: settle(barrier_settled(s, error))
 
   def handle_info({:barrier_ack, _stale, _result, _error}, %State{} = s), do: {:noreply, s}
-
-  def handle_info({:sugar_done, outcome}, %State{} = s), do: settle(sugar_finished(s, outcome))
-
-  # The body's process died without answering — a raise inside `safely` is
-  # already an outcome, so this is an exit or a kill, and it ends the run.
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{sugar: pid} = s)
-      when reason != :normal,
-      do: settle(complete(s, "error", format(reason)))
-
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, %State{} = s), do: {:noreply, s}
 
   # A stop and the duration cap are cooperative: the run unwinds at its next
   # step. A loop waiting for input has no next step and nothing to unwind.
@@ -333,27 +316,12 @@ defmodule Flezha.SDK.Workflow.Driver do
     end)
   end
 
-  # --- the run-sugar body ---
-
-  # The body runs in its own process, not here. It is author code of unknown
-  # duration, and a driver executing it could answer neither the stop nor the
-  # duration cap while it ran — and its own `emit` reaches this process as a
-  # message, which a driver blocked inside the call could never receive.
-  defp run_sugar(%State{spec: spec} = s) do
-    ctx = %WorkflowCtx{driver: self(), operative_id: s.operative_id, runner: s.runner}
-    driver = self()
-
-    {pid, _ref} =
-      spawn_monitor(fn ->
-        send(driver, {:sugar_done, safely(fn -> spec.module.run(ctx, s.args) end)})
-      end)
-
-    %{s | sugar: pid}
-  end
-
-  defp sugar_finished(%State{} = s, :ok), do: complete(s, "ok", "")
-  defp sugar_finished(%State{} = s, {:error, reason}), do: complete(s, "error", format(reason))
-  defp sugar_finished(%State{} = s, other), do: complete(s, "error", format(other))
+  # The last committed iteration ended the instance and the crash landed before
+  # its terminal frame left, so it ends now with the journaled result rather
+  # than waiting for input the finished run will never read.
+  defp resume_bound(%State{instance: %Instance{journal: %{completion: result}}} = s)
+       when is_binary(result),
+       do: complete(%{s | resume_owed: 0}, "ok", "", result)
 
   # Every restore the bind owed has landed. A compensation-DONE marker is the
   # only proof an undo was in flight when the crash landed — intent markers
@@ -390,7 +358,8 @@ defmodule Flezha.SDK.Workflow.Driver do
       | instance: instance,
         pending: start.pending,
         waiting: start.waiting,
-        completed: start.completed
+        completed: start.completed,
+        completions: start.completions
     }
 
     dispatch_frontier(s, start.ready)
@@ -455,7 +424,8 @@ defmodule Flezha.SDK.Workflow.Driver do
         pending: %{},
         waiting: %{},
         completed: [],
-        next: []
+        next: [],
+        completions: %{}
     }
 
   # --- one frontier ---
@@ -508,6 +478,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
     if journals?(s) do
       ref = make_ref()
+      asked = if s.unwind.status == nil, do: Map.get(s.completions, proc_idx)
 
       command =
         Commit.proc(s.runner, self(), ref,
@@ -517,7 +488,9 @@ defmodule Flezha.SDK.Workflow.Driver do
           entities_ran: ran,
           handoff: handoff(s, node_ref, batch),
           outbox: Map.get(s.outbox.items, node_ref, []),
-          compensating: s.unwind.status != nil
+          compensating: s.unwind.status != nil,
+          completes: asked != nil,
+          result: result_of(asked)
         )
 
       arm(s, ref, :proc, command)
@@ -568,7 +541,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   # --- the iteration boundary ---
 
   defp seal_iteration(%State{spec: %Spec{knobs: %{loop_mode: :once}}} = s),
-    do: complete(s, "ok", "")
+    do: complete(s, "ok", "", result_of(completion(s)))
 
   defp seal_iteration(%State{} = s) do
     if journals?(s) do
@@ -579,7 +552,9 @@ defmodule Flezha.SDK.Workflow.Driver do
           operative_id: s.operative_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
-          handoff: terminal_handoff(s)
+          handoff: terminal_handoff(s),
+          completes: completion(s) != nil,
+          result: result_of(completion(s))
         )
 
       arm(s, ref, :iter, command)
@@ -588,8 +563,24 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  defp next_iteration(%State{} = s),
-    do: begin_iteration(%{s | committed: s.committed ++ [s.completed], iter: s.iter + 1})
+  # The iteration is committed. If a procedure in it asked to end the instance,
+  # the run ends here: no next input, no re-seed, no park.
+  defp next_iteration(%State{} = s) do
+    case completion(s) do
+      nil -> begin_iteration(%{s | committed: s.committed ++ [s.completed], iter: s.iter + 1})
+      asked -> complete(s, "ok", "", result_of(asked))
+    end
+  end
+
+  # The completion the iteration ends with: the procedure latest in the chain's
+  # commit order.
+  defp completion(%State{completions: completions}) when completions == %{}, do: nil
+
+  defp completion(%State{completions: completions}),
+    do: completions |> Enum.max_by(&elem(&1, 0)) |> elem(1)
+
+  defp result_of(nil), do: <<>>
+  defp result_of({_entity_key, result}), do: result
 
   # --- barriers ---
 
@@ -699,12 +690,16 @@ defmodule Flezha.SDK.Workflow.Driver do
     %{s | terminal: :parked}
   end
 
-  defp complete(%State{terminal: nil} = s, status, error) do
-    Commit.completed(s.runner, s.operative_id, status, error, s.result)
+  # Only a run that reached its end with a completion carries a result: one that
+  # fails or is stopped discards what its iteration asked for.
+  defp complete(s, status, error, result \\ <<>>)
+
+  defp complete(%State{terminal: nil} = s, status, error, result) do
+    Commit.completed(s.runner, s.operative_id, status, error, result)
     %{s | terminal: {status, error}}
   end
 
-  defp complete(%State{} = s, _status, _error), do: s
+  defp complete(%State{} = s, _status, _error, _result), do: s
 
   # One exit for every flow function: a run that shipped its terminal frame
   # ends the process, and nothing else does.
@@ -777,15 +772,4 @@ defmodule Flezha.SDK.Workflow.Driver do
       facts -> struct(Instance.Resume, facts)
     end
   end
-
-  defp safely(fun) do
-    fun.()
-  rescue
-    e -> {:error, Exception.message(e)}
-  catch
-    :throw, reason -> {:error, format(reason)}
-  end
-
-  defp format(reason) when is_binary(reason), do: reason
-  defp format(reason), do: inspect(reason)
 end

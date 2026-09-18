@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Ctx do
 
   `spawn_workflow/4` asks the runner for a workflow instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
-  nothing.
+  nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
 
   alias Flezha.SDK.{Procedure, Spawn, Timers}
@@ -195,6 +195,31 @@ defmodule Flezha.SDK.Ctx do
     do: Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts)
 
   @doc """
+  End the workflow instance this procedure runs in, with `result` as the
+  result its completion reports. The rest of the iteration still runs and
+  commits; once that commit is durable the instance ends instead of waiting
+  for its next input, re-seeding a chained loop or parking. In a `:once`
+  workflow it only sets the result the pass ends with.
+
+  Called more than once in one iteration, the instance ends once, with the
+  result of the procedure latest in the chain's order and, within it, of the
+  Entity whose key sorts last. A failing invocation discards its call as it
+  discards its emits, and an iteration that fails discards the call with it.
+
+  A stream never completes: a stream procedure calling this fails its input,
+  without a retry, with an error beginning `CompleteOutsideWorkflow`.
+  """
+  @spec complete(t(), binary()) :: :ok
+  def complete(%__MODULE__{ref: ref}, result) when is_binary(result) do
+    Process.put(completion_key(ref), result)
+    :ok
+  end
+
+  @doc false
+  @spec completion(t()) :: binary() | nil
+  def completion(%__MODULE__{ref: ref}), do: Process.get(completion_key(ref))
+
+  @doc """
   Close the staged checkpoint interval at the end of this invocation. A no-op
   on a class that did not declare checkpoint granularity — the Entity reads the
   flag only when it has an interval to close.
@@ -275,6 +300,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(timers_key(ref))
     Process.delete(checkpoint_key(ref))
     Process.delete(stable_id_key(ref))
+    Process.delete(completion_key(ref))
   end
 
   defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
@@ -324,4 +350,5 @@ defmodule Flezha.SDK.Ctx do
   defp timers_key(ref), do: {__MODULE__, ref, :timers}
   defp checkpoint_key(ref), do: {__MODULE__, ref, :checkpoint}
   defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
+  defp completion_key(ref), do: {__MODULE__, ref, :completion}
 end

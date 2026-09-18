@@ -297,7 +297,7 @@ defmodule Flezha.SDK.Local do
   # declaration: a member's key-group range arrives with `AddOperative`, so a
   # local run is unpartitioned by construction.
   defp refuse_controller_only(module) do
-    if WorkflowOperative.structured?(module) or WorkflowOperative.run_sugar?(module) do
+    if WorkflowOperative.structured?(module) do
       needs_controller(
         inspect(module),
         "a workflow",

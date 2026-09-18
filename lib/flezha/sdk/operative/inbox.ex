@@ -1,11 +1,13 @@
 defmodule Flezha.SDK.Operative.Inbox do
   @moduledoc """
-  The two messages an operative is sent from below: a raw frame off a bound
-  primary stream, and the values an Entity produced for its node's outputs.
-  They live beside the operative rather than on it so that a `DataStream` or an
-  `Entity` reaching upward names this module and not the router itself.
+  The messages an operative is sent from below: a raw frame off a bound
+  primary stream, the values an Entity produced for its node's outputs, and a
+  workflow procedure's request to end its instance. They live beside the
+  operative rather than on it so that a `DataStream` or an `Entity` reaching
+  upward names this module and not the router itself.
 
-  Both casts are answered by `Flezha.SDK.Operative.handle_cast/2`.
+  The first two are answered by `Flezha.SDK.Operative.handle_cast/2`, all three
+  by `Flezha.SDK.Workflow.Driver.handle_cast/2`.
   """
 
   @doc "Route a raw input frame arriving on an entry channel."
@@ -23,6 +25,14 @@ defmodule Flezha.SDK.Operative.Inbox do
   """
   def emitted(pid, node_ref, entity_key, emits, handout_seq, offset, report),
     do: GenServer.cast(pid, {:emitted, node_ref, entity_key, emits, handout_seq, offset, report})
+
+  @doc """
+  An Entity's invocation called `Flezha.SDK.Ctx.complete/2`. Sent after its
+  emits and before its stage barrier answers, so the driver holds it by the
+  time the stage settles.
+  """
+  def completed(pid, node_ref, entity_key, result),
+    do: GenServer.cast(pid, {:complete, node_ref, entity_key, result})
 
   @doc """
   Release the effect record an Entity is holding for the invocation just

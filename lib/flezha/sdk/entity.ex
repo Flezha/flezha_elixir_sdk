@@ -557,7 +557,7 @@ defmodule Flezha.SDK.Entity do
     try do
       case run_ladder(s, item, ctx_opts(s, item, replay), 1) do
         {:ok, new_proc_state, facts} ->
-          complete(s, new_proc_state, facts, offset)
+          s |> complete(new_proc_state, facts, offset) |> request_completion(facts.completion)
 
         {:park, error, attempts} ->
           s |> park_firing(item) |> exhausted(item, error, attempts, offset)
@@ -581,6 +581,15 @@ defmodule Flezha.SDK.Entity do
     s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
     s = s |> Records.ship(facts.changes, ops) |> Clock.reflect(ops, tally)
     flush_emits(s, facts.emits, handout_seq, nil)
+    s
+  end
+
+  # After the outputs, so the driver has them all when this stage settles. A
+  # stream's Entity never gets here with one: `succeeded/4` refused it.
+  defp request_completion(%State{} = s, nil), do: s
+
+  defp request_completion(%State{} = s, result) do
+    Inbox.completed(s.operative, s.node_ref, s.entity_key, result)
     s
   end
 
@@ -644,14 +653,16 @@ defmodule Flezha.SDK.Entity do
           event_time: ctx.now_ms,
           # A class with no checkpoint granularity never reads the flag, so
           # `Ctx.checkpoint/1` on one is a no-op by construction.
-          checkpointed?: s.tier.checkpoint != nil and Ctx.checkpointed?(ctx)
+          checkpointed?: s.tier.checkpoint != nil and Ctx.checkpointed?(ctx),
+          completion: Ctx.completion(ctx)
         }
 
         # The takes clear what they take; the slots an invocation writes only
-        # when it uses them — the checkpoint flag, the stable-id ordinal — are
-        # cleared here, so nothing of this ref outlives the invocation.
+        # when it uses them (the checkpoint flag, the stable-id ordinal, the
+        # completion) are cleared here, so nothing of this ref outlives the
+        # invocation.
         Ctx.discard(ctx)
-        {:ok, new_state, facts}
+        succeeded(s, new_state, facts, attempt)
 
       {:result, ctx, {:error, {:non_retryable, reason}}} ->
         Ctx.discard(ctx)
@@ -666,6 +677,20 @@ defmodule Flezha.SDK.Entity do
         retry_or_park(s, item, opts, attempt, message)
     end
   end
+
+  # A stream never completes, so a stream procedure asking to fails its input,
+  # and a retry would only ask again. A workflow stage's Entity is the one that
+  # does not park, and its request goes on to the driver.
+  defp succeeded(%State{park: %{enabled?: true}} = s, _new_state, %{completion: result}, attempt)
+       when is_binary(result) do
+    error =
+      "CompleteOutsideWorkflow: procedure `#{s.module.name()}` called complete/2, " <>
+        "but a stream operative never completes"
+
+    {:park, error, attempt}
+  end
+
+  defp succeeded(_s, new_state, facts, _attempt), do: {:ok, new_state, facts}
 
   # Anything author code raises becomes `{:raised, ctx, message}` so the ladder
   # can climb it and the ctx's slots still go. A ctx that never came back is

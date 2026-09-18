@@ -27,6 +27,14 @@ defmodule ElixirRunner.WorkflowsLoop do
     def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
     def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
 
+    # The closing turn is not a turn of the conversation: it is not recorded,
+    # and it ends the session with the number of turns the state holds.
+    def run("bye", state, ctx) do
+      Ctx.emit(ctx, "bye")
+      Ctx.complete(ctx, Integer.to_string(length(state.items)))
+      {:ok, state}
+    end
+
     def run(input, state, ctx) do
       if input == "mid-crash", do: Gate.block_until_released()
       # Keyed by the turn, so the record count is the number of DISTINCT turns
@@ -127,9 +135,8 @@ defmodule ElixirRunner.WorkflowsLoop do
     def factory_id, do: "chat_loop_workflow"
     def loop_mode, do: :per_input
 
-    # A chat session ends on an external stop, not on its own; the duration
-    # backstop keeps a stray e2e instance from outliving the test run.
-    def self_terminating?, do: false
+    # A chat session ends itself on the turn `bye`; the duration backstop keeps
+    # a stray e2e instance from outliving the test run.
     def max_duration_ms, do: 600_000
 
     def procedures(c) do

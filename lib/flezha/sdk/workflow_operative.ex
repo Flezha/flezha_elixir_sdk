@@ -1,10 +1,9 @@
 defmodule Flezha.SDK.WorkflowOperative do
   @moduledoc """
-  Behaviour an Elixir workflow operative implements. The bare `run/2` form is
-  the trivial single-Procedure, single-Entity case; declaring `procedures/1`
-  instead grows the class into an explicit DAG of Procedures, Channels and
-  Entities authored on the same builder token a stream operative uses. A class
-  declares one or the other, never both.
+  Behaviour an Elixir workflow operative implements. A class declares
+  `procedures/1`: a DAG of Procedures, Channels and Entities authored on the
+  same builder token a stream operative uses. A procedure ends its instance
+  with `Flezha.SDK.Ctx.complete/2`.
 
   Every knob below is optional and reads its default through this module's
   reader functions, so a class states only what it departs from. The values are
@@ -42,23 +41,12 @@ defmodule Flezha.SDK.WorkflowOperative do
 
   `factory_id` is required; every knob above is optional, and **only the
   options written define anything**, so a default stays where the reader
-  functions resolve it. `run/2` and `procedures/1` take arguments and stay
-  `def`s the author writes. An unknown option is a `CompileError` naming it.
+  functions resolve it. `procedures/1` takes an argument and stays a `def` the
+  author writes. An unknown option is a `CompileError` naming it.
 
-  `Flezha.SDK.Channels` is imported for a structured body, and
-  `Flezha.SDK.Workflow.Ctx`'s `emit/2`, `emit_on/3`, `complete/2` and
-  `spawn_workflow/3,4` for a `run/2` one.
+  `Flezha.SDK.Channels` is imported.
   """
-  defmacro __using__(opts) do
-    base = Procedure.__operative_using__(opts, @use_options, __MODULE__)
-
-    quote do
-      unquote(base)
-
-      import Flezha.SDK.Workflow.Ctx,
-        only: [emit: 2, emit_on: 3, complete: 2, spawn_workflow: 3, spawn_workflow: 4]
-    end
-  end
+  defmacro __using__(opts), do: Procedure.__operative_using__(opts, @use_options, __MODULE__)
 
   @type loop_mode :: :once | :per_input | :chained
   @type rollback_mode :: :all_or_nothing | :keep_progress
@@ -67,17 +55,10 @@ defmodule Flezha.SDK.WorkflowOperative do
   @callback factory_id() :: String.t()
 
   @doc """
-  Run-sugar body, invoked once per started instance with the spawn `args`.
-  Emit through the ctx and return `:ok`; `{:error, reason}` is a terminal
-  failure. A structured class never has this invoked.
-  """
-  @callback run(ctx :: term(), args :: String.t()) :: :ok | {:error, term()}
-
-  @doc """
-  Structured form: declare a static DAG on the channel builder. A procedure
-  becomes runnable only once every producer feeding it has committed, so a
-  fan-out interleaves independently and a fan-in is dispatched once with the
-  accumulated batch of all its producers.
+  Declare a static DAG on the channel builder. A procedure becomes runnable
+  only once every producer feeding it has committed, so a fan-out interleaves
+  independently and a fan-in is dispatched once with the accumulated batch of
+  all its producers.
   """
   @callback procedures(Flezha.SDK.Channels.t()) :: any()
 
@@ -124,9 +105,7 @@ defmodule Flezha.SDK.WorkflowOperative do
   """
   @callback sync_durability() :: boolean()
 
-  @optional_callbacks run: 2,
-                      procedures: 1,
-                      description: 0,
+  @optional_callbacks description: 0,
                       max_duration_ms: 0,
                       self_terminating?: 0,
                       loop_mode: 0,
@@ -158,13 +137,9 @@ defmodule Flezha.SDK.WorkflowOperative do
     if Procedure.exports?(module, knob, 0), do: apply(module, knob, []), else: default
   end
 
-  @doc "Whether the class declares a structured procedure DAG."
+  @doc "Whether the class declares its procedure DAG."
   @spec structured?(module()) :: boolean()
   def structured?(module), do: Procedure.exports?(module, :procedures, 1)
-
-  @doc "Whether the class declares a run-sugar body."
-  @spec run_sugar?(module()) :: boolean()
-  def run_sugar?(module), do: Procedure.exports?(module, :run, 2)
 
   @doc "Every knob's declared value, as the spec freezes them."
   @spec knobs(module()) :: map()

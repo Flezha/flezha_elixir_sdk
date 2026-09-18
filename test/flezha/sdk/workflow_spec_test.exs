@@ -39,16 +39,6 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule EchoWorkflow do
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "echo_workflow"
-
-    def run(ctx, args) do
-      Ctx.emit(ctx, "echo:" <> args)
-      :ok
-    end
-  end
-
   defmodule LinearWorkflow do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "linear_workflow"
@@ -66,13 +56,11 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     Enum.map(issues, &elem(&1, 0))
   end
 
-  # --- the two bodies ---
+  # --- the procedure DAG ---
 
-  test "a run-sugar class builds with no topology and an empty DAG" do
-    assert {:ok, spec} = Spec.build(EchoWorkflow)
-    assert spec.factory_id == "echo_workflow"
-    assert spec.topology == nil
-    assert spec.dag.order == []
+  test "a class silent on every knob reads each default" do
+    assert {:ok, spec} = Spec.build(LinearWorkflow)
+    assert spec.factory_id == "linear_workflow"
     assert spec.knobs.loop_mode == :once
     assert spec.knobs.rollback_mode == :all_or_nothing
     assert spec.knobs.retry_attempts == 3
@@ -102,26 +90,33 @@ defmodule Flezha.SDK.Workflow.SpecTest do
 
   # --- class-fact refusals ---
 
-  test "NoWorkflowBody — neither run/2 nor procedures/1" do
+  test "NoWorkflowBody: no procedures/1" do
     defmodule Bodyless do
       def factory_id, do: "bodyless"
     end
 
+    # The one-function form is no body: a class carrying only it declares none.
+    defmodule OneFunction do
+      def factory_id, do: "one_function"
+      def run(_ctx, _args), do: :ok
+    end
+
     assert :NoWorkflowBody in issues(Bodyless)
+    assert :NoWorkflowBody in issues(OneFunction)
   end
 
   test "ExternalStopOnly — not self-terminating and no duration cap" do
     defmodule StopOnly do
       def factory_id, do: "stop_only"
       def self_terminating?, do: false
-      def run(_ctx, _args), do: :ok
+      def procedures(c), do: c |> Channels.input("in") |> Channels.into(TailProc)
     end
 
     defmodule StopOnlyCapped do
       def factory_id, do: "stop_only_capped"
       def self_terminating?, do: false
       def max_duration_ms, do: 5_000
-      def run(_ctx, _args), do: :ok
+      def procedures(c), do: c |> Channels.input("in") |> Channels.into(TailProc)
     end
 
     assert :ExternalStopOnly in issues(StopOnly)
@@ -132,28 +127,18 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule HotLadder do
       def factory_id, do: "hot_ladder"
       def retry_backoff_ms, do: 0
-      def run(_ctx, _args), do: :ok
+      def procedures(c), do: c |> Channels.input("in") |> Channels.into(TailProc)
     end
 
     defmodule FailFast do
       def factory_id, do: "fail_fast"
       def retry_backoff_ms, do: 0
       def retry_attempts, do: 1
-      def run(_ctx, _args), do: :ok
+      def procedures(c), do: c |> Channels.input("in") |> Channels.into(TailProc)
     end
 
     assert :ZeroRetryBackoff in issues(HotLadder)
     assert {:ok, _} = Spec.build(FailFast), "a zero base is legal for fail-fast"
-  end
-
-  test "LoopWithoutChain — a loop mode on a run-sugar body" do
-    defmodule LoopingSugar do
-      def factory_id, do: "looping_sugar"
-      def loop_mode, do: :chained
-      def run(_ctx, _args), do: :ok
-    end
-
-    assert :LoopWithoutChain in issues(LoopingSugar)
   end
 
   # --- structural refusals ---
@@ -312,13 +297,11 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def factory_id, do: "many_problems"
       def self_terminating?, do: false
       def retry_backoff_ms, do: 0
-      def loop_mode, do: :chained
-      def run(_ctx, _args), do: :ok
     end
 
     found = issues(ManyProblems)
+    assert :NoWorkflowBody in found
     assert :ExternalStopOnly in found
     assert :ZeroRetryBackoff in found
-    assert :LoopWithoutChain in found
   end
 end

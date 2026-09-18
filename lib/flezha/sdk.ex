@@ -43,8 +43,8 @@ defmodule Flezha.SDK do
   Declare an operative of either kind. Legal before and after `start/1`.
 
   The kind is read from the callbacks the module exports, never named by the
-  call: `channels/1` makes a stream, `procedures/1` or `run/2` a workflow. A
-  module exporting both is refused `{:AmbiguousOperativeKind, module}` and one
+  call: `channels/1` makes a stream, `procedures/1` a workflow. A module
+  exporting both is refused `{:AmbiguousOperativeKind, module}` and one
   exporting neither `{:UnknownOperativeKind, module}`.
 
   Both kinds ride the same declared set — the controller places by factory id
@@ -215,8 +215,7 @@ defmodule Flezha.SDK do
     loaded = Code.ensure_loaded?(module) and function_exported?(module, :factory_id, 0)
     stream? = loaded and function_exported?(module, :channels, 1)
 
-    workflow? =
-      loaded and (WorkflowOperative.structured?(module) or WorkflowOperative.run_sugar?(module))
+    workflow? = loaded and WorkflowOperative.structured?(module)
 
     case {stream?, workflow?} do
       {true, true} -> {:error, {:AmbiguousOperativeKind, module}}

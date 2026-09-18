@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Workflow.Commit do
   @moduledoc """
   Everything a driver sends upward: the two durable barriers and their acks,
-  the park record, the terminal frame, and a run-sugar body's output.
+  the park record and the terminal frame.
 
   It sits beside the driver rather than on the runner for the reason
   `Flezha.SDK.Operative.Inbox` does: a driver reaching upward names this module
@@ -27,14 +27,20 @@ defmodule Flezha.SDK.Workflow.Commit do
         Keyword.fetch!(fields, :entities_ran),
         Keyword.fetch!(fields, :handoff),
         Keyword.get(fields, :outbox, []),
-        Keyword.get(fields, :compensating, false)
+        Keyword.get(fields, :compensating, false),
+        Keyword.get(fields, :completes, false),
+        Keyword.get(fields, :result, <<>>)
       )
 
     barrier(runner, driver, ref, command)
     command
   end
 
-  @doc "Ship `IterCommit` for one finished iteration."
+  @doc """
+  Ship `IterCommit` for one finished iteration. `completes` marks the
+  iteration a procedure ended the instance in, and `result` is what it ends
+  with, so a resume after this commit ends the instance rather than waiting.
+  """
   @spec iter(pid(), pid(), reference(), keyword()) :: tuple()
   def iter(runner, driver, ref, fields) do
     command =
@@ -42,7 +48,9 @@ defmodule Flezha.SDK.Workflow.Commit do
         Keyword.fetch!(fields, :operative_id),
         Keyword.fetch!(fields, :iter),
         Keyword.fetch!(fields, :consumed_offset),
-        Keyword.fetch!(fields, :handoff)
+        Keyword.fetch!(fields, :handoff),
+        Keyword.get(fields, :completes, false),
+        Keyword.get(fields, :result, <<>>)
       )
 
     barrier(runner, driver, ref, command)
@@ -78,11 +86,6 @@ defmodule Flezha.SDK.Workflow.Commit do
   @spec record(pid(), String.t(), binary()) :: :ok
   def record(runner, payload_id, frame),
     do: GenServer.cast(runner, {:record, payload_id, frame})
-
-  @doc "Ship one output frame of a run-sugar body, which has no stage to stage it at."
-  @spec output(pid(), String.t(), map(), binary()) :: :ok
-  def output(runner, operative_id, metadata, bytes),
-    do: GenServer.cast(runner, {:emit_output, operative_id, metadata, bytes})
 
   defp barrier(runner, driver, ref, command),
     do: GenServer.cast(runner, {:barrier, driver, ref, command})

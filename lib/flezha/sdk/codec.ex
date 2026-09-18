@@ -145,7 +145,9 @@ defmodule Flezha.SDK.Codec do
             {non_neg_integer(), binary()}
           ],
           [map()],
-          boolean()
+          boolean(),
+          boolean(),
+          binary()
         ) :: {atom(), struct()}
   def proc_commit_command(
         operative_id,
@@ -154,7 +156,9 @@ defmodule Flezha.SDK.Codec do
         entities_ran,
         handoff,
         outbox,
-        compensating
+        compensating,
+        completes,
+        result
       ) do
     {:proc_commit,
      %RunnerCommands.ProcCommit{
@@ -164,21 +168,30 @@ defmodule Flezha.SDK.Codec do
        entities_ran: entities_ran,
        handoff: handoff_items(handoff),
        outbox: Enum.map(outbox, &outbox_item/1),
-       compensating: compensating
+       compensating: compensating,
+       completes: completes,
+       result: result
      }}
   end
 
   @doc "The `IterCommit` command tuple for one finished iteration."
-  @spec iter_commit_command(String.t(), non_neg_integer(), non_neg_integer(), [
-          {non_neg_integer(), binary()}
-        ]) :: {atom(), struct()}
-  def iter_commit_command(operative_id, iter, consumed_offset, handoff) do
+  @spec iter_commit_command(
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          [{non_neg_integer(), binary()}],
+          boolean(),
+          binary()
+        ) :: {atom(), struct()}
+  def iter_commit_command(operative_id, iter, consumed_offset, handoff, completes, result) do
     {:iter_commit,
      %RunnerCommands.IterCommit{
        operative_id: operative_id,
        iter: iter,
        consumed_offset: consumed_offset,
-       handoff: handoff_items(handoff)
+       handoff: handoff_items(handoff),
+       completes: completes,
+       result: result
      }}
   end
 
@@ -223,12 +236,21 @@ defmodule Flezha.SDK.Codec do
       consumed_offset: j.consumed_offset,
       parked: j.parked,
       wake_deadline_ms: j.wake_deadline_ms,
-      rewind_undo: Enum.map(j.rewind_undo, &committed_proc/1)
+      rewind_undo: Enum.map(j.rewind_undo, &committed_proc/1),
+      completion: completion(j.completed, j.result)
     }
   end
 
   defp committed_proc(%RunnerCommands.ProcCommittedProc{} = p),
-    do: %{proc_idx: p.proc_idx, iter: p.iter, entities_ran: p.entities_ran}
+    do: %{
+      proc_idx: p.proc_idx,
+      iter: p.iter,
+      entities_ran: p.entities_ran,
+      completion: completion(p.completes, p.result)
+    }
+
+  defp completion(true, result), do: result
+  defp completion(false, _result), do: nil
 
   defp handoff_items(handoff) do
     Enum.map(handoff, fn {channel_id, payload} ->

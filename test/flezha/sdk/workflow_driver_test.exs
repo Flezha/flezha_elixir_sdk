@@ -1,10 +1,10 @@
 defmodule Flezha.SDK.Workflow.DriverTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Counters, Ctx, Spawn}
+  alias Flezha.SDK.{Channels, Codec, Counters, Ctx, Spawn}
   alias Flezha.SDK.Operative.Inbox
+  alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Workflow.{Driver, Resume, Spec}
-  alias Flezha.SDK.Workflow.Ctx, as: WorkflowCtx
 
   # A stand-in for the runner: it answers every barrier the way a controller
   # that journalled it would, and forwards what it was asked to ship so a test
@@ -171,29 +171,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     end
   end
 
-  defmodule Echo do
-    def factory_id, do: "echo_flow"
-
-    def run(_ctx, args), do: send(:workflow_driver_test_collector, {:ran, args}) && :ok
-  end
-
-  defmodule Exploding do
-    def factory_id, do: "exploding_flow"
-    def run(_ctx, _args), do: raise("nope")
-  end
-
-  # A run-sugar body that spawns, reads its handle and reports what it resolved to.
-  defmodule SpawningSugar do
-    def factory_id, do: "spawning_sugar"
-
-    def run(ctx, args) do
-      handle = WorkflowCtx.spawn_workflow(ctx, "worker", args, id: "child-" <> args)
-      send(:workflow_driver_test_collector, {:spawned, Spawn.await(handle, 5_000)})
-      :ok
-    end
-  end
-
-  # The same request from a structured procedure, released as its stage's handoff.
+  # A spawn request from a procedure, released as its stage's handoff.
   defmodule SpawnStep do
     @behaviour Flezha.SDK.Procedure
     def name, do: "spawn_step"
@@ -230,7 +208,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defp drive(module, opts \\ []) do
     driver = start_driver(module, opts)
 
-    # A run-sugar body can finish before the monitor is set, which reports
+    # A short run can finish before the monitor is set, which reports
     # `:noproc` rather than `:normal`; both mean the same thing here.
     ref = Process.monitor(driver)
     assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
@@ -261,26 +239,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     end)
   end
 
-  # --- run-sugar ---
-
-  test "a run-sugar body runs once and completes ok" do
-    messages = drive(Echo, args: "hello")
-    assert {:ran, "hello"} in messages
-    assert %{status: "ok", error: ""} = completion(messages)
-  end
-
-  test "a raising run-sugar body completes as an error naming it" do
-    messages = drive(Exploding)
-    assert %{status: "error", error: error} = completion(messages)
-    assert error =~ "nope"
-  end
-
-  test "a run-sugar body's spawn reaches the runner and its handle resolves" do
-    messages = drive(SpawningSugar, args: "go")
-    assert {:spawn_requested, "go", :deliver} in messages
-    assert {:spawned, {:ok, %{id: "child-go", outcome: :spawned}}} in messages
-    assert %{status: "ok"} = completion(messages)
-  end
+  # --- spawn ---
 
   test "a structured procedure's spawn reaches the runner through its stage Entity" do
     messages = drive(SpawningFlow)
@@ -602,5 +561,209 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{status: "error", error: "disk full"} = completion(messages)
     # first send plus the re-sends the class's barrier_retry_attempts allows
     assert length(commits(messages)) == 3
+  end
+
+  # --- a procedure ending its instance ---
+
+  # Ends the instance on `bye` with how many turns it counted before, and
+  # passes every input on, so the stage after it still has work to do.
+  defmodule Closer do
+    @behaviour Flezha.SDK.Procedure
+    def name, do: "closer"
+    def init_state(_), do: 0
+
+    def run("bye", turns, ctx) do
+      Ctx.complete(ctx, "turns:#{turns}")
+      Ctx.emit(ctx, "bye")
+      {:ok, turns}
+    end
+
+    def run(input, turns, ctx) do
+      Ctx.emit(ctx, input)
+      {:ok, turns + 1}
+    end
+  end
+
+  defmodule ClosingLoop do
+    def factory_id, do: "closing_loop"
+    def loop_mode, do: :per_input
+    def max_duration_ms, do: 600_000
+
+    def procedures(c) do
+      c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
+    end
+  end
+
+  defmodule ClosingPass do
+    def factory_id, do: "closing_pass"
+
+    def procedures(c) do
+      c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
+    end
+  end
+
+  defmodule ClosingThenFailing do
+    def factory_id, do: "closing_then_failing"
+
+    def procedures(c) do
+      c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Boom)
+    end
+  end
+
+  # Every Entity of the stage asks to complete, each with its own key. The keys
+  # are declared out of order, so the one that sorts last is neither the first
+  # dispatched nor the last.
+  defmodule KeyedCloser do
+    @behaviour Flezha.SDK.Procedure
+    def name, do: "keyed_closer"
+    def entity_keys, do: ["b", "c", "a"]
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      Ctx.complete(ctx, "key:" <> Ctx.entity_key(ctx))
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule LateCloser do
+    @behaviour Flezha.SDK.Procedure
+    def name, do: "late_closer"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      Ctx.complete(ctx, "late")
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule KeyedClosing do
+    def factory_id, do: "keyed_closing"
+    def procedures(c), do: c |> Channels.input("in") |> Channels.into(KeyedCloser)
+  end
+
+  # Two procedures of one frontier both complete: the later-declared one wins
+  # whichever answers first.
+  defmodule FannedClosing do
+    def factory_id, do: "fanned_closing"
+
+    def procedures(c) do
+      fan = c |> Channels.input("in") |> Channels.into(Tagger)
+      Channels.into(fan, KeyedCloser)
+      Channels.into(fan, LateCloser)
+    end
+  end
+
+  defp iter_commits(messages), do: for({:shipped, {:iter_commit, c}} <- messages, do: c)
+
+  test "a per-input loop ends on a procedure's completion once its iteration commits, and does not park" do
+    # No idle window once the owed tail has arrived: a loop that went on to wait
+    # after the last turn would park at once.
+    driver = start_loop(ClosingLoop, park_idle_ms: 0, owed_inbox: 2)
+    Driver.push_inbox(driver, "hi")
+    Driver.push_inbox(driver, "bye")
+
+    messages = drain()
+    assert [first, last] = iter_commits(messages)
+    assert %{completes: false, result: ""} = first
+    assert %{completes: true, result: "turns:1"} = last
+
+    # The stage after the completing procedure still ran, inside that iteration,
+    # and the completing procedure's own commit carries the completion too.
+    assert for(
+             c <- commits(messages),
+             c.iter == last.iter,
+             do: {c.proc_idx, c.completes, c.result}
+           ) ==
+             [{0, true, "turns:1"}, {1, false, ""}]
+
+    refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
+    assert %{status: "ok", error: "", result: "turns:1"} = completion(messages)
+  end
+
+  test "a once pass ends with the result a procedure completed with, after every stage ran" do
+    messages = drive(ClosingPass, args: "bye")
+    assert commits(messages) |> Enum.map(& &1.proc_idx) == [0, 1]
+    assert iter_commits(messages) == []
+    assert %{status: "ok", result: "turns:0"} = completion(messages)
+  end
+
+  test "a once pass no procedure completed ends with an empty result" do
+    assert %{status: "ok", result: ""} = ClosingPass |> drive(args: "hi") |> completion()
+  end
+
+  test "of several completions in one procedure, the Entity whose key sorts last decides" do
+    assert %{status: "ok", result: "key:c"} = KeyedClosing |> drive() |> completion()
+  end
+
+  test "of completions in several procedures, the one latest in the chain decides" do
+    assert %{status: "ok", result: "late"} = FannedClosing |> drive() |> completion()
+  end
+
+  test "an iteration that fails after a procedure completed discards the completion" do
+    messages = drive(ClosingThenFailing, args: "bye")
+    assert %{status: "error", error: error, result: ""} = completion(messages)
+    assert error =~ "boom"
+  end
+
+  test "a resume whose last committed iteration completed ends at once with its result" do
+    journal =
+      Codec.journal_facts(%RunnerCommands.ProcJournalState{
+        iter: 3,
+        completed: true,
+        result: "turns:2"
+      })
+
+    messages = drive(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)
+    assert commits(messages) == []
+    refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
+    assert %{status: "ok", result: "turns:2"} = completion(messages)
+  end
+
+  test "a resume after the completing procedure committed, before its iteration did, completes" do
+    journal =
+      Codec.journal_facts(%RunnerCommands.ProcJournalState{
+        iter: 1,
+        committed_proc_idxs: [0],
+        proc_handoffs: [
+          %RunnerCommands.ProcEdgeHandoff{
+            proc_idx: 0,
+            handoff: [
+              %RunnerCommands.ProcHandoffItem{channel_id: 1, payload: Resume.encode("bye")}
+            ]
+          }
+        ],
+        committed_procs: [
+          %RunnerCommands.ProcCommittedProc{proc_idx: 0, iter: 0},
+          %RunnerCommands.ProcCommittedProc{
+            proc_idx: 0,
+            iter: 1,
+            completes: true,
+            result: "turns:1"
+          }
+        ]
+      })
+
+    messages = drive(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)
+    assert for(c <- commits(messages), do: c.proc_idx) == [1]
+    assert [%{iter: 1, completes: true, result: "turns:1"}] = iter_commits(messages)
+    refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
+    assert %{status: "ok", result: "turns:1"} = completion(messages)
+  end
+
+  test "a resume whose last committed iteration did not complete waits for input" do
+    journal = Codec.journal_facts(%RunnerCommands.ProcJournalState{iter: 3})
+
+    driver =
+      start_driver(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)
+
+    ref = Process.monitor(driver)
+    assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
+    assert reason in [:normal, :noproc]
+
+    messages = collect_all()
+    assert Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
+    refute Enum.any?(messages, &match?({:shipped, {:workflow_completed, _}}, &1))
   end
 end

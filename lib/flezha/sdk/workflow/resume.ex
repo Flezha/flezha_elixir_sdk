@@ -30,8 +30,8 @@ defmodule Flezha.SDK.Workflow.Resume do
 
   @doc """
   The frontier a journal re-opens: `%{ready: [{node_ref, batch}], pending:,
-  waiting:, completed:}`, or `nil` when the bind carried no journal and the
-  iteration seeds fresh.
+  waiting:, completed:, completions:}`, or `nil` when the bind carried no
+  journal and the iteration seeds fresh.
   """
   @spec start(struct(), (reference(), reference(), [term()] -> [term()])) :: map() | nil
   def start(%{instance: %Instance{journal: nil}}, _through_edge), do: nil
@@ -49,6 +49,7 @@ defmodule Flezha.SDK.Workflow.Resume do
         reseed(acc, state, node, committed, journal, through_edge)
       end)
       |> Map.put(:completed, completed_stages(state, committed))
+      |> Map.put(:completions, journaled_completions(journal, committed))
     end
   end
 
@@ -95,6 +96,18 @@ defmodule Flezha.SDK.Workflow.Resume do
         proc_idx = Map.fetch!(dag.pos, node),
         MapSet.member?(committed, proc_idx),
         do: %{node_ref: node, proc_idx: proc_idx, entities: entities_ran(state, proc_idx)}
+  end
+
+  # What the skipped committed procedures of the resumed iteration asked for:
+  # they never run again to ask twice. Keyed as the driver keeps a live one.
+  defp journaled_completions(journal, committed) do
+    for %{proc_idx: proc_idx, iter: iter} = proc <- journal.committed_procs,
+        iter == journal.iter,
+        MapSet.member?(committed, proc_idx),
+        result = Map.get(proc, :completion),
+        result != nil,
+        into: %{},
+        do: {proc_idx, {nil, result}}
   end
 
   defp entities_ran(%{instance: %Instance{journal: journal}}, proc_idx) do

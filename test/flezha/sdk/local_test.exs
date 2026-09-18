@@ -127,7 +127,32 @@ defmodule Flezha.SDK.LocalTest do
   defmodule Job do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "local_job"
-    def run(_ctx, _args), do: :ok
+    def procedures(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
+  end
+
+  # Asks to end its operative on `end`, which a stream never does. Reports every
+  # invocation, so a retry would show.
+  @closer_probe :local_mode_closer
+
+  defmodule Closer do
+    @behaviour Flezha.SDK.Procedure
+    def name, do: "closer"
+    def init_state(_key), do: nil
+
+    def run(input, state, ctx) do
+      send(:local_mode_closer, {:ran, input})
+      if input == "end", do: Ctx.complete(ctx, "done")
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule CloserOp do
+    @behaviour Flezha.SDK.StreamOperative
+    def factory_id, do: "local_closer"
+
+    def channels(c),
+      do: c |> Channels.input("in") |> Channels.into(Closer) |> Channels.sink("out")
   end
 
   defmodule StrictOp do
@@ -331,6 +356,34 @@ defmodule Flezha.SDK.LocalTest do
 
     assert log =~ "parked an input on channel `lines`"
     assert log =~ "unreadable"
+  end
+
+  test "a stream procedure asking to complete fails that input once, by name, and the stream runs on" do
+    Process.register(self(), @closer_probe)
+    run = start_run(CloserOp)
+    collect(run, "out")
+
+    log =
+      capture_log(fn ->
+        :ok = Local.feed(run, "in", "hi")
+        :ok = Local.feed(run, "in", "end")
+        assert :ok = Local.run_until_idle(run, 5_000)
+      end)
+
+    assert log =~ "parked an input on channel `in`: CompleteOutsideWorkflow"
+    # Not retried: the ladder would have run it again.
+    assert [{:ran, "hi"}, {:ran, "end"}] == for({:ran, _} = m <- collect_ran(), do: m)
+    # The failed input's emit is discarded with it; the one before it shipped.
+    assert payloads() == ["hi"]
+    assert Process.alive?(Local.operative(run))
+  end
+
+  defp collect_ran(acc \\ []) do
+    receive do
+      {:ran, _} = m -> collect_ran([m | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   test "a run still working when the budget elapses is reported, not passed off as done" do

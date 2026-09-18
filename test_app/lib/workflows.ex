@@ -302,6 +302,19 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
+  # Echoes the spawn args, which a `:once` workflow's first pass is seeded with.
+  defmodule Echo do
+    @moduledoc false
+    @behaviour Flezha.SDK.Procedure
+    def name, do: "echo"
+    def init_state(_), do: nil
+
+    def run(args, state, ctx) do
+      Ctx.emit(ctx, "echo:" <> args)
+      {:ok, state}
+    end
+  end
+
   # -- classes --------------------------------------------------------------
 
   defmodule EchoWorkflow do
@@ -309,9 +322,13 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "echo_workflow"
 
-    def run(ctx, args) do
-      Flezha.SDK.Workflow.Ctx.emit(ctx, "echo:" <> args)
-      :ok
+    def procedures(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Workflows.Echo)
+      |> sink("out")
     end
   end
 

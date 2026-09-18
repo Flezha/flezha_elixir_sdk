@@ -338,16 +338,13 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
-  # The three casts a workflow driver sends upward, all of them built by
+  # The two casts a workflow driver sends upward, both built by
   # `Flezha.SDK.Workflow.Commit` so the driver never names this module.
   def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
     reference_id = "wf-" <> Integer.to_string(System.unique_integer([:positive]))
     ship_request(s, reference_id, command)
     {:noreply, await_reply(s, reference_id, driver, ref, :barrier_ack)}
   end
-
-  def handle_cast({:emit_output, _oid, _meta, _bytes} = write, %State{} = s),
-    do: {:noreply, ship_write(s, write)}
 
   def handle_cast({:record, _payload_id, _frame} = write, %State{} = s),
     do: {:noreply, ship_write(s, write)}
@@ -615,13 +612,10 @@ defmodule Flezha.SDK.RunnerServer do
 
   # --- the workflow driver's writes ---
 
-  # The driver has no wire of its own: it casts its outputs and its records
-  # here, so a frame no stream will take is held here too and replayed on the
-  # next bound one. Nothing about a write reaches the driver, so a drop here
-  # would be a loss no caller could learn of.
-  defp ship_write(%State{} = s, {:emit_output, oid, meta, bytes}),
-    do: put_held(s, Hold.write({:output, oid}, wire(s), {bytes, meta}))
-
+  # The driver has no wire of its own: it casts its records here, so a frame
+  # no stream will take is held here too and replayed on the next bound one.
+  # Nothing about a write reaches the driver, so a drop here would be a loss no
+  # caller could learn of.
   defp ship_write(%State{} = s, {:record, payload_id, frame}),
     do: put_held(s, Hold.write(payload_id, wire(s), {frame, %{}}))
 
