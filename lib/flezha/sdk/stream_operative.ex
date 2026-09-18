@@ -1,7 +1,9 @@
 defmodule Flezha.SDK.StreamOperative do
   @moduledoc """
-  Behaviour an Elixir stream operative implements: a `factory_id/0` the
-  controller places by, a `channels/1` that authors the topology on the builder
+  A stream operative, declared with `use` (see `__using__/1`), which defines
+  this behaviour's zero-arity callbacks from its options and imports the channel
+  builder. The callbacks: a `factory_id/0` the controller places by, a
+  `channels/1` the author writes, which authors the topology on the builder
   token, an optional human `description/0`, and an optional
   `persistence_enabled/0` (default `true`, the Rust `PERSISTENCE_ENABLED`):
   `false` advances every changeful Entity's record seq and ships nothing, so a

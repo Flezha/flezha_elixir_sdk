@@ -1,9 +1,12 @@
 defmodule Flezha.SDK.Ctx do
   @moduledoc """
-  The invocation context handed to `Procedure.run/3`. `emit/2`,
-  `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4` accumulate
-  outputs for this invocation; `apply/3` folds a change into the state through
-  the procedure's `apply_change/2` and records it for the Entity's record
+  The invocation context handed to `Procedure.run/3`. `use Flezha.SDK.Procedure`
+  imports the functions below, so a procedure writes `emit(ctx, value)`; `apply/3`
+  and `complete/2` are not imported and are called by their full names.
+
+  `emit/2`, `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4`
+  accumulate outputs for this invocation; `apply/3` folds a change into the
+  state through the procedure's `apply_change/2` and records it for the Entity's record
   stream — one fold, one push, the only recorded mutation path; `now/1` is a
   wall-clock millisecond stamp captured once at invocation entry;
   `entity_key/1` is the owning Entity's key (or nil for a Single Entity).

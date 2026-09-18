@@ -168,10 +168,10 @@ defmodule Flezha.SDK do
   @spec namespace(t()) :: String.t()
   def namespace(%__MODULE__{namespace: ns}), do: ns
 
-  # --- child_spec: create → define → start under a host supervisor ---
+  # --- child_spec: create → register → start under a host supervisor ---
 
   @doc """
-  A child spec wrapping create → define → start for the host application's
+  A child spec wrapping create → register → start for the host application's
   supervision tree. The supervised process is the RunnerServer, so a crash
   restarts it and it reconnects with the same stable id (a binding swap).
   """

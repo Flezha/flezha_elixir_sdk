@@ -7,16 +7,13 @@ defmodule Echo.Operative do
   The graph is checked as a whole when the runner declares it, so one that
   cannot work is refused at startup.
   """
-  @behaviour Flezha.SDK.StreamOperative
 
-  # The operative's stable identity, and the name `flz operative start` takes.
-  @impl true
-  def factory_id, do: "echo"
+  # `factory_id` is the operative's stable identity, and the name
+  # `flz operative start` takes.
+  use Flezha.SDK.StreamOperative, factory_id: "echo"
 
   @impl true
   def channels(c) do
-    import Flezha.SDK.Channels
-
     c |> input("in") |> into(Echo.Procedure) |> sink("out")
   end
 end

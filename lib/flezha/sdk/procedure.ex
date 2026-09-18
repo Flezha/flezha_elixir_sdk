@@ -1,7 +1,27 @@
 defmodule Flezha.SDK.Procedure do
   @moduledoc """
-  Behaviour an Elixir procedure implements. Mandatory: `name/0`, `init_state/1`
-  (the entity key or nil), `run/3` (input, state, ctx) returning
+  A procedure: one processing stage of an operative's graph, run once per
+  input and declared with `use`.
+
+      defmodule Echo do
+        use Flezha.SDK.Procedure, name: "echo"
+
+        @impl true
+        def run(input, state, ctx) do
+          emit(ctx, "echo: " <> input)
+          {:ok, state}
+        end
+      end
+
+  `use` declares this behaviour, defines `name/0` and the zero-arity callbacks
+  its options name, imports the ctx functions, and makes available a `state`
+  block, which writes `init_state/1`, `apply_change/2` and `state_from_json/1`,
+  and `defchange` (`Flezha.SDK.State`); see `__using__/1`. The author writes
+  `run/3` and any other callback that takes arguments, each under `@impl true`.
+
+  Callbacks. Mandatory: `name/0`, `init_state/1` (the entity key or nil; `use`
+  answers `nil` for a module that declares no state), `run/3` (input, state,
+  ctx) returning
   `{:ok, new_state} | {:error, reason} | {:error, {:non_retryable, reason}}`.
   Optional, with defaults: `entity_keys/0` (static keyset, `[]`), `entities_for/1`,
   `mailbox_capacity/0` (1024, env `FLEZHA_MAILBOX_CAPACITY`, range 1..=1_048_576),
@@ -160,7 +180,8 @@ defmodule Flezha.SDK.Procedure do
 
       use Flezha.SDK.Procedure, name: "position", max_entities: 50_000
 
-      def run(input, state, ctx), do: {:ok, state}
+      @impl true
+      def run(_input, state, _ctx), do: {:ok, state}
 
   `name` is required. Every other option is one of the zero-arity callbacks
   above, under its own name, and **only the options written define anything**:

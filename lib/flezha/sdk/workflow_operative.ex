@@ -1,15 +1,16 @@
 defmodule Flezha.SDK.WorkflowOperative do
   @moduledoc """
-  Behaviour an Elixir workflow operative implements. A class declares
-  `procedures/1`: a DAG of Procedures, Channels and Entities authored on the
-  same builder token a stream operative uses. A procedure ends its instance
-  with `Flezha.SDK.Ctx.complete/2`.
+  A workflow operative, declared with `use` (see `__using__/1`), which defines
+  this behaviour's zero-arity callbacks from its options and imports the channel
+  builder. The author writes `procedures/1`: a DAG of Procedures, Channels and
+  Entities authored on the same builder token a stream operative uses. A
+  procedure ends its instance with `Flezha.SDK.Ctx.complete/2`.
 
   Every knob below is optional and reads its default through this module's
   reader functions, so a class states only what it departs from. The values are
   frozen at registration: `Flezha.SDK.Workflow.Spec.build/1` reads them once,
   refuses the combinations that cannot run, and hands the driver a settled
-  fact — a class already written against this vocabulary keeps working.
+  fact.
   """
 
   alias Flezha.SDK.Procedure
