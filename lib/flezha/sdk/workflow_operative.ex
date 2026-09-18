@@ -45,6 +45,17 @@ defmodule Flezha.SDK.WorkflowOperative do
   author writes. An unknown option is a `CompileError` naming it.
 
   `Flezha.SDK.Channels` is imported.
+
+  A module that writes its one procedure's `run/3` instead of `procedures/1`
+  is the §5 short form, a `once` workflow whose entry channel receives the
+  start values; see `Flezha.SDK.StreamOperative.__using__/1`:
+
+      use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
+
+      def run(order, state, ctx) do
+        emit(ctx, order)
+        {:ok, state}
+      end
   """
   defmacro __using__(opts), do: Procedure.__operative_using__(opts, @use_options, __MODULE__)
 

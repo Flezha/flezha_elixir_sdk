@@ -31,6 +31,30 @@ defmodule Flezha.SDK.StreamOperative do
 
   `Flezha.SDK.Channels` is imported, so a whole pipe — a merge included — is
   written with no module prefix.
+
+  ## The §5 short form
+
+  A module that writes its one procedure's `run/3` instead of `channels/1` is
+  a whole single-procedure operative:
+
+      use Flezha.SDK.StreamOperative, factory_id: "upcase", sink: "out", input: "words"
+
+      def run(input, state, ctx) do
+        emit(ctx, String.upcase(input))
+        {:ok, state}
+      end
+
+  It generates the procedure module `Upcase.Procedure`, whose `name/0` is the
+  factory id and which delegates to this module's procedure callbacks, and a
+  `channels/1` wiring the entry channel (`input:`, `"input"` when absent) into
+  it and, with `sink:`, it to that plugin channel. With no `sink:` nothing
+  leaves the procedure but its state. `run/3` is written as in a procedure,
+  with the ctx functions and a `state do ... end` block available, and the
+  options `use Flezha.SDK.Procedure` takes (`max_entities:`, `clock:`, ...)
+  apply to the generated procedure. The short form takes no class setting,
+  which is the full form's. Writing `run/3`
+  and `channels/1` both is a `CompileError` beginning `ShortFormWithTopology`,
+  and writing neither is one naming both.
   """
   defmacro __using__(opts) do
     Procedure.__operative_using__(opts, @use_options, __MODULE__)

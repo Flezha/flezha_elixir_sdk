@@ -127,14 +127,17 @@ defmodule Flezha.SDK.State do
     fields = Module.get_attribute(env.module, :flezha_state_fields, []) |> Enum.reverse()
     changes = Module.get_attribute(env.module, :flezha_changes, [])
     block? = Module.get_attribute(env.module, :flezha_state_block, false)
+    # A short-form operative module carries the block for the procedure the
+    # operative generates, so there the callbacks implement no behaviour.
+    impl = Flezha.SDK.Procedure in Module.get_attribute(env.module, :behaviour, [])
 
     if block? or changes != [] do
       refuse_hand_written(env.module, block?)
     end
 
     cond do
-      block? -> derived(fields)
-      changes != [] -> fold()
+      block? -> derived(fields, impl)
+      changes != [] -> fold(impl)
       true -> nil
     end
   end
@@ -155,7 +158,7 @@ defmodule Flezha.SDK.State do
 
   # Everything the block generates: the two callbacks the state shape decides,
   # the fold over every derived and named change, and one recorder per mutation.
-  defp derived(fields) do
+  defp derived(fields, impl) do
     defaults = {:%{}, [], Enum.map(fields, fn {name, _type, default} -> {name, default} end)}
 
     from_json =
@@ -165,10 +168,10 @@ defmodule Flezha.SDK.State do
        end)}
 
     quote do
-      unquote(init_state())
-      unquote(fold())
+      unquote(init_state(impl))
+      unquote(fold(impl))
 
-      @impl true
+      @impl unquote(impl)
       def state_from_json(json) when is_map(json), do: unquote(from_json)
 
       @doc false
@@ -187,18 +190,18 @@ defmodule Flezha.SDK.State do
   # The one `apply_change/2` the behaviour asks for, over every clause the block
   # and `defchange` generated between them. A module with `defchange` and no
   # block gets this and nothing else: its state shape is its own `init_state/1`.
-  defp fold do
+  defp fold(impl) do
     quote do
-      @impl true
+      @impl unquote(impl)
       def apply_change(state, change), do: __flezha_apply_change__(state, change)
     end
   end
 
   # `init_state/1` is overridable, which is Elixir's spelling of Rust's
   # `init = f`: an author who needs the entity key writes their own.
-  defp init_state do
+  defp init_state(impl) do
     quote do
-      @impl true
+      @impl unquote(impl)
       def init_state(_entity_key), do: __flezha_state_defaults__()
 
       defoverridable init_state: 1

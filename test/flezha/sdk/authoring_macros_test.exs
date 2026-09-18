@@ -318,7 +318,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Upcase do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "upcase", kind: :stream, sink: "out"
+    use Flezha.SDK.StreamOperative, factory_id: "upcase", sink: "out"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -346,7 +346,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "place", kind: :workflow, sink: "placed", input: "order"
+    use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -354,7 +354,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "a procedure module is a whole stream operative" do
+  defmodule Counter do
+    @moduledoc false
+    use Flezha.SDK.StreamOperative, factory_id: "counter", input: "ticks", max_entities: 10
+
+    state do
+      field(:seen, :list, default: [])
+    end
+
+    def run(input, state, ctx), do: {:ok, push_seen(state, ctx, input)}
+  end
+
+  test "an operative module with a run body is a whole stream operative" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
     refute function_exported?(Upcase, :procedures, 1)
@@ -366,7 +377,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert route_shape(short) == route_shape(hand)
   end
 
-  test "a procedure module is a whole workflow operative" do
+  test "an operative module with a run body is a whole workflow operative" do
     assert Place.factory_id() == "place"
     assert function_exported?(Place, :procedures, 1)
     refute function_exported?(Place, :channels, 1)
@@ -374,6 +385,27 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Place)
     assert spec.knobs.loop_mode == :once
     assert entry_names(Place, :procedures) == ["order"]
+  end
+
+  test "the generated procedure is a module of its own, named after the factory id" do
+    assert Upcase.Procedure.name() == "upcase"
+    assert Flezha.SDK.Procedure in behaviours(Upcase.Procedure)
+    refute Flezha.SDK.Procedure in behaviours(Upcase)
+    refute function_exported?(Upcase, :name, 0)
+
+    # `run/3` is the author's, reached through the procedure module.
+    assert {[], nil} = journal(Upcase.Procedure, "hi")
+  end
+
+  test "a short form with no sink wires its entry channel into the procedure alone" do
+    assert {:ok, topo} = Topology.build(Counter)
+    assert entry_names(Counter) == ["ticks"]
+    assert sink_names(topo) == []
+
+    # A procedure option, and the block's recorders, reach the generated procedure.
+    assert Counter.Procedure.max_entities() == 10
+    assert {[{:push, :seen, "a"}], %{seen: ["a"]}} = journal(Counter.Procedure, "a")
+    assert Counter.Procedure.apply_change(%{seen: []}, {:push, :seen, "a"}) == %{seen: ["a"]}
   end
 
   test "register_factory reads a short form's kind" do
@@ -439,22 +471,58 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
              |> Flezha.SDK.register_factory(Upcase)
   end
 
-  test "the short form's three refusals are compile errors naming themselves" do
-    cases = [
-      {"SinkWithoutId", ~s|name: "", kind: :stream, sink: "out"|},
-      {"SinkWithoutKind", ~s|name: "upcase", sink: "out"|},
-      {"ShorthandKeyWithoutSink", ~s|name: "upcase", kind: :stream, input: "prices"|}
-    ]
-
-    for {refusal, options} <- cases do
+  test "a run body beside a topology body does not compile" do
+    for {macro, body} <- [{"StreamOperative", "channels"}, {"WorkflowOperative", "procedures"}] do
       error =
         refused("""
-        use Flezha.SDK.Procedure, #{options}
+        use Flezha.SDK.#{macro}, factory_id: "x", sink: "out"
+        def run(_i, s, _c), do: {:ok, s}
+        def #{body}(c), do: c
+        """)
+
+      assert String.starts_with?(error.description, "ShortFormWithTopology"),
+             "expected the message to begin with ShortFormWithTopology, read: #{error.description}"
+    end
+  end
+
+  test "an operative with neither body does not compile, naming both" do
+    error = refused(~s|use Flezha.SDK.StreamOperative, factory_id: "x"|)
+    assert error.description =~ "run/3" and error.description =~ "channels/1"
+  end
+
+  test "an operative option on a procedure does not compile, naming the operative macro" do
+    for option <- [~s|sink: "out"|, ~s|input: "ticks"|, "kind: :stream"] do
+      error =
+        refused("""
+        use Flezha.SDK.Procedure, name: "p", #{option}
         def run(_i, s, _c), do: {:ok, s}
         """)
 
-      assert String.starts_with?(error.description, refusal),
-             "expected the message to begin with #{refusal}, read: #{error.description}"
+      [key | _] = String.split(option, ":")
+
+      assert error.description =~ "`#{key}:`" and
+               error.description =~ "Flezha.SDK.StreamOperative"
+    end
+  end
+
+  test "a short form takes no class setting, and a full form no short-form option" do
+    setting =
+      refused("""
+      use Flezha.SDK.WorkflowOperative, factory_id: "x", loop_mode: :chained
+      def run(_i, s, _c), do: {:ok, s}
+      """)
+
+    assert setting.description =~ "loop_mode"
+
+    for option <- [~s|sink: "out"|, "max_entities: 10"] do
+      stray =
+        refused("""
+        use Flezha.SDK.StreamOperative, factory_id: "x", #{option}
+        def channels(c), do: c
+        """)
+
+      [key | _] = String.split(option, ":")
+      assert stray.description =~ "`#{key}:`"
     end
   end
 
@@ -489,6 +557,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     {:ok, state} = module.run(input, module.init_state(nil), ctx)
     {Ctx.take_changes(ctx), state}
   end
+
+  defp behaviours(module),
+    do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
   defp start_run(module) do
     {{:ok, run}, _notice} = with_io(:stderr, fn -> Local.start(module) end)

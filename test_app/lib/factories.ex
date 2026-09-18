@@ -180,15 +180,14 @@ end
 
 # -- the §5 short forms -----------------------------------------------------
 #
-# One `use` each: the `sink` makes the procedure a whole operative of its
-# `kind`, and `application.ex` lists it under `operatives:`. No hand-written
+# One `use` each: an operative module whose `run/3` is its one procedure's
+# body, listed under `operatives:` in `application.ex`. No hand-written
 # operative stands beside them.
 
 defmodule ElixirRunner.SugarDoNothing do
   @moduledoc false
-  use Flezha.SDK.Procedure,
-    name: "sugar_do_nothing",
-    kind: :stream,
+  use Flezha.SDK.StreamOperative,
+    factory_id: "sugar_do_nothing",
     sink: "sugar_do_nothing_echo"
 
   def run(input, state, ctx) do
@@ -199,9 +198,8 @@ end
 
 defmodule ElixirRunner.SugarStoreInput do
   @moduledoc false
-  use Flezha.SDK.Procedure,
-    name: "sugar_store_input",
-    kind: :stream,
+  use Flezha.SDK.StreamOperative,
+    factory_id: "sugar_store_input",
     sink: "sugar_store_sink"
 
   state do
@@ -216,9 +214,8 @@ end
 
 defmodule ElixirRunner.SugarNamedInput do
   @moduledoc false
-  use Flezha.SDK.Procedure,
-    name: "sugar_named_input",
-    kind: :stream,
+  use Flezha.SDK.StreamOperative,
+    factory_id: "sugar_named_input",
     sink: "sugar_named_input_sink",
     input: "prices"
 
@@ -230,9 +227,8 @@ end
 
 defmodule ElixirRunner.SugarWorkflow do
   @moduledoc false
-  use Flezha.SDK.Procedure,
-    name: "sugar_workflow",
-    kind: :workflow,
+  use Flezha.SDK.WorkflowOperative,
+    factory_id: "sugar_workflow",
     sink: "sugar_workflow_placed",
     input: "order"
 
@@ -240,6 +236,18 @@ defmodule ElixirRunner.SugarWorkflow do
     emit(ctx, input)
     {:ok, state}
   end
+end
+
+# The short form with no sink: `ticks` feeds a procedure that only keeps state.
+defmodule ElixirRunner.SugarStateOnly do
+  @moduledoc false
+  use Flezha.SDK.StreamOperative, factory_id: "sugar_state_only", input: "ticks"
+
+  state do
+    field(:seen, :list, default: [])
+  end
+
+  def run(input, state, ctx), do: {:ok, push_seen(state, ctx, input)}
 end
 
 # -- hybrid_channel ---------------------------------------------------------
@@ -664,15 +672,16 @@ defmodule ElixirRunner.Factories do
   end
 
   @doc """
-  The §5 short forms this app advertises: each is the procedure module itself,
-  whose `sink` makes it a whole operative.
+  The §5 short forms this app advertises: each is an operative module whose
+  `run/3` is its one procedure's body.
   """
   def shorthand do
     [
       ElixirRunner.SugarDoNothing,
       ElixirRunner.SugarStoreInput,
       ElixirRunner.SugarNamedInput,
-      ElixirRunner.SugarWorkflow
+      ElixirRunner.SugarWorkflow,
+      ElixirRunner.SugarStateOnly
     ]
   end
 end

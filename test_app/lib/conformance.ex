@@ -115,7 +115,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupStream do
   @moduledoc false
-  use Flezha.SDK.Procedure, name: "plain", kind: :stream, sink: "out"
+  use Flezha.SDK.StreamOperative, factory_id: "plain", sink: "out"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -125,7 +125,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupWorkflow do
   @moduledoc false
-  use Flezha.SDK.Procedure, name: "plain", kind: :workflow, sink: "twin_sink"
+  use Flezha.SDK.WorkflowOperative, factory_id: "plain", sink: "twin_sink"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -279,7 +279,7 @@ defmodule ElixirRunner.Conformance do
 
   @macro_test "sdk/elixir/test/flezha/sdk/authoring_macros_test.exs"
 
-  # The `shorthand(<id>|-, <kind>|-, <sink>|-, <input>|-)` steps of a row.
+  # The `shorthand(<id>|-, <sink>|-, <input>|-)` steps of a row.
   defp shorthand_steps(row) do
     row.steps
     |> String.split(";")
@@ -288,36 +288,20 @@ defmodule ElixirRunner.Conformance do
     |> Enum.map(&parse_shorthand/1)
   end
 
+  # Only what a refusal is judged on: `.topology` marks a declaration that also
+  # carries a topology body. The `.noout` row needs `shorthand_typed_output`,
+  # which this builder does not carry, so it is skipped before it gets here.
   defp parse_shorthand(step) do
-    {body, noout?} =
-      case String.replace_suffix(step, ".noout", "") do
-        ^step -> {step, false}
-        trimmed -> {trimmed, true}
-      end
+    body = String.replace_suffix(step, ".topology", "")
 
-    fields =
-      body
-      |> argument()
-      |> String.split(",")
-      |> Enum.map(&String.trim/1)
-      |> Enum.map(fn
-        "-" -> nil
-        field -> field
-      end)
-
-    unless length(fields) == 4 do
-      die("a shorthand step declares four fields: read `#{step}`")
+    unless body |> argument() |> String.split(",") |> length() == 3 do
+      die("a shorthand step declares three fields: read `#{step}`")
     end
 
-    [name, kind, sink, input] = fields
-    %{name: name, kind: kind, sink: sink, input: input, noout?: noout?}
+    %{topology?: body != step}
   end
 
-  # The refusal a declaration earns. A `sink` is what makes a short form, so its
-  # absence is judged first; the identity and the kind follow.
-  defp refusal_of(%{sink: nil}), do: "ShorthandKeyWithoutSink"
-  defp refusal_of(%{name: nil}), do: "SinkWithoutId"
-  defp refusal_of(%{kind: nil}), do: "SinkWithoutKind"
+  defp refusal_of(%{topology?: true}), do: "ShortFormWithTopology"
 
   defp judge_shorthand(row, [_one]) do
     %{
