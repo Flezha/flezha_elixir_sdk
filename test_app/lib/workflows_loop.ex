@@ -151,6 +151,48 @@ defmodule ElixirRunner.WorkflowsLoop do
     end
   end
 
+  # The reply that blocks on the turn `reply-crash` while the release env is
+  # unset, after the root has committed: what `reply_block_loop_workflow`
+  # crashes in.
+  defmodule BlockingReply do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+
+    alias ElixirRunner.Workflows.Gate
+    alias Flezha.SDK.Ctx
+
+    def name, do: "blocking_reply"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      if input == "reply-crash", do: Gate.block_until_released()
+      Ctx.emit(ctx, "reply:" <> input)
+      {:ok, state}
+    end
+  end
+
+  # The chat loop with the block moved AFTER the root's commit, so a SIGKILL
+  # lands between a root's `task_committed` and the pass's `iter_committed`.
+  defmodule ReplyBlockLoopWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "reply_block_loop_workflow"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def tasklets(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
+      |> named("mid")
+      |> into(ElixirRunner.WorkflowsLoop.BlockingReply)
+      |> sink("out")
+    end
+  end
+
   # The same durable per-input loop minus its stateful first tasklet, so
   # nothing writes a Cell record and the controller ships no restore on a
   # rehydrating bind: the instance's task-journal reaches the driver only if it
@@ -283,6 +325,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       ChatLoopWorkflow,
       StatelessLoopWorkflow,
       ChatRewindWorkflow,
+      ReplyBlockLoopWorkflow,
       BenchChain1,
       BenchChain4,
       BenchChain16,

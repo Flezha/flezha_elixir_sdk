@@ -31,6 +31,13 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
+  defmodule JoinTask do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "join"
+    def init_state(_), do: nil
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
   defmodule StaticTask do
     @behaviour Flezha.SDK.Tasklet
     def name, do: "static"
@@ -70,7 +77,11 @@ defmodule Flezha.SDK.Workflow.SpecTest do
   test "a structured class builds a Kahn-ordered DAG rooted at the entry's consumer" do
     assert {:ok, spec} = Spec.build(LinearWorkflow)
     assert [root, tail] = spec.dag.order
-    assert spec.dag.root == root
+    assert %{"in" => chain} = spec.dag.chains
+    assert chain.roots == [root]
+    assert chain.leaves == [tail]
+    assert MapSet.equal?(chain.members, MapSet.new([root, tail]))
+    assert chain.parents_in_chain == %{root => 0, tail => 1}
     assert spec.dag.leaves == [tail]
     assert spec.dag.pos[root] == 0
     assert spec.dag.pos[tail] == 1
@@ -163,7 +174,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     assert {:ok, _} = Spec.build(NoEntry)
   end
 
-  test "EntryRoot — the entry channel feeds more than one tasklet" do
+  test "an entry channel may feed several tasklets, all roots of its chain" do
     defmodule TwoRoots do
       def factory_id, do: "two_roots"
 
@@ -174,10 +185,12 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       end
     end
 
-    assert :EntryRoot in issues(TwoRoots)
+    assert {:ok, spec} = Spec.build(TwoRoots)
+    assert %{"in" => %{roots: roots}} = spec.dag.chains
+    assert Enum.map(roots, &spec.topology.node_modules[&1]) == [PassTask, TailTask]
   end
 
-  test "MergeFromEntryChannel — the entry is one merge source among several" do
+  test "an entry channel is a merge source: the merged tasklet is a root of its chain" do
     defmodule EntryMerge do
       def factory_id, do: "entry_merge"
 
@@ -188,20 +201,36 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       end
     end
 
-    assert :MergeFromEntryChannel in issues(EntryMerge)
+    assert {:ok, spec} = Spec.build(EntryMerge)
+    [pass, tail] = spec.dag.order
+    assert %{"in" => chain} = spec.dag.chains
+    assert chain.roots == [pass, tail]
+    # The join waits for its one producer inside the chain, not for the entry.
+    assert chain.parents_in_chain[tail] == 1
   end
 
-  test "a second entry channel is refused as two roots, which is the only shape that could orphan one" do
-    defmodule Orphan do
-      def factory_id, do: "orphan"
+  test "each entry channel roots its own chain, and a join counts only the producers in it" do
+    defmodule TwoChains do
+      def factory_id, do: "two_chains"
 
       def tasklets(c) do
-        c |> Channels.input("in") |> Channels.into(PassTask)
-        c |> Channels.input("other") |> Channels.into(TailTask)
+        a = c |> Channels.input("a") |> Channels.into(PassTask)
+        b = c |> Channels.input("b") |> Channels.into(TailTask)
+        Channels.into(a, JoinTask)
+        Channels.into(b, JoinTask)
       end
     end
 
-    assert :EntryRoot in issues(Orphan)
+    assert {:ok, spec} = Spec.build(TwoChains)
+    modules = &Enum.map(&1, fn ref -> spec.topology.node_modules[ref] end)
+    assert %{"a" => a, "b" => b} = spec.dag.chains
+    assert modules.(a.roots) == [PassTask]
+    assert modules.(b.roots) == [TailTask]
+    join = Enum.find(spec.dag.order, &(spec.topology.node_modules[&1] == JoinTask))
+    assert MapSet.member?(a.members, join) and MapSet.member?(b.members, join)
+    refute MapSet.member?(a.members, hd(b.roots))
+    assert {a.parents_in_chain[join], b.parents_in_chain[join]} == {1, 1}
+    assert length(spec.dag.parents[join]) == 2
   end
 
   test "DynamicCells — a keyed edge into a keyless tasklet" do

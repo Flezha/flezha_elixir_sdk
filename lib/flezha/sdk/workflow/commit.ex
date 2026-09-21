@@ -37,9 +37,11 @@ defmodule Flezha.SDK.Workflow.Commit do
   end
 
   @doc """
-  Ship `IterCommit` for one finished iteration. `completes` marks the
-  iteration a tasklet ended the instance in, and `result` is what it ends
-  with, so a resume after this commit ends the instance rather than waiting.
+  Ship `IterCommit` for one finished iteration. `entry_channel` names the
+  chain the iteration ran, which a resumed chained loop re-enters;
+  `completes` marks the iteration a tasklet ended the instance in, and
+  `result` is what it ends with, so a resume after this commit ends the
+  instance rather than waiting.
   """
   @spec iter(pid(), pid(), reference(), keyword()) :: tuple()
   def iter(runner, driver, ref, fields) do
@@ -50,7 +52,8 @@ defmodule Flezha.SDK.Workflow.Commit do
         Keyword.fetch!(fields, :consumed_offset),
         Keyword.fetch!(fields, :handoff),
         Keyword.get(fields, :completes, false),
-        Keyword.get(fields, :result, <<>>)
+        Keyword.get(fields, :result, <<>>),
+        Keyword.get(fields, :entry_channel, "")
       )
 
     barrier(runner, driver, ref, command)
@@ -67,11 +70,17 @@ defmodule Flezha.SDK.Workflow.Commit do
 
   @doc """
   Ship `IterPark`: the loop found its inbox empty at a committed boundary and
-  tears its run down WITHOUT a terminal frame, which is not an outcome.
+  tears its run down WITHOUT a terminal frame, which is not an outcome. The
+  controller releases every inbox offset up to `consumed_offset`, the last
+  message the run parked unread.
   """
-  @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer()) :: :ok
-  def park(runner, operative_id, iter, wake_deadline_ms),
-    do: notify(runner, Codec.iter_park_command(operative_id, iter, wake_deadline_ms))
+  @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: :ok
+  def park(runner, operative_id, iter, wake_deadline_ms, consumed_offset),
+    do:
+      notify(
+        runner,
+        Codec.iter_park_command(operative_id, iter, wake_deadline_ms, consumed_offset)
+      )
 
   @doc "Ship `WorkflowCompleted`: the run reached an exit."
   @spec completed(pid(), String.t(), String.t(), String.t(), binary()) :: :ok

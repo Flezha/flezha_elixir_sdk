@@ -81,11 +81,7 @@ defmodule Flezha.SDK.Operatives do
         credit: s.credit
       )
 
-    :ets.insert(s.registry, {add.operative_id, op_pid})
-    seed_init_values(op_pid, add)
-
-    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {op_pid, add.factory_id})},
-     Declarations.for(topo)}
+    registered(s, add, op_pid, topo)
   end
 
   defp start_workflow(s, add, %Spec{} = spec) do
@@ -93,7 +89,6 @@ defmodule Flezha.SDK.Operatives do
       Driver.start_link(
         operative_id: add.operative_id,
         spec: spec,
-        args: add.init_values || "",
         journal: Codec.journal_facts(add.task_journal),
         owed_inbox: add.inbox_tail_count || 0,
         resume_cell_count: add.resume_cell_count || 0,
@@ -103,14 +98,21 @@ defmodule Flezha.SDK.Operatives do
         credit: s.credit
       )
 
-    :ets.insert(s.registry, {add.operative_id, pid})
-
-    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {pid, add.factory_id})},
-     Declarations.for(spec)}
+    registered(s, add, pid, spec)
   end
 
   defp start_workflow(s, add, _topology),
     do: {:error, "factory #{add.factory_id} is a stream class; kind was \"workflow\"", s}
+
+  # A started instance of either kind is registered, takes its `init_values`
+  # as its tasklets' initial state, and answers its class's declarations.
+  defp registered(s, add, pid, declared) do
+    :ets.insert(s.registry, {add.operative_id, pid})
+    seed_init_values(pid, add)
+
+    {:ok, %{s | operatives: Map.put(s.operatives, add.operative_id, {pid, add.factory_id})},
+     Declarations.for(declared)}
+  end
 
   defp seed_init_values(op_pid, add) do
     case Commands.apply_json(op_pid, add.operative_id, add.init_values) do

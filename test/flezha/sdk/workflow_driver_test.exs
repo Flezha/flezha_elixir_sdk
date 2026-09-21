@@ -27,6 +27,12 @@ defmodule Flezha.SDK.Workflow.DriverTest do
       {:noreply, s}
     end
 
+    # A park the entrance shipped, forwarded as the frame it would become.
+    def handle_cast({:park, _cell_pid, _identity, body}, s) do
+      send(s.test, {:shipped, {:park_payload, body}})
+      {:noreply, s}
+    end
+
     # A spawn request, answered as a controller that started the instance would.
     def handle_cast({:spawn, caller, spawn, payload, if_running}, s) do
       send(s.test, {:spawn_requested, payload, if_running})
@@ -197,7 +203,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert {:ok, spec} = Spec.build(module)
     {error, opts} = Keyword.pop(opts, :error, "")
     {:ok, runner} = StubRunner.start_link(test: self(), error: error)
-    defaults = [operative_id: "wf-1", args: "go", counters: Counters.new()]
+    defaults = [operative_id: "wf-1", counters: Counters.new()]
 
     {:ok, driver} =
       Driver.start_link(Keyword.merge(defaults, opts) ++ [spec: spec, runner: runner])
@@ -205,8 +211,12 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     driver
   end
 
+  # Start `module` and hand it its first message (`"go"` unless `:message`
+  # says otherwise, `nil` for none), then drain it to its terminal frame.
   defp drive(module, opts \\ []) do
+    {message, opts} = Keyword.pop(opts, :message, "go")
     driver = start_driver(module, opts)
+    if message, do: Inbox.input(driver, nil, message, %{})
 
     # A short run can finish before the monitor is set, which reports
     # `:noproc` rather than `:normal`; both mean the same thing here.
@@ -392,20 +402,152 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   test "a chained loop re-seeds each pass from the previous terminal batch" do
-    messages = drive(ChainedLoop, operative_id: "wf-loop", args: "3")
+    messages = drive(ChainedLoop, operative_id: "wf-loop", message: "3")
     assert %{status: "ok"} = completion(messages)
   end
 
-  # A per-input loop started with spawn args. A state read is answered only
+  # --- every message enters through the stream's entrance ---
+
+  defmodule TwoChains do
+    def factory_id, do: "two_chains"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def tasklets(c) do
+      a = c |> Channels.input("a") |> Channels.into(Left)
+      b = c |> Channels.input("b") |> Channels.into(Right)
+      Channels.into(a, Join)
+      Channels.into(b, Join)
+    end
+  end
+
+  test "a message runs only the chain of the channel it names, and the join waits for that chain alone" do
+    driver = start_loop(TwoChains, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "b", "one", %{"flz.inbox_offset" => "1"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 1, entry_channel: "b"}}}, 5_000
+    Inbox.input(driver, "a", "two", %{"flz.inbox_offset" => "2"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 2, entry_channel: "a"}}}, 5_000
+    Driver.stop_workflow(driver)
+
+    messages = drain()
+    ran = for c <- commits(messages), h <- c.handoff, do: Resume.decode(h.payload)
+    assert ran == ["r:one", "j:r:one", "l:two", "j:l:two"]
+  end
+
+  test "a message naming a channel the class does not declare parks and starts no pass" do
+    driver = start_loop(TwoChains, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "c", "lost", %{})
+    assert_receive {:shipped, {:park_payload, park}}, 5_000
+    assert park.channel == "c"
+    assert park.error =~ "no entry channel `c`"
+    Driver.stop_workflow(driver)
+
+    messages = drain()
+    assert commits(messages) == []
+    assert %{status: "cancelled"} = completion(messages)
+  end
+
+  defmodule Strict do
+    def factory_id, do: "strict"
+
+    def tasklets(c) do
+      c
+      |> Channels.input_with("in", fn
+        "bad" -> raise ArgumentError, "not readable"
+        bytes -> {:ok, bytes}
+      end)
+      |> Channels.into(Tagger)
+    end
+  end
+
+  test "an unreadable message parks under its channel, and the once pass runs on the next one" do
+    driver = start_driver(Strict, operative_id: "wf-strict", park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "bad", %{})
+    assert_receive {:shipped, {:park_payload, park}}, 5_000
+    assert park.channel == "in"
+    assert park.error =~ "not readable"
+    refute_received {:shipped, {:workflow_completed, _}}
+
+    Inbox.input(driver, "in", "fine", %{})
+    messages = drain()
+    assert [commit] = commits(messages)
+    assert Enum.map(commit.handoff, &Resume.decode(&1.payload)) == ["a:fine"]
+    assert %{status: "ok"} = completion(messages)
+  end
+
+  defmodule EdgeStrict do
+    def factory_id, do: "edge_strict"
+
+    def tasklets(c) do
+      c
+      |> Channels.input("in")
+      |> Channels.map(fn
+        "bad" -> raise ArgumentError, "not mappable"
+        value -> value
+      end)
+      |> Channels.into(Tagger)
+    end
+  end
+
+  test "a message its entry edge rejects parks under the channel, and the park releases it" do
+    driver =
+      start_driver(EdgeStrict, operative_id: "wf-edge-strict", park_idle_ms: 0, owed_inbox: 1)
+
+    Inbox.input(driver, "in", "bad", %{"flz.inbox_offset" => "5"})
+    assert_receive {:shipped, {:park_payload, park}}, 5_000
+    assert park.channel == "in"
+    assert park.error =~ "entry edge failed: not mappable"
+    assert_receive {:shipped, {:iter_park, %{iter: 0, consumed_offset: 5}}}, 5_000
+  end
+
+  test "an unreadable message a rebound run owed settles the tail, and the park releases it" do
+    driver =
+      start_driver(Strict, operative_id: "wf-strict-owed", park_idle_ms: 0, owed_inbox: 1)
+
+    Inbox.input(driver, "in", "bad", %{"flz.inbox_offset" => "4"})
+    assert_receive {:shipped, {:park_payload, _park}}, 5_000
+    assert_receive {:shipped, {:iter_park, %{iter: 0, consumed_offset: 4}}}, 5_000
+  end
+
+  test "a once class started without a message parks after the idle window" do
+    driver = start_driver(LinearFlow, operative_id: "wf-once-parks", park_idle_ms: 0)
+    ref = Process.monitor(driver)
+    assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
+    assert reason in [:normal, :noproc]
+
+    messages = collect_all()
+
+    assert [{:shipped, {:iter_park, %{iter: 0}}}] =
+             Enum.filter(messages, &match?({:shipped, {:iter_park, _}}, &1))
+
+    refute Enum.any?(messages, &match?({:shipped, {:workflow_completed, _}}, &1))
+  end
+
+  test "a once class that journals nothing waits for its message instead of parking" do
+    driver = start_driver(OptedOutFlow, operative_id: "wf-once-waits", park_idle_ms: 0)
+    _state = :sys.get_state(driver)
+    refute_receive {:shipped, _}, 300
+
+    Inbox.input(driver, "in", "late", %{})
+    messages = drain()
+    assert %{status: "ok"} = completion(messages)
+    refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
+  end
+
+  # A per-input loop started without a message. A state read is answered only
   # after the bootstrap, so whatever the test sends next reaches a loop that has
   # already looked at its empty inbox.
   defp start_loop(module, opts) do
-    driver = start_driver(module, [operative_id: "wf-chat", args: "hello"] ++ opts)
+    driver = start_driver(module, [operative_id: "wf-chat"] ++ opts)
     _state = :sys.get_state(driver)
     driver
   end
 
-  test "a per-input loop's first iteration consumes its first input, never the args, and commits its offset" do
+  test "a per-input loop's first iteration consumes its first input and commits its offset" do
     driver = start_loop(ChatLoop, park_idle_ms: 60_000)
 
     Inbox.input(driver, "in", "turn", %{"flz.inbox_offset" => "7"})
@@ -420,7 +562,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a per-input loop parks after its idle window with nothing to consume" do
     # Not `start_loop/2`: with no idle window the loop can park before a state
     # read is answered.
-    driver = start_driver(ChatLoop, operative_id: "wf-chat", args: "hello", park_idle_ms: 0)
+    driver = start_driver(ChatLoop, operative_id: "wf-chat", park_idle_ms: 0)
     ref = Process.monitor(driver)
     assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
     assert reason in [:normal, :noproc]
@@ -683,14 +825,14 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   test "a once pass ends with the result a tasklet completed with, after every stage ran" do
-    messages = drive(ClosingPass, args: "bye")
+    messages = drive(ClosingPass, message: "bye")
     assert commits(messages) |> Enum.map(& &1.task_idx) == [0, 1]
     assert iter_commits(messages) == []
     assert %{status: "ok", result: "turns:0"} = completion(messages)
   end
 
   test "a once pass no tasklet completed ends with an empty result" do
-    assert %{status: "ok", result: ""} = ClosingPass |> drive(args: "hi") |> completion()
+    assert %{status: "ok", result: ""} = ClosingPass |> drive(message: "hi") |> completion()
   end
 
   test "of several completions in one tasklet, the Cell whose key sorts last decides" do
@@ -702,7 +844,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   test "an iteration that fails after a tasklet completed discards the completion" do
-    messages = drive(ClosingThenFailing, args: "bye")
+    messages = drive(ClosingThenFailing, message: "bye")
     assert %{status: "error", error: error, result: ""} = completion(messages)
     assert error =~ "boom"
   end

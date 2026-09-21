@@ -181,9 +181,18 @@ defmodule Flezha.SDK.Codec do
           non_neg_integer(),
           [{non_neg_integer(), binary()}],
           boolean(),
-          binary()
+          binary(),
+          String.t()
         ) :: {atom(), struct()}
-  def iter_commit_command(operative_id, iter, consumed_offset, handoff, completes, result) do
+  def iter_commit_command(
+        operative_id,
+        iter,
+        consumed_offset,
+        handoff,
+        completes,
+        result,
+        entry_channel
+      ) do
     {:iter_commit,
      %RunnerCommands.IterCommit{
        operative_id: operative_id,
@@ -191,18 +200,24 @@ defmodule Flezha.SDK.Codec do
        consumed_offset: consumed_offset,
        handoff: handoff_items(handoff),
        completes: completes,
-       result: result
+       result: result,
+       entry_channel: entry_channel
      }}
   end
 
-  @doc "The `IterPark` command tuple for a loop that found its inbox empty."
-  @spec iter_park_command(String.t(), non_neg_integer(), non_neg_integer()) :: {atom(), struct()}
-  def iter_park_command(operative_id, iter, wake_deadline_ms) do
+  @doc """
+  The `IterPark` command tuple for a loop that found its inbox empty, carrying
+  the highest inbox offset the run parked to the dead-letter queue unread.
+  """
+  @spec iter_park_command(String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) ::
+          {atom(), struct()}
+  def iter_park_command(operative_id, iter, wake_deadline_ms, consumed_offset) do
     {:iter_park,
      %RunnerCommands.IterPark{
        operative_id: operative_id,
        iter: iter,
-       wake_deadline_ms: wake_deadline_ms
+       wake_deadline_ms: wake_deadline_ms,
+       consumed_offset: consumed_offset
      }}
   end
 
@@ -227,6 +242,7 @@ defmodule Flezha.SDK.Codec do
     %{
       committed_task_idxs: j.committed_task_idxs,
       iter: j.iter,
+      entry_channel: j.entry_channel,
       handoff: Enum.map(j.handoff, &{&1.channel_id, &1.payload}),
       task_handoffs:
         Map.new(j.task_handoffs, fn e ->

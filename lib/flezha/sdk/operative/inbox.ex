@@ -8,7 +8,17 @@ defmodule Flezha.SDK.Operative.Inbox do
 
   The first two are answered by `Flezha.SDK.Operative.handle_cast/2`, all three
   by `Flezha.SDK.Workflow.Driver.handle_cast/2`.
+
+  The entrance is here too: how a raw frame becomes a value on an entry
+  channel (`enter/5`) is one rule for both kinds, so a workflow's message is
+  resolved, parsed and parked exactly where a stream's frame is.
   """
+
+  alias Flezha.SDK.Park
+
+  # The identity slot a frame naming an undeclared channel parks under: a
+  # value this side chose, never a name off the wire.
+  @unresolved_tasklet_id "_unresolved"
 
   @doc "Route a raw input frame arriving on an entry channel."
   def input(pid, channel, message, metadata),
@@ -41,4 +51,122 @@ defmodule Flezha.SDK.Operative.Inbox do
   """
   def delivered(nil), do: :ok
   def delivered({cell, ref}), do: send(cell, {:edges_delivered, ref})
+
+  # --- the entrance ---
+
+  @doc """
+  One frame through the entrance: `{:ok, channel, value}` once the name
+  resolved and the channel's parser read the bytes, or `:parked` when the
+  frame named a channel `topo` does not declare or the parser rejected it,
+  parked under that name, on `runner`, with `operative_id`'s identity.
+  """
+  @spec enter(pid(), String.t(), Flezha.SDK.Topology.t(), String.t() | nil, binary()) ::
+          {:ok, String.t(), term()} | :parked
+  def enter(runner, operative_id, topo, channel, message) do
+    case resolve_channel(topo, channel) do
+      {:unresolved, requested} ->
+        park_pre_dispatch(
+          runner,
+          operative_id,
+          @unresolved_tasklet_id,
+          requested,
+          unresolved_entry_error(topo, requested),
+          message
+        )
+
+        :parked
+
+      channel ->
+        case parse(topo, channel, message) do
+          {:ok, value} ->
+            {:ok, channel, value}
+
+          {:error, reason} ->
+            park_pre_dispatch(
+              runner,
+              operative_id,
+              channel,
+              channel,
+              "entry parse failed: #{inspect(reason)}",
+              message
+            )
+
+            :parked
+        end
+    end
+  end
+
+  # A name the operative declares resolves to it; a name it does not is
+  # unresolved, and parks under the name it asked for rather than reaching
+  # whichever entry channel happens to be first. A frame naming no channel
+  # takes the first DECLARED entry — the source-plugin default, and the order
+  # `entry_order` keeps, because `entries` is a map and its key order is the
+  # term order, which is not the author's — and is unresolved only when there
+  # is none to take.
+  #
+  # The answer is asymmetric on purpose: this runs once per input frame, so
+  # the resolved arm returns the name itself and allocates nothing, and only
+  # the cold arm builds a tuple. A declared name is a binary and can never
+  # match `{:unresolved, _}`.
+  defp resolve_channel(topo, channel) when is_binary(channel) do
+    if Map.has_key?(topo.entries, channel), do: channel, else: {:unresolved, channel}
+  end
+
+  defp resolve_channel(topo, _channel) do
+    case topo.entry_order do
+      [first | _] -> first
+      [] -> {:unresolved, ""}
+    end
+  end
+
+  # The bytes through the entry channel's parser; a channel without one passes
+  # them as they are.
+  defp parse(topo, channel, message) do
+    case Map.get(topo.entries, channel) do
+      %{parser: parser} -> safe_parse(parser, message)
+      nil -> {:ok, message}
+    end
+  end
+
+  defp safe_parse(parser, message) do
+    parser.(message)
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  # Why the frame did not enter: the name it asked for against the set the
+  # operative declares, or that it declares none at all. `flz_core`'s
+  # `unresolved_entry_error` answers in the same words, over the same sorted
+  # set, so an operator reading a DLQ row cannot tell which core wrote it.
+  defp unresolved_entry_error(topo, requested) do
+    case Enum.sort(topo.entry_order) do
+      [] ->
+        "the operative declares no entry channel"
+
+      declared ->
+        "no entry channel `#{requested}`; the operative declares: #{Enum.join(declared, ", ")}"
+    end
+  end
+
+  @doc """
+  A pre-dispatch park (entry parse, unresolved channel, partition mis-route),
+  forwarded to the runner which owns the ack loop. The park_id uses a fresh
+  unique integer since no Cell seq exists yet.
+
+  `tasklet_id` is the identity slot, which the controller turns into a
+  DIRECTORY under the dead-letter root, so it is always a value this side
+  chose. `channel` is the row's attribution and may be a name off the wire.
+  """
+  def park_pre_dispatch(runner, operative_id, tasklet_id, channel, error, payload) do
+    park_id = "#{operative_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
+
+    Park.ship(
+      runner,
+      self(),
+      Park.identity(operative_id, tasklet_id, ""),
+      Park.body(park_id, channel, error, 1, payload)
+    )
+
+    :ok
+  end
 end

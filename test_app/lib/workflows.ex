@@ -302,7 +302,7 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  # Echoes the spawn args, which a `:once` workflow's first pass is seeded with.
+  # Echoes the first message, which a `:once` workflow's one pass runs on.
   defmodule Echo do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
@@ -329,6 +329,38 @@ defmodule ElixirRunner.Workflows do
       |> input("in")
       |> into(ElixirRunner.Workflows.Echo)
       |> sink("out")
+    end
+  end
+
+  # `typed_once_workflow`: a `once` class whose entry channel `order` decodes
+  # a JSON ticket; its one tasklet prints the text, emits it to its sink and
+  # completes with it, so the pass runs on the payload it was spawned with.
+  defmodule OncePlaced do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "once_placed"
+    def init_state(_), do: nil
+
+    def run(%{"text" => text}, state, ctx) do
+      IO.puts("once_ran #{text}")
+      Flezha.SDK.Ctx.complete(ctx, text)
+      Flezha.SDK.Ctx.emit(ctx, "placed:" <> text)
+      {:ok, state}
+    end
+  end
+
+  defmodule TypedOnceWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "typed_once_workflow"
+
+    def tasklets(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input_with("order", &Jason.decode/1)
+      |> into(ElixirRunner.Workflows.OncePlaced)
+      |> sink("placed")
     end
   end
 
@@ -534,6 +566,7 @@ defmodule ElixirRunner.Workflows do
   def all do
     [
       EchoWorkflow,
+      TypedOnceWorkflow,
       CommitBlockWorkflow,
       SyncDurableWorkflow,
       OptOutCommitBlockWorkflow,

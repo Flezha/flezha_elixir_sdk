@@ -6,8 +6,11 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   A structured class authors on the same builder a stream class does, so its
   topology is compiled by `Flezha.SDK.Topology.build/2` and only the refusals a
-  *bounded* graph adds are decided here: single-rooted, acyclic, reachable, no
-  dynamic cells, and a chained loop that converges on one terminal.
+  *bounded* graph adds are decided here: an entry channel to arrive on,
+  acyclic, reachable, no dynamic cells, and a chained loop whose every chain
+  converges on one terminal. Each entry channel roots a chain (the nodes it
+  feeds and everything reachable from them), and a message runs only the chain
+  of the channel it arrived on.
 
   Four refusals the reference carries have no spelling in this SDK and are
   deliberately absent rather than written as branches nothing reaches. A
@@ -35,17 +38,26 @@ defmodule Flezha.SDK.Workflow.Spec do
   @type t :: %__MODULE__{}
 
   @typedoc """
-  The tasklet DAG in Kahn order from the root: a node's position in `order`
-  is its `task_idx` on the wire, and reversing the order is the compensation
-  order.
+  The tasklet DAG in Kahn order from the entry channels' consumers: a node's
+  position in `order` is its `task_idx` on the wire, and reversing the order
+  is the compensation order. `chains` holds, per entry channel name, the
+  nodes it feeds (`roots`), every node reachable from them (`members`), each
+  member's count of producers inside the chain (what a join waits for in a
+  pass on that channel), and the chain's `leaves`.
   """
+  @type chain :: %{
+          roots: [reference()],
+          members: MapSet.t(reference()),
+          parents_in_chain: %{reference() => non_neg_integer()},
+          leaves: [reference()]
+        }
   @type dag :: %{
           order: [reference()],
           pos: %{reference() => non_neg_integer()},
           parents: %{reference() => [reference()]},
           children: %{reference() => [reference()]},
-          root: reference() | nil,
-          leaves: [reference()]
+          leaves: [reference()],
+          chains: %{String.t() => chain()}
         }
 
   @doc """
@@ -81,44 +93,22 @@ defmodule Flezha.SDK.Workflow.Spec do
   # --- the shape a bounded graph adds on top of a stream topology ---
 
   defp shape(factory_id, topo, knobs) do
-    roots = entry_roots(topo)
-    dag = dag(Graph.walk(topo.node_seq, Topology.node_edges(topo.routes)), roots)
+    walk = Graph.walk(topo.node_seq, Topology.node_edges(topo.routes))
+    dag = dag(topo, walk)
 
     issues =
       []
-      |> check_entry(factory_id, topo, roots)
-      |> check_merge_from_entry(factory_id, topo)
+      |> check_entry(factory_id, topo)
       |> check_dynamic_cells(factory_id, topo)
       |> check_chained_loop(factory_id, dag, knobs)
 
     {dag, issues}
   end
 
-  # A structured workflow is seeded through ONE entry channel feeding exactly
-  # one tasklet, which then fans out: the spawn args carry no channel name,
-  # so a second entry — or a second consumer on the one entry — names no
-  # sender the driver could route from.
-  defp check_entry(is, factory_id, topo, roots) do
-    case {map_size(topo.entries), roots} do
-      {0, _} -> [{:NoEntryChannel, factory_id} | is]
-      {_, [_one]} -> is
-      {_, many} -> [{:EntryRoot, factory_id, entry_names(topo), length(many)} | is]
-    end
-  end
-
-  # An entry channel cannot be one merge source among several: neither the
-  # spawn args nor a `:per_input` inbox item carries the channel it arrived
-  # on, so a tasklet fed by the entry AND by a producer could not tell its
-  # two inputs apart. Merge the outputs of two tasklets instead.
-  defp check_merge_from_entry(is, factory_id, topo) do
-    from_entry = consumers_by_source(topo, &match?({:entry, _}, &1))
-    from_node = consumers_by_source(topo, &match?({:node, _}, &1))
-
-    from_entry
-    |> Enum.filter(&MapSet.member?(from_node, &1))
-    |> Enum.reduce(is, fn ref, is ->
-      [{:MergeFromEntryChannel, factory_id, entry_names(topo), node_label(topo, ref)} | is]
-    end)
+  # A workflow's messages arrive on its entry channels; a class with none
+  # has nothing its messages could arrive on.
+  defp check_entry(is, factory_id, topo) do
+    if map_size(topo.entries) == 0, do: [{:NoEntryChannel, factory_id} | is], else: is
   end
 
   defp check_dynamic_cells(is, factory_id, topo) do
@@ -129,12 +119,15 @@ defmodule Flezha.SDK.Workflow.Spec do
   end
 
   # Iteration N+1 of a handoff-chained loop is seeded from iteration N's
-  # terminal batch, which a graph with several leaves does not define.
+  # terminal batch, which a chain with several leaves does not define; every
+  # chain the loop can enter is judged.
   defp check_chained_loop(is, factory_id, dag, %{loop_mode: :chained}) do
-    case dag.leaves do
-      [_one] -> is
-      many -> [{:BranchingChainedLoop, factory_id, length(many)} | is]
-    end
+    Enum.reduce(dag.chains, is, fn {_channel, chain}, is ->
+      case chain.leaves do
+        [_one] -> is
+        many -> [{:BranchingChainedLoop, factory_id, length(many)} | is]
+      end
+    end)
   end
 
   defp check_chained_loop(is, _factory_id, _dag, _knobs), do: is
@@ -196,30 +189,45 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   # --- projections ---
 
-  defp dag(walk, roots) do
+  defp dag(topo, walk) do
     leaves = Enum.filter(walk.order, &(Map.fetch!(walk.children, &1) == []))
 
     walk
     |> Map.take([:order, :pos, :parents, :children])
-    |> Map.merge(%{root: List.first(roots), leaves: leaves})
+    |> Map.merge(%{leaves: leaves, chains: entry_chains(topo, walk, leaves)})
   end
 
-  # The tasklets an entry channel feeds, in declaration order.
-  defp entry_roots(topo) do
-    topo
-    |> consumers_by_source(&match?({:entry, _}, &1))
-    |> Enum.sort_by(&Map.fetch!(topo.node_seq, &1))
+  # One chain per entry channel, in declaration order: the tasklets the
+  # channel feeds, everything reachable from them, each member's producers
+  # inside the chain, and the graph's leaves it reaches.
+  defp entry_chains(topo, walk, leaves) do
+    for channel <- topo.entry_order, into: %{} do
+      roots =
+        for(%{to: {:node, ref}} <- Map.get(topo.routes, {:entry, channel}, []), do: ref)
+        |> Enum.uniq()
+        |> Enum.sort_by(&Map.fetch!(topo.node_seq, &1))
+
+      members = reachable(walk.children, roots, MapSet.new())
+
+      parents_in_chain =
+        Map.new(members, fn ref ->
+          {ref, Enum.count(Map.fetch!(walk.parents, ref), &MapSet.member?(members, &1))}
+        end)
+
+      leaves = Enum.filter(leaves, &MapSet.member?(members, &1))
+
+      {channel,
+       %{roots: roots, members: members, parents_in_chain: parents_in_chain, leaves: leaves}}
+    end
   end
 
-  defp consumers_by_source(topo, source?) do
-    for {source, routes} <- topo.routes,
-        source?.(source),
-        %{to: {:node, ref}} <- routes,
-        into: MapSet.new(),
-        do: ref
-  end
+  defp reachable(_children, [], seen), do: seen
 
-  defp entry_names(topo), do: topo.entries |> Map.keys() |> Enum.sort() |> Enum.join(", ")
+  defp reachable(children, [ref | rest], seen) do
+    if MapSet.member?(seen, ref),
+      do: reachable(children, rest, seen),
+      else: reachable(children, Map.fetch!(children, ref) ++ rest, MapSet.put(seen, ref))
+  end
 
   # How a refusal names a node: the name the author gave it, else the
   # tasklet's own. `tasklet_name/2` is the other rule — what `name/0`

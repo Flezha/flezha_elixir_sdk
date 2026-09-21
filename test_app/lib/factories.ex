@@ -628,10 +628,11 @@ defmodule ElixirRunner.SpawnRequesterTask do
     {:ok, s}
   end
 
-  defp report(label, {:ok, %{id: id, outcome: outcome}}),
+  @doc false
+  def report(label, {:ok, %{id: id, outcome: outcome}}),
     do: IO.puts("spawn_result #{label} #{id} #{outcome}")
 
-  defp report(label, {:error, reason}),
+  def report(label, {:error, reason}),
     do: IO.puts("spawn_result #{label} error #{inspect(reason)}")
 end
 
@@ -646,6 +647,40 @@ defmodule ElixirRunner.SpawnRequesterOp do
     c
     |> input("in")
     |> into(ElixirRunner.SpawnRequesterTask)
+  end
+end
+
+# -- spawn_once_requester ---------------------------------------------------
+
+defmodule ElixirRunner.SpawnOnceRequesterTask do
+  @moduledoc false
+  @behaviour Flezha.SDK.Tasklet
+
+  alias Flezha.SDK.{Ctx, Spawn}
+
+  def name, do: "spawn_once_requester_tasklet"
+  def init_state(_), do: nil
+
+  # Spawns the `once` workflow with the input as its JSON ticket and prints the
+  # handle's answer; the spawned pass proves itself on stdout too.
+  def run(input, s, ctx) do
+    handle = Ctx.spawn_workflow(ctx, "typed_once_workflow", Jason.encode!(%{"text" => input}))
+    ElixirRunner.SpawnRequesterTask.report("once", Spawn.await(handle))
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.SpawnOnceRequesterOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.StreamOperative
+  def factory_id, do: "spawn_once_requester"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("in")
+    |> into(ElixirRunner.SpawnOnceRequesterTask)
   end
 end
 
@@ -667,7 +702,8 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,
       ElixirRunner.PartitionRelayOp,
-      ElixirRunner.SpawnRequesterOp
+      ElixirRunner.SpawnRequesterOp,
+      ElixirRunner.SpawnOnceRequesterOp
     ] ++ ElixirRunner.FactoriesState.all()
   end
 

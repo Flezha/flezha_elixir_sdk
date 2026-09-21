@@ -28,44 +28,81 @@ defmodule Flezha.SDK.Workflow.Resume do
   @spec decode(binary()) :: term()
   def decode(payload), do: :erlang.binary_to_term(payload, [:safe])
 
-  @doc """
-  The frontier a journal re-opens: `%{ready: [{node_ref, batch}], pending:,
-  waiting:, completed:, completions:}`, or `nil` when the bind carried no
-  journal and the iteration seeds fresh.
-  """
-  @spec start(struct(), (reference(), reference(), [term()] -> [term()])) :: map() | nil
-  def start(%{instance: %Instance{journal: nil}}, _through_edge), do: nil
+  @doc "The terminal batch the last committed iteration journaled, read back."
+  def carry(journal), do: Enum.map(journal.handoff, fn {_id, payload} -> decode(payload) end)
 
-  def start(%{instance: %Instance{journal: journal}} = state, through_edge) do
+  @doc """
+  Whether the journal the bind carried says a pass was in flight: a root of
+  some chain committed inside the resume iteration.
+  """
+  @spec mid_iteration?(Instance.t()) :: boolean()
+  def mid_iteration?(%Instance{journal: nil}), do: false
+
+  def mid_iteration?(%Instance{journal: journal, spec: spec}) do
+    roots =
+      for {_channel, chain} <- spec.dag.chains,
+          root <- chain.roots,
+          do: Map.fetch!(spec.dag.pos, root)
+
+    Enum.any?(journal.committed_task_idxs, &(&1 in roots))
+  end
+
+  @doc """
+  The frontier a journal re-opens for the pass on `channel`: `%{channel:,
+  ready: [{node_ref, batch}], pending:, waiting:, completed:, completions:}`.
+  An uncommitted root re-runs over `message`, the one the controller
+  re-forwarded, through its entry edge, or over the journaled carry when the
+  pass is carry-fed; a join counts only the producers in this chain.
+  """
+  @spec start(
+          struct(),
+          String.t(),
+          Instance.Item.t() | nil,
+          (term(), reference(), [term()] -> [term()])
+        ) :: map()
+  def start(%{instance: %Instance{journal: journal}} = state, channel, message, through_edge) do
     dag = state.spec.dag
+    chain = Map.fetch!(dag.chains, channel)
     committed = MapSet.new(journal.committed_task_idxs)
 
-    if MapSet.size(committed) == 0 do
-      nil
-    else
-      dag.order
-      |> Enum.reject(&MapSet.member?(committed, Map.fetch!(dag.pos, &1)))
-      |> Enum.reduce(%{ready: [], pending: %{}, waiting: %{}}, fn node, acc ->
-        reseed(acc, state, node, committed, journal, through_edge)
-      end)
-      |> Map.put(:completed, completed_stages(state, committed))
-      |> Map.put(:completions, journaled_completions(journal, committed))
-    end
+    dag.order
+    |> Enum.filter(&MapSet.member?(chain.members, &1))
+    |> Enum.reject(&MapSet.member?(committed, Map.fetch!(dag.pos, &1)))
+    |> Enum.reduce(%{channel: channel, ready: [], pending: %{}, waiting: %{}}, fn node, acc ->
+      reseed(acc, state, chain, node, committed, journal, message, through_edge)
+    end)
+    |> Map.put(:completed, completed_stages(state, committed))
+    |> Map.put(:completions, journaled_completions(journal, committed))
   end
 
   # One uncommitted node's share of the journal: what each of its committed
-  # producers released, through that edge. A node with no committed producer
-  # is left alone — it becomes runnable through the ordinary accumulate once
-  # its producer runs.
-  defp reseed(acc, state, node, committed, journal, through_edge) do
+  # producers in the chain released, through that edge. A root re-runs over
+  # the pass's message or carry; a node with no committed producer is left
+  # alone: it becomes runnable through the ordinary accumulate once its
+  # producer runs.
+  defp reseed(acc, state, chain, node, committed, journal, message, through_edge) do
     dag = state.spec.dag
-    parents = Map.fetch!(dag.parents, node)
-    {done, owed} = Enum.split_with(parents, &MapSet.member?(committed, Map.fetch!(dag.pos, &1)))
 
-    if done == [],
-      do: acc,
-      else: seeded(acc, node, banked(journal, dag, done, node, through_edge), owed)
+    if node in chain.roots do
+      seeded(acc, node, root_batch(acc.channel, node, journal, message, through_edge), [])
+    else
+      parents = Map.fetch!(dag.parents, node) |> Enum.filter(&MapSet.member?(chain.members, &1))
+
+      {done, owed} =
+        Enum.split_with(parents, &MapSet.member?(committed, Map.fetch!(dag.pos, &1)))
+
+      if done == [],
+        do: acc,
+        else: seeded(acc, node, banked(journal, dag, done, node, through_edge), owed)
+    end
   end
+
+  # What an uncommitted root runs over again: the re-forwarded message through
+  # the entry edge, or the previous terminal batch a chained pass carried.
+  defp root_batch(channel, root, _journal, %Instance.Item{payload: payload}, through_edge),
+    do: through_edge.({:entry, channel}, root, [payload])
+
+  defp root_batch(_channel, _root, journal, nil, _through_edge), do: carry(journal)
 
   # What every committed producer of `node` released, each through its own
   # edge — the same application the live pass made.
@@ -78,6 +115,7 @@ defmodule Flezha.SDK.Workflow.Resume do
     end)
   end
 
+  defp seeded(acc, _node, [], []), do: acc
   defp seeded(acc, node, batch, []), do: %{acc | ready: acc.ready ++ [{node, batch}]}
 
   defp seeded(acc, node, batch, owed),
@@ -87,8 +125,16 @@ defmodule Flezha.SDK.Workflow.Resume do
         waiting: Map.put(acc.waiting, node, length(owed))
     }
 
-  # The committed tasklets as stage records, in DAG order so an unwind runs
-  # them back to front. The outputs are empty by construction.
+  @doc """
+  The journal's committed tasklets as stage records, in DAG order so an
+  unwind runs them back to front; the outputs are empty by construction.
+  """
+  @spec completed_stages(struct()) :: [map()]
+  def completed_stages(%{instance: %Instance{journal: nil}}), do: []
+
+  def completed_stages(%{instance: %Instance{journal: journal}} = state),
+    do: completed_stages(state, MapSet.new(journal.committed_task_idxs))
+
   defp completed_stages(state, committed) do
     dag = state.spec.dag
 

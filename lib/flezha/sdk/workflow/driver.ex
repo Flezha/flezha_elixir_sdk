@@ -1,10 +1,11 @@
 defmodule Flezha.SDK.Workflow.Driver do
   @moduledoc """
-  One process per workflow instance: the stage driver. It walks the class's
-  DAG frontier by frontier — a tasklet becomes runnable once every producer
-  feeding it has committed, so a fan-in is dispatched exactly once with the
-  accumulated batch of all its producers — commits each stage durably, and
-  ends by shipping `WorkflowCompleted`.
+  One process per workflow instance: the stage driver. A pass walks the chain
+  of the entry channel its message arrived on, frontier by frontier: a tasklet
+  becomes runnable once every producer feeding it in that chain has committed,
+  so a fan-in is dispatched exactly once with the accumulated batch of this
+  pass's producers. It commits each stage durably and ends by shipping
+  `WorkflowCompleted`.
 
   It presents the same contract to an `Flezha.SDK.Cell` that
   `Flezha.SDK.Operative` does: a Cell casts its emits to its `operative`
@@ -18,8 +19,13 @@ defmodule Flezha.SDK.Workflow.Driver do
   stop, the inbox push or the restore that must reach it while a stage is in
   flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from a
   Cell's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
-  and for a `:per_input` loop with nothing queued, its next input or the idle
+  and for a message-fed pass with nothing queued, its next message or the idle
   window's `{:park_idle, ref}`.
+
+  A message enters through the same `Flezha.SDK.Operative.Inbox.enter/5` the
+  stream operative's frames take, and runs only the chain of the entry channel
+  it arrived on; a chained loop's later passes re-enter the chain its first
+  message picked.
   """
 
   use GenServer
@@ -36,7 +42,6 @@ defmodule Flezha.SDK.Workflow.Driver do
       :instance,
       :spec,
       :operative_id,
-      :args,
       :runner,
       :counters,
       :credit,
@@ -67,6 +72,9 @@ defmodule Flezha.SDK.Workflow.Driver do
       # the stage whose barrier is in flight, and the ladder it is on
       barrier: nil,
       carry: nil,
+      # the entry channel whose chain the pass runs; a carry-fed pass keeps
+      # the one the loop's first message picked
+      pass_channel: nil,
       consumed_offset: 0,
       iter: 0,
       cancel: nil,
@@ -92,7 +100,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   @doc "Cooperative external stop: the run unwinds and completes as `cancelled`."
   def stop_workflow(pid), do: send(pid, :workflow_stop)
 
-  @doc "Append one post-start input for a `:per_input` loop."
+  @doc "Send one message on the first declared entry channel."
   def push_inbox(pid, payload), do: GenServer.cast(pid, {:input, nil, payload, %{}})
 
   # --- server ---
@@ -101,17 +109,18 @@ defmodule Flezha.SDK.Workflow.Driver do
   def init(opts) do
     spec = Keyword.fetch!(opts, :spec)
     operative_id = Keyword.fetch!(opts, :operative_id)
+    journal = journal(opts)
 
     state = %State{
       instance:
         Instance.new(operative_id, spec,
-          journal: journal(opts),
+          journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
           park_idle_ms: Keyword.get(opts, :park_idle_ms)
         ),
       spec: spec,
       operative_id: operative_id,
-      args: Keyword.get(opts, :args, ""),
+      pass_channel: journaled_channel(spec, journal),
       runner: Keyword.fetch!(opts, :runner),
       counters: Keyword.fetch!(opts, :counters),
       credit: Keyword.get(opts, :credit),
@@ -217,21 +226,20 @@ defmodule Flezha.SDK.Workflow.Driver do
   def handle_cast({:stage_failed, node_ref, error}, %State{} = s),
     do: settle(fail(s, node_ref, error))
 
-  # A post-start input off the bound data stream. A `:per_input` loop queues it
-  # and, if it was waiting for one, starts its next iteration; any other loop
-  # shape has no inbox to put it in, so it is logged and dropped rather than
-  # silently seeding a second run.
-  def handle_cast({:input, _channel, message, metadata}, %State{} = s) do
-    if s.spec.knobs.loop_mode == :per_input do
-      s = %{s | instance: Instance.push_inbox(s.instance, message, metadata)}
-      if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
-    else
-      Logger.warning(
-        "[Flezha.SDK] #{s.operative_id} discarded an input: a #{s.spec.knobs.loop_mode} " <>
-          "workflow consumes no inbox"
-      )
+  # A message off the bound data stream, through the same entrance a stream
+  # operative's frame takes: an undeclared name or a parser refusal parks it,
+  # consumed without a pass, and a driver waiting for a message waits a fresh
+  # idle window. A readable one waits in the inbox for the next message-fed
+  # pass; a driver waiting for one starts that pass now.
+  def handle_cast({:input, channel, message, metadata}, %State{} = s) do
+    case Inbox.enter(s.runner, s.operative_id, s.spec.topology, channel, message) do
+      {:ok, channel, value} ->
+        s = %{s | instance: Instance.push_inbox(s.instance, channel, value, metadata)}
+        if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
 
-      {:noreply, s}
+      :parked ->
+        s = %{s | instance: Instance.entry_parked(s.instance, metadata)}
+        if s.idle, do: {:noreply, await_input(s)}, else: {:noreply, s}
     end
   end
 
@@ -341,9 +349,26 @@ defmodule Flezha.SDK.Workflow.Driver do
     do: complete(s, "cancelled", "")
 
   defp begin_iteration(%State{} = s) do
-    case Resume.start(s, &through_edge(s, &1, &2, &3)) do
-      nil -> fresh_seed(s)
-      start -> resume_iteration(s, start)
+    if Resume.mid_iteration?(s.instance),
+      do: resume_mid_iteration(s),
+      else: fresh_seed(s)
+  end
+
+  # The pass the crash interrupted resumes as the pass it was: a message-fed
+  # one re-takes the message the controller re-forwards (waiting for it if it
+  # has not landed yet), a carry-fed one re-enters the journaled chain.
+  defp resume_mid_iteration(%State{} = s) do
+    if message_fed?(s) do
+      case pop_message(s) do
+        {:message, s, item} ->
+          resume_iteration(s, Resume.start(s, item.channel, item, &through_edge(s, &1, &2, &3)))
+
+        :wait ->
+          await_input(s)
+      end
+    else
+      channel = carried_channel(s)
+      resume_iteration(s, Resume.start(s, channel, nil, &through_edge(s, &1, &2, &3)))
     end
   end
 
@@ -356,6 +381,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     s = %{
       fresh_iteration(s)
       | instance: instance,
+        pass_channel: start.channel,
         pending: start.pending,
         waiting: start.waiting,
         completed: start.completed,
@@ -366,15 +392,63 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   defp fresh_seed(%State{} = s) do
-    {_journal, instance} = Instance.take_journal(s.instance)
-    s = %{s | instance: instance}
+    {journal, instance} = Instance.take_journal(s.instance)
+    s = %{s | instance: instance, carry: s.carry || journaled_carry(s, journal)}
 
     case seed(s) do
-      {:seeded, s, batch} -> dispatch_frontier(fresh_iteration(s), [{s.spec.dag.root, batch}])
-      {:done, s} -> complete(s, "ok", "")
-      :wait -> await_input(s)
+      {:message, s, item} ->
+        enter_pass(s, item)
+
+      {:carry, s, batch} ->
+        channel = carried_channel(s)
+        start_pass(s, channel, frontier(s, channel, fn _root -> batch end))
+
+      {:done, s} ->
+        complete(s, "ok", "")
+
+      :wait ->
+        await_input(s)
     end
   end
+
+  # A message's pass: every root of its chain, each through its own entry
+  # edge. An edge whose transform rejects the message parks it under the
+  # channel, consumed without a pass, and the instance goes back to waiting.
+  defp enter_pass(%State{} = s, item) do
+    case entry_frontier(s, item) do
+      {:ok, frontier} ->
+        start_pass(s, item.channel, frontier)
+
+      {:rejected, reason} ->
+        Inbox.park_pre_dispatch(
+          s.runner,
+          s.operative_id,
+          item.channel,
+          item.channel,
+          "entry edge failed: " <> reason,
+          nil
+        )
+
+        await_input(%{s | instance: Instance.note_parked(s.instance, item.offset)})
+    end
+  end
+
+  defp entry_frontier(%State{} = s, item) do
+    {:ok, frontier(s, item.channel, &through_edge(s, {:entry, item.channel}, &1, [item.payload]))}
+  rescue
+    e -> {:rejected, Exception.message(e)}
+  end
+
+  # A pass's first frontier: every root of the chain that has a batch.
+  defp frontier(%State{} = s, channel, batch_for) do
+    for root <- Map.fetch!(s.spec.dag.chains, channel).roots,
+        batch = batch_for.(root),
+        batch != [],
+        do: {root, batch}
+  end
+
+  defp start_pass(%State{} = s, channel, frontier),
+    do: dispatch_frontier(%{fresh_iteration(s) | pass_channel: channel}, frontier)
 
   # An empty inbox is waited on as the reference waits: for the tail a
   # rehydrating bind still owes, else for the idle window, and the loop parks
@@ -389,31 +463,55 @@ defmodule Flezha.SDK.Workflow.Driver do
     %{s | idle: ref}
   end
 
-  # Where iteration `iter` starts: the next inbox item for a per-input loop,
-  # which never reads the spawn args; the args on the first pass of any other;
-  # the previous terminal batch for a handoff-chained loop.
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :per_input}}} = s) do
+  # Where iteration `iter` starts: the next message for a message-fed pass
+  # (every pass of a `:per_input` loop, the first of any other), with nothing
+  # queued meaning wait; done for a `:once` class after its one pass; the
+  # previous terminal batch for a handoff-chained loop, which ends on an
+  # empty one.
+  defp seed(%State{} = s) do
+    cond do
+      message_fed?(s) -> pop_message(s)
+      s.spec.knobs.loop_mode == :once -> {:done, s}
+      s.carry in [nil, []] -> {:done, s}
+      true -> {:carry, %{s | carry: nil}, s.carry}
+    end
+  end
+
+  defp pop_message(%State{} = s) do
     case Instance.pop_inbox(s.instance) do
       {:ok, item, instance} ->
-        {:seeded, %{s | instance: instance, consumed_offset: item.offset}, [item.payload]}
+        {:message, %{s | instance: instance, consumed_offset: item.offset}, item}
 
       {:empty, _instance} ->
         :wait
     end
   end
 
-  defp seed(%State{iter: 0, carry: nil} = s), do: {:seeded, s, [s.args]}
+  # Every pass of a `:per_input` loop takes a message; any loop's first pass
+  # does; a chained loop's later passes are carry-fed.
+  defp message_fed?(%State{spec: %Spec{knobs: %{loop_mode: :per_input}}}), do: true
+  defp message_fed?(%State{iter: 0}), do: true
+  defp message_fed?(%State{}), do: false
 
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :once}}} = s), do: {:done, s}
+  # The chain a carry-fed pass re-enters: the one the loop's first message
+  # picked, or the journaled one after a resume.
+  defp carried_channel(%State{pass_channel: channel}) when is_binary(channel), do: channel
+  defp carried_channel(%State{spec: spec}), do: hd(spec.topology.entry_order)
 
-  # A chained loop ends on an empty terminal batch: there is nothing to seed
-  # the next pass with.
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :chained}}, carry: carry} = s)
-       when carry in [nil, []],
-       do: {:done, s}
+  # The entry channel the journal names, when the class still declares it.
+  defp journaled_channel(_spec, nil), do: nil
 
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :chained}}, carry: batch} = s),
-    do: {:seeded, %{s | carry: nil}, batch}
+  defp journaled_channel(%Spec{topology: topo}, journal) do
+    if journal.entry_channel in topo.entry_order, do: journal.entry_channel
+  end
+
+  # A chained loop resuming past its first pass carries the journaled
+  # terminal batch into its next pass.
+  defp journaled_carry(%State{spec: %Spec{knobs: %{loop_mode: :chained}}, iter: iter}, journal)
+       when iter > 0 and journal != nil,
+       do: Resume.carry(journal)
+
+  defp journaled_carry(_s, _journal), do: nil
 
   defp fresh_iteration(%State{} = s),
     do: %{
@@ -511,14 +609,16 @@ defmodule Flezha.SDK.Workflow.Driver do
     }
 
   # The committed stage's release accumulates into each child, which becomes
-  # runnable once every producer feeding it has committed.
+  # runnable once every producer feeding it in this pass's chain has
+  # committed; a producer of another chain is not running and is never
+  # waited for.
   defp advance(%State{frontier: [{node_ref, _} | rest]} = s) do
     batch = Map.get(s.collected, node_ref, [])
     children = Map.fetch!(s.spec.dag.children, node_ref)
 
     s =
       Enum.reduce(children, s, fn child, acc ->
-        owed = Map.get(acc.waiting, child, length(Map.fetch!(acc.spec.dag.parents, child))) - 1
+        owed = Map.get(acc.waiting, child, chain_parents(acc, child)) - 1
         mapped = through_edge(acc, node_ref, child, batch)
         pending = Map.update(acc.pending, child, mapped, &(&1 ++ mapped))
 
@@ -552,6 +652,7 @@ defmodule Flezha.SDK.Workflow.Driver do
           operative_id: s.operative_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
+          entry_channel: s.pass_channel,
           handoff: terminal_handoff(s),
           completes: completion(s) != nil,
           result: result_of(completion(s))
@@ -640,13 +741,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp unwind(%State{unwind: %{status: nil}, completed: []} = s, status, error) do
     # A resumed unwind has run no stage of its own, so what it undoes comes
     # from the journal rather than from this bind's progress.
-    completed =
-      case Resume.start(s, &through_edge(s, &1, &2, &3)) do
-        nil -> []
-        start -> start.completed
-      end
-
-    do_unwind(%{s | completed: completed}, status, error)
+    do_unwind(%{s | completed: Resume.completed_stages(s)}, status, error)
   end
 
   defp unwind(%State{unwind: %{status: nil}} = s, status, error), do: do_unwind(s, status, error)
@@ -683,10 +778,11 @@ defmodule Flezha.SDK.Workflow.Driver do
   # A park is not a terminal outcome: the instance tears its run down WITHOUT
   # a `WorkflowCompleted`, and the controller keeps it suspended until an
   # inbox append or the wake deadline rehydrates it. The park record names the
-  # last COMMITTED iteration, so a resume enters the one after it either way.
+  # last COMMITTED iteration, so a resume enters the one after it either way,
+  # and the last message the run parked unread, which the inbox releases.
   defp park(%State{} = s) do
     wake = s.spec.knobs.wake_after_ms || 0
-    Commit.park(s.runner, s.operative_id, max(s.iter - 1, 0), wake)
+    Commit.park(s.runner, s.operative_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
     %{s | terminal: :parked}
   end
 
@@ -744,15 +840,22 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp terminal_handoff(%State{carry: nil}), do: []
 
   defp terminal_handoff(%State{carry: carry} = s) do
-    id = s.spec.dag.leaves |> List.first() |> then(&Map.get(s.spec.dag.pos, &1, 0))
+    leaves = Map.fetch!(s.spec.dag.chains, carried_channel(s)).leaves
+    id = leaves |> List.first() |> then(&Map.get(s.spec.dag.pos, &1, 0))
     Enum.map(carry, fn value -> {id, encode(value)} end)
   end
+
+  # The producers of `child` a join waits for in this pass: those inside the
+  # pass's chain.
+  defp chain_parents(%State{spec: spec, pass_channel: channel}, child),
+    do: spec.dag.chains |> Map.fetch!(channel) |> Map.fetch!(:parents_in_chain) |> Map.get(child, 0)
 
   defp encode(value), do: Resume.encode(value)
 
   # An edge's fused transform, applied once as the batch crosses it — the same
   # application a resumed re-seed makes, so a resumed chain sees what the live
-  # one did.
+  # one did. `from` is a producing node, or `{:entry, channel}` for the edge a
+  # message enters on.
   defp through_edge(%State{} = s, from, to, batch) do
     case edge_route(s, from, to) do
       nil -> batch
@@ -760,9 +863,12 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  defp edge_route(%State{} = s, from, to) do
+  defp edge_route(%State{} = s, {:entry, _} = source, to), do: route_into(s, source, to)
+  defp edge_route(%State{} = s, from, to), do: route_into(s, {:node, from}, to)
+
+  defp route_into(%State{} = s, source, to) do
     s.spec.topology.routes
-    |> Map.get({:node, from}, [])
+    |> Map.get(source, [])
     |> Enum.find(&match?(%{to: {:node, ^to}}, &1))
   end
 

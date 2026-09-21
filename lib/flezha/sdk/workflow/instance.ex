@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Workflow.Instance do
   @moduledoc """
   One workflow instance's runtime state, as the driver process holds it: the
-  inbox a `:per_input` loop consumes, the compensation markers a saga reads,
-  and the committed task-journal the bind carried for a crash-resume.
+  inbox every message-fed pass consumes, the compensation markers a saga
+  reads, and the committed task-journal the bind carried for a crash-resume.
 
   It is a struct rather than a process. The reference carries a cancellation
   flag, a restore condition variable and a bounded channel here because its
@@ -16,9 +16,13 @@ defmodule Flezha.SDK.Workflow.Instance do
   alias Flezha.SDK.Workflow.Spec
 
   defmodule Item do
-    @moduledoc "One post-start input with its durable-inbox offset; `0` when unjournaled."
-    defstruct [:payload, offset: 0]
-    @type t :: %__MODULE__{payload: binary(), offset: non_neg_integer()}
+    @moduledoc """
+    One message through the entrance: the entry channel it named, its value as
+    that channel's parser made it, and its durable-inbox offset (`0` when
+    unjournaled).
+    """
+    defstruct [:channel, :payload, offset: 0]
+    @type t :: %__MODULE__{channel: String.t(), payload: term(), offset: non_neg_integer()}
   end
 
   defmodule Committed do
@@ -42,6 +46,7 @@ defmodule Flezha.SDK.Workflow.Instance do
     """
     defstruct committed_task_idxs: [],
               iter: 0,
+              entry_channel: "",
               handoff: [],
               task_handoffs: %{},
               committed_tasks: [],
@@ -58,6 +63,7 @@ defmodule Flezha.SDK.Workflow.Instance do
             spec: nil,
             inbox: nil,
             owed_inbox: 0,
+            parked_offset: 0,
             park_idle_ms: nil,
             stage_cells: %{},
             journal: nil,
@@ -87,12 +93,26 @@ defmodule Flezha.SDK.Workflow.Instance do
 
   # --- inbox ---
 
-  @doc "Append one post-start input, at the durable-inbox offset its metadata carries."
-  @spec push_inbox(t(), binary(), map()) :: t()
-  def push_inbox(%__MODULE__{} = i, payload, metadata) do
-    item = %Item{payload: payload, offset: inbox_offset(metadata)}
-    %{i | inbox: :queue.in(item, i.inbox), owed_inbox: max(i.owed_inbox - 1, 0)}
+  @doc "Append one message on `channel`, at the durable-inbox offset its metadata carries."
+  @spec push_inbox(t(), String.t(), term(), map()) :: t()
+  def push_inbox(%__MODULE__{} = i, channel, payload, metadata) do
+    item = %Item{channel: channel, payload: payload, offset: inbox_offset(metadata)}
+    %{arrived(i) | inbox: :queue.in(item, i.inbox)}
   end
+
+  @doc """
+  A message the entrance parked to the dead-letter queue instead of queueing:
+  it arrived, so it settles its share of the owed tail, and it is consumed
+  without a pass.
+  """
+  @spec entry_parked(t(), map()) :: t()
+  def entry_parked(%__MODULE__{} = i, metadata),
+    do: i |> arrived() |> note_parked(inbox_offset(metadata))
+
+  @doc "A message consumed without a pass: the park record releases its offset."
+  @spec note_parked(t(), non_neg_integer()) :: t()
+  def note_parked(%__MODULE__{} = i, offset),
+    do: %{i | parked_offset: max(i.parked_offset, offset)}
 
   @doc "Take the next input, or `:empty`."
   @spec pop_inbox(t()) :: {:ok, Item.t(), t()} | {:empty, t()}
@@ -112,6 +132,10 @@ defmodule Flezha.SDK.Workflow.Instance do
     do: Knob.get(:sdk_owed_inbox_wait_ms)
 
   def idle_ms(%__MODULE__{park_idle_ms: ms}), do: ms
+
+  # Any message that arrives, queued or parked, settles its share of the tail
+  # a rehydrating bind still owes.
+  defp arrived(%__MODULE__{} = i), do: %{i | owed_inbox: max(i.owed_inbox - 1, 0)}
 
   # The controller stamps a journaled input with its offset; an unjournaled one
   # carries none and takes `0`.

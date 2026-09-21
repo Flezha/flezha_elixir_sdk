@@ -48,8 +48,8 @@ defmodule Flezha.SDK.WorkflowOperative do
   `Flezha.SDK.Channels` is imported.
 
   A module that writes its one tasklet's `run/3` instead of `tasklets/1`
-  is the §5 short form, a `once` workflow whose entry channel receives the
-  start values; see `Flezha.SDK.StreamOperative.__using__/1`:
+  is the §5 short form, a `once` workflow that runs its tasklet on its first
+  message; see `Flezha.SDK.StreamOperative.__using__/1`:
 
       use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
 
@@ -67,10 +67,11 @@ defmodule Flezha.SDK.WorkflowOperative do
   @callback factory_id() :: String.t()
 
   @doc """
-  Declare a static DAG on the channel builder. A tasklet becomes runnable
-  only once every producer feeding it has committed, so a fan-out interleaves
-  independently and a fan-in is dispatched once with the accumulated batch of
-  all its producers.
+  Declare a static DAG on the channel builder. Each entry channel roots a
+  chain, and a message runs only the chain of the channel it arrived on. A
+  tasklet becomes runnable once every producer feeding it in that chain has
+  committed, so a fan-out interleaves independently and a fan-in is dispatched
+  once with the accumulated batch of those producers.
   """
   @callback tasklets(Flezha.SDK.Channels.t()) :: any()
 
