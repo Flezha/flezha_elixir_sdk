@@ -64,19 +64,19 @@ defmodule Flezha.SDK.Codec do
 
   @doc "Encode a `RestoreInitStateResponse` — the raw_data of a `RestoreInitState` reply."
   @spec encode_restore_response(binary(), non_neg_integer(), boolean()) :: binary()
-  def encode_restore_response(entity_id, terminal_seq, migrated) do
+  def encode_restore_response(cell_id, terminal_seq, migrated) do
     encode(%RunnerCommands.RestoreInitStateResponse{
-      entity_id: entity_id,
+      cell_id: cell_id,
       terminal_seq: terminal_seq,
       migrated: migrated
     })
   end
 
-  @doc "Encode a `CompactEntityResponse` — the raw_data of a `CompactEntity` reply."
+  @doc "Encode a `CompactCellResponse` — the raw_data of a `CompactCell` reply."
   @spec encode_compact_response(binary(), non_neg_integer(), non_neg_integer()) :: binary()
-  def encode_compact_response(entity_id, snapshot_seq, snapshot_bytes_size) do
-    encode(%RunnerCommands.CompactEntityResponse{
-      entity_id: entity_id,
+  def encode_compact_response(cell_id, snapshot_seq, snapshot_bytes_size) do
+    encode(%RunnerCommands.CompactCellResponse{
+      cell_id: cell_id,
       snapshot_seq: snapshot_seq,
       snapshot_bytes_size: snapshot_bytes_size
     })
@@ -135,8 +135,8 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
-  @doc "The `ProcCommit` command tuple for one completed stage."
-  @spec proc_commit_command(
+  @doc "The `TaskCommit` command tuple for one completed stage."
+  @spec task_commit_command(
           String.t(),
           non_neg_integer(),
           non_neg_integer(),
@@ -149,23 +149,23 @@ defmodule Flezha.SDK.Codec do
           boolean(),
           binary()
         ) :: {atom(), struct()}
-  def proc_commit_command(
+  def task_commit_command(
         operative_id,
-        proc_idx,
+        task_idx,
         iter,
-        entities_ran,
+        cells_ran,
         handoff,
         outbox,
         compensating,
         completes,
         result
       ) do
-    {:proc_commit,
-     %RunnerCommands.ProcCommit{
+    {:task_commit,
+     %RunnerCommands.TaskCommit{
        operative_id: operative_id,
-       proc_idx: proc_idx,
+       task_idx: task_idx,
        iter: iter,
-       entities_ran: entities_ran,
+       cells_ran: cells_ran,
        handoff: handoff_items(handoff),
        outbox: Enum.map(outbox, &outbox_item/1),
        compensating: compensating,
@@ -219,33 +219,33 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
-  @doc "The committed proc-journal a bind carried, as plain Elixir terms."
+  @doc "The committed task-journal a bind carried, as plain Elixir terms."
   @spec journal_facts(struct() | nil) :: map() | nil
   def journal_facts(nil), do: nil
 
-  def journal_facts(%RunnerCommands.ProcJournalState{} = j) do
+  def journal_facts(%RunnerCommands.TaskJournalState{} = j) do
     %{
-      committed_proc_idxs: j.committed_proc_idxs,
+      committed_task_idxs: j.committed_task_idxs,
       iter: j.iter,
       handoff: Enum.map(j.handoff, &{&1.channel_id, &1.payload}),
-      proc_handoffs:
-        Map.new(j.proc_handoffs, fn e ->
-          {e.proc_idx, Enum.map(e.handoff, &{&1.channel_id, &1.payload})}
+      task_handoffs:
+        Map.new(j.task_handoffs, fn e ->
+          {e.task_idx, Enum.map(e.handoff, &{&1.channel_id, &1.payload})}
         end),
-      committed_procs: Enum.map(j.committed_procs, &committed_proc/1),
+      committed_tasks: Enum.map(j.committed_tasks, &committed_task/1),
       consumed_offset: j.consumed_offset,
       parked: j.parked,
       wake_deadline_ms: j.wake_deadline_ms,
-      rewind_undo: Enum.map(j.rewind_undo, &committed_proc/1),
+      rewind_undo: Enum.map(j.rewind_undo, &committed_task/1),
       completion: completion(j.completed, j.result)
     }
   end
 
-  defp committed_proc(%RunnerCommands.ProcCommittedProc{} = p),
+  defp committed_task(%RunnerCommands.TaskCommittedTask{} = p),
     do: %{
-      proc_idx: p.proc_idx,
+      task_idx: p.task_idx,
       iter: p.iter,
-      entities_ran: p.entities_ran,
+      cells_ran: p.cells_ran,
       completion: completion(p.completes, p.result)
     }
 
@@ -254,14 +254,14 @@ defmodule Flezha.SDK.Codec do
 
   defp handoff_items(handoff) do
     Enum.map(handoff, fn {channel_id, payload} ->
-      %RunnerCommands.ProcHandoffItem{channel_id: channel_id, payload: payload}
+      %RunnerCommands.TaskHandoffItem{channel_id: channel_id, payload: payload}
     end)
   end
 
-  defp outbox_item(%{entity_id: id, seq_in_proc: seq, channel: channel, payload: payload}) do
-    %RunnerCommands.ProcOutboxItem{
-      entity_id: id,
-      seq_in_proc: seq,
+  defp outbox_item(%{cell_id: id, seq_in_task: seq, channel: channel, payload: payload}) do
+    %RunnerCommands.TaskOutboxItem{
+      cell_id: id,
+      seq_in_task: seq,
       channel: channel,
       payload: payload
     }

@@ -1,17 +1,17 @@
 # Twins of the rust_runner e2e fixtures (test/apps/rust_runner/src/main.rs)
-# under the same factory ids, procedure names, channel names and output bytes;
+# under the same factory ids, tasklet names, channel names and output bytes;
 # the persisted-state family is in factories_state.ex. Elixir SDK deviations,
 # each noted on its fixture: no serializer-panic isolation.
 
 # -- compare_filter ---------------------------------------------------------
 
-defmodule ElixirRunner.CompareFilterProc do
+defmodule ElixirRunner.CompareFilterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "compare_filter_procedure"
+  def name, do: "compare_filter_tasklet"
   def init_state(_), do: %{comparable: "default", inverted: false}
 
   def run(input, %{comparable: comparable} = s, ctx) do
@@ -30,26 +30,26 @@ defmodule ElixirRunner.CompareFilterOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.CompareFilterProc)
+    |> into(ElixirRunner.CompareFilterTask)
     |> sink("sink")
   end
 end
 
-# -- static_entity / sugar_static_entity / mixed_operative ------------------
+# -- static_cell / sugar_static_cell / mixed_operative ------------------
 
-defmodule ElixirRunner.StaticEntryProc do
+defmodule ElixirRunner.StaticEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "static_entry_procedure"
+  def name, do: "static_entry_tasklet"
   def init_state(_), do: %{seen: []}
-  def entity_keys, do: ["a", "b", "c", "d"]
-  def entities_for("a" <> _), do: ["a"]
-  def entities_for("b" <> _), do: ["b"]
-  def entities_for("c" <> _), do: ["c"]
-  def entities_for(_), do: ["d"]
+  def cell_keys, do: ["a", "b", "c", "d"]
+  def cells_for("a" <> _), do: ["a"]
+  def cells_for("b" <> _), do: ["b"]
+  def cells_for("c" <> _), do: ["c"]
+  def cells_for(_), do: ["d"]
 
   def run(input, s, ctx) do
     Ctx.emit(ctx, input)
@@ -57,13 +57,13 @@ defmodule ElixirRunner.StaticEntryProc do
   end
 end
 
-defmodule ElixirRunner.StaticDownstreamProc do
+defmodule ElixirRunner.StaticDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "static_downstream_procedure"
+  def name, do: "static_downstream_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
@@ -74,45 +74,45 @@ defmodule ElixirRunner.StaticDownstreamProc do
       )
 end
 
-defmodule ElixirRunner.StaticEntityOp do
+defmodule ElixirRunner.StaticCellOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "static_entity"
+  def factory_id, do: "static_cell"
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
     |> input("input")
-    |> into(ElixirRunner.StaticEntryProc)
+    |> into(ElixirRunner.StaticEntryTask)
     |> named("hop")
-    |> into(ElixirRunner.StaticDownstreamProc)
+    |> into(ElixirRunner.StaticDownstreamTask)
     |> sink("kafka")
   end
 end
 
-defmodule ElixirRunner.MacroStaticEntryProc do
+defmodule ElixirRunner.MacroStaticEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "macro_static_entry_procedure"
-  defdelegate init_state(key), to: ElixirRunner.StaticEntryProc
-  defdelegate entity_keys, to: ElixirRunner.StaticEntryProc
-  defdelegate entities_for(input), to: ElixirRunner.StaticEntryProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.StaticEntryProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "macro_static_entry_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.StaticEntryTask
+  defdelegate cell_keys, to: ElixirRunner.StaticEntryTask
+  defdelegate cells_for(input), to: ElixirRunner.StaticEntryTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticEntryTask
 end
 
-defmodule ElixirRunner.MacroStaticDownstreamProc do
+defmodule ElixirRunner.MacroStaticDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "macro_static_downstream_procedure"
-  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "macro_static_downstream_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamTask
 end
 
-defmodule ElixirRunner.SugarStaticEntityOp do
+defmodule ElixirRunner.SugarStaticCellOp do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "sugar_static_entity"
+  def factory_id, do: "sugar_static_cell"
 
   # The Rust `operative!` pipeline leaves the hop unnamed and lets the sink
   # name the producing channel.
@@ -121,19 +121,19 @@ defmodule ElixirRunner.SugarStaticEntityOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.MacroStaticEntryProc)
-    |> into(ElixirRunner.MacroStaticDownstreamProc)
+    |> into(ElixirRunner.MacroStaticEntryTask)
+    |> into(ElixirRunner.MacroStaticDownstreamTask)
     |> sink("test_kafka")
   end
 end
 
-defmodule ElixirRunner.MixedMacroEntryProc do
+defmodule ElixirRunner.MixedMacroEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "mixed_macro_entry_procedure"
+  def name, do: "mixed_macro_entry_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
@@ -144,9 +144,9 @@ defmodule ElixirRunner.MixedMacroEntryProc do
       )
 end
 
-defmodule ElixirRunner.MixedHandDownstreamProc do
+defmodule ElixirRunner.MixedHandDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -171,16 +171,16 @@ defmodule ElixirRunner.MixedOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.MixedMacroEntryProc)
+    |> into(ElixirRunner.MixedMacroEntryTask)
     |> named("hop")
-    |> into(ElixirRunner.MixedHandDownstreamProc)
+    |> into(ElixirRunner.MixedHandDownstreamTask)
     |> sink("kafka")
   end
 end
 
 # -- the §5 short forms -----------------------------------------------------
 #
-# One `use` each: an operative module whose `run/3` is its one procedure's
+# One `use` each: an operative module whose `run/3` is its one tasklet's
 # body, listed under `operatives:` in `application.ex`. No hand-written
 # operative stands beside them.
 
@@ -238,7 +238,7 @@ defmodule ElixirRunner.SugarWorkflow do
   end
 end
 
-# The short form with no sink: `ticks` feeds a procedure that only keeps state.
+# The short form with no sink: `ticks` feeds a tasklet that only keeps state.
 defmodule ElixirRunner.SugarStateOnly do
   @moduledoc false
   use Flezha.SDK.StreamOperative, factory_id: "sugar_state_only", input: "ticks"
@@ -252,13 +252,13 @@ end
 
 # -- hybrid_channel ---------------------------------------------------------
 
-defmodule ElixirRunner.HybridProducerProc do
+defmodule ElixirRunner.HybridProducerTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "hybrid_producer_procedure"
+  def name, do: "hybrid_producer_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx) do
@@ -273,14 +273,14 @@ defmodule ElixirRunner.HybridProducerProc do
   end
 end
 
-defmodule ElixirRunner.HybridConsumerProc do
+defmodule ElixirRunner.HybridConsumerTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "hybrid_consumer_procedure"
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "hybrid_consumer_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, _ctx) do
-    IO.puts("hybrid_consumer_procedure: received #{input}")
+    IO.puts("hybrid_consumer_tasklet: received #{input}")
     {:ok, s}
   end
 end
@@ -298,9 +298,9 @@ defmodule ElixirRunner.HybridChannelOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.HybridProducerProc)
+    |> into(ElixirRunner.HybridProducerTask)
     |> sink_with("hybrid_indicator", &__MODULE__.serialize/1)
-    |> into(ElixirRunner.HybridConsumerProc)
+    |> into(ElixirRunner.HybridConsumerTask)
   end
 
   def serialize(0xDEADBEEF),
@@ -311,13 +311,13 @@ end
 
 # -- merged_input / transform_chain -----------------------------------------
 
-defmodule ElixirRunner.MergeLabelProc do
+defmodule ElixirRunner.MergeLabelTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "merge_label_procedure"
+  def name, do: "merge_label_tasklet"
   def init_state(_), do: nil
 
   def run(%{source: source, payload: payload}, s, ctx) do
@@ -344,7 +344,7 @@ defmodule ElixirRunner.MergedInputOp do
     |> from(ticks, &tagged("ticks", &1))
     |> from(quotes, &tagged("quotes", &1))
     |> key_by(& &1.symbol)
-    |> into(ElixirRunner.MergeLabelProc)
+    |> into(ElixirRunner.MergeLabelTask)
     |> keyed()
     |> sink("merged")
   end
@@ -356,12 +356,12 @@ defmodule ElixirRunner.MergedInputOp do
   def prefix(value), do: value |> String.split(":", parts: 2) |> hd()
 end
 
-defmodule ElixirRunner.TransformLabelProc do
+defmodule ElixirRunner.TransformLabelTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "transform_label_procedure"
-  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "transform_label_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.StaticDownstreamTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamTask
 end
 
 defmodule ElixirRunner.TransformChainOp do
@@ -380,7 +380,7 @@ defmodule ElixirRunner.TransformChainOp do
     |> flat_map(&String.split(&1, ","))
     |> map(&String.upcase/1)
     |> key_by(&ElixirRunner.MergedInputOp.prefix/1)
-    |> into(ElixirRunner.TransformLabelProc)
+    |> into(ElixirRunner.TransformLabelTask)
     |> keyed()
     |> sink("transformed")
   end
@@ -388,14 +388,14 @@ end
 
 # -- poison_probe / wedge_probe ---------------------------------------------
 
-defmodule ElixirRunner.PoisonProbeProc do
+defmodule ElixirRunner.PoisonProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
   @antidote {__MODULE__, :antidote}
-  def name, do: "poison_probe_procedure"
+  def name, do: "poison_probe_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx) do
@@ -421,20 +421,20 @@ defmodule ElixirRunner.PoisonProbeOp do
     c
     |> input("input")
     |> retry_backoff_ms(25)
-    |> into(ElixirRunner.PoisonProbeProc)
+    |> into(ElixirRunner.PoisonProbeTask)
     |> sink("out")
   end
 end
 
-defmodule ElixirRunner.WedgeProbeProc do
+defmodule ElixirRunner.WedgeProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
   @aborted {__MODULE__, :aborted}
 
-  def name, do: "wedge_probe_procedure"
+  def name, do: "wedge_probe_tasklet"
   def init_state(_), do: nil
 
   # Blocks the dispatch forever: the runner stays connected and heartbeating
@@ -443,7 +443,7 @@ defmodule ElixirRunner.WedgeProbeProc do
 
   # Ends the activation as violently as this host allows, WITHOUT emitting,
   # once per runner. On the BEAM that is a real worker death — the one host
-  # where user code can take its Entity process down untrappably.
+  # where user code can take its Cell process down untrappably.
   def run("abort", s, ctx) do
     if :persistent_term.get(@aborted, false) do
       Ctx.emit(ctx, "ok:abort")
@@ -472,20 +472,20 @@ defmodule ElixirRunner.WedgeProbeOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.WedgeProbeProc)
+    |> into(ElixirRunner.WedgeProbeTask)
     |> sink("out")
   end
 end
 
 # -- bounded_mailbox_{drop_nothing,drop_newest,drop_oldest} ------------------------
 
-defmodule ElixirRunner.DropNothingTestProc do
+defmodule ElixirRunner.DropNothingTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "drop_nothing_test_procedure"
+  def name, do: "drop_nothing_test_tasklet"
   def init_state(_), do: %{processed: 0}
   def mailbox_capacity, do: 4
 
@@ -495,22 +495,22 @@ defmodule ElixirRunner.DropNothingTestProc do
   end
 end
 
-defmodule ElixirRunner.DropNewestTestProc do
+defmodule ElixirRunner.DropNewestTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "drop_newest_test_procedure"
-  defdelegate init_state(key), to: ElixirRunner.DropNothingTestProc
-  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "drop_newest_test_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.DropNothingTestTask
+  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestTask
 end
 
-defmodule ElixirRunner.DropOldestTestProc do
+defmodule ElixirRunner.DropOldestTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "drop_oldest_test_procedure"
-  defdelegate init_state(key), to: ElixirRunner.DropNothingTestProc
-  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "drop_oldest_test_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.DropNothingTestTask
+  defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestTask
 end
 
 defmodule ElixirRunner.BoundedMailboxDropNothingOp do
@@ -524,7 +524,7 @@ defmodule ElixirRunner.BoundedMailboxDropNothingOp do
     c
     |> input("drop_nothing_input")
     |> on_full(:drop_nothing)
-    |> into(ElixirRunner.DropNothingTestProc)
+    |> into(ElixirRunner.DropNothingTestTask)
     |> sink("drop_nothing_echo")
   end
 end
@@ -540,7 +540,7 @@ defmodule ElixirRunner.BoundedMailboxDropNewestOp do
     c
     |> input("drop_newest_input")
     |> on_full(:drop_newest)
-    |> into(ElixirRunner.DropNewestTestProc)
+    |> into(ElixirRunner.DropNewestTestTask)
     |> sink("drop_newest_echo")
   end
 end
@@ -556,25 +556,25 @@ defmodule ElixirRunner.BoundedMailboxDropOldestOp do
     c
     |> input("drop_oldest_input")
     |> on_full(:drop_oldest)
-    |> into(ElixirRunner.DropOldestTestProc)
+    |> into(ElixirRunner.DropOldestTestTask)
     |> sink("drop_oldest_echo")
   end
 end
 
 # -- partition_relay --------------------------------------------------------
 
-defmodule ElixirRunner.PartitionRelayProc do
+defmodule ElixirRunner.PartitionRelayTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "partition_relay_procedure"
+  def name, do: "partition_relay_tasklet"
   def init_state(_), do: %{seen: []}
   def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
-  # The Entity is dynamic, keyed by the prefix, so a plain emit carries that
+  # The Cell is dynamic, keyed by the prefix, so a plain emit carries that
   # key — the reference's `emit_keyed(prefix, input)` with the same key by
   # construction.
   def run(input, s, ctx) do
@@ -599,7 +599,7 @@ defmodule ElixirRunner.PartitionRelayOp do
     c
     |> input("in")
     |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
-    |> into(ElixirRunner.PartitionRelayProc)
+    |> into(ElixirRunner.PartitionRelayTask)
     |> keyed()
     |> sink("input")
   end
@@ -607,15 +607,15 @@ end
 
 # -- spawn_requester --------------------------------------------------------
 
-defmodule ElixirRunner.SpawnRequesterProc do
+defmodule ElixirRunner.SpawnRequesterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.{Ctx, Spawn}
 
   @workflow "stateless_loop_workflow"
 
-  def name, do: "spawn_requester_procedure"
+  def name, do: "spawn_requester_tasklet"
   def init_state(_), do: nil
 
   # The results are printed because the runner's stdout is the only place the
@@ -645,7 +645,7 @@ defmodule ElixirRunner.SpawnRequesterOp do
 
     c
     |> input("in")
-    |> into(ElixirRunner.SpawnRequesterProc)
+    |> into(ElixirRunner.SpawnRequesterTask)
   end
 end
 
@@ -655,8 +655,8 @@ defmodule ElixirRunner.Factories do
   def all do
     [
       ElixirRunner.CompareFilterOp,
-      ElixirRunner.StaticEntityOp,
-      ElixirRunner.SugarStaticEntityOp,
+      ElixirRunner.StaticCellOp,
+      ElixirRunner.SugarStaticCellOp,
       ElixirRunner.MixedOp,
       ElixirRunner.HybridChannelOp,
       ElixirRunner.MergedInputOp,
@@ -673,7 +673,7 @@ defmodule ElixirRunner.Factories do
 
   @doc """
   The §5 short forms this app advertises: each is an operative module whose
-  `run/3` is its one procedure's body.
+  `run/3` is its one tasklet's body.
   """
   def shorthand do
     [

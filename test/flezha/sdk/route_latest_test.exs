@@ -8,7 +8,7 @@ defmodule Flezha.SDK.RouteLatestTest do
 
   import ExUnit.CaptureIO, only: [with_io: 2]
 
-  alias Flezha.SDK.{Channels, Entity, Local, Operative, Topology}
+  alias Flezha.SDK.{Channels, Cell, Local, Operative, Topology}
 
   defmodule RouterOp do
     @behaviour Flezha.SDK.StreamOperative
@@ -54,10 +54,10 @@ defmodule Flezha.SDK.RouteLatestTest do
     assert routed() == ["A=v1", "B=v1"]
 
     assert [{"route_latest", :single, [{_key, router}]}] =
-             Operative.entities(Local.operative(run))
+             Operative.cells(Local.operative(run))
 
     assert {:ok, %{version: 1, delivered: %{"A" => 1, "B" => 1}}, _seq} =
-             Entity.read(router, 1_000)
+             Cell.read(router, 1_000)
 
     feed(run, "thresholds", "v2")
     feed(run, "trades", "A:3")

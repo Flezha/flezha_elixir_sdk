@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Timers do
   @moduledoc """
-  An Entity's pending timers and the session an invocation registers through —
+  A Cell's pending timers and the session an invocation registers through —
   the kernel's pending set and timer session re-expressed in this SDK's own
   core. One ordered set per kind; registering a pending timestamp again
   changes nothing. Every registration, cancellation and firing is an op — the
@@ -10,7 +10,7 @@ defmodule Flezha.SDK.Timers do
   on a COPY of the set, so a failed attempt's registrations do not survive its
   retry; only the attempt that completes commits, and a firing's session opens
   on the fired timer's removal so it rides the same record as what `on_timer/4`
-  applies. Arming is the Entity's, on the BEAM's timer service; counting is
+  applies. Arming is the Cell's, on the BEAM's timer service; counting is
   telemetry's, from the tally a commit answers.
   """
 
@@ -18,8 +18,8 @@ defmodule Flezha.SDK.Timers do
 
   @type kind :: :event_time | :processing_time
   @type op :: %{kind: kind(), scheduled_at: non_neg_integer(), register: boolean()}
-  @typedoc "What a Procedure declares about its timers: the names a refusal reports, the cap, its clock."
-  @type policy :: %{procedure: String.t(), cap: pos_integer(), clock: atom()}
+  @typedoc "What a Tasklet declares about its timers: the names a refusal reports, the cap, its clock."
+  @type policy :: %{tasklet: String.t(), cap: pos_integer(), clock: atom()}
   @type refusal ::
           {:event_time_timer_without_event_time_clock, String.t(), atom()}
           | {:timer_cap_exceeded, String.t(), pos_integer()}
@@ -111,10 +111,10 @@ defmodule Flezha.SDK.Timers do
   def register(%Session{policy: policy} = s, kind, at) do
     cond do
       kind == :event_time and policy.clock != :event_time ->
-        refuse(s, {:event_time_timer_without_event_time_clock, policy.procedure, policy.clock})
+        refuse(s, {:event_time_timer_without_event_time_clock, policy.tasklet, policy.clock})
 
       not contains?(s.pending, kind, at) and size(s.pending) >= policy.cap ->
-        refuse(s, {:timer_cap_exceeded, policy.procedure, policy.cap})
+        refuse(s, {:timer_cap_exceeded, policy.tasklet, policy.cap})
 
       true ->
         {_changed?, s} = note(s, register_op(kind, at))

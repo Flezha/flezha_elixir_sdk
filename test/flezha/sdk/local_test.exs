@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.LocalTest do
   @moduledoc """
   The Elixir SDK's local mode: a user's own operative module, its declared
-  two-procedure graph, and no controller anywhere. `Normalise`, `Tally` and
+  two-tasklet graph, and no controller anywhere. `Normalise`, `Tally` and
   `WordCount` below are the worked example in `docs/quickstart.md`, copied
   verbatim so the documented graph is the one that runs here.
   """
@@ -13,11 +13,11 @@ defmodule Flezha.SDK.LocalTest do
 
   alias Flezha.SDK.{Channels, Ctx, Local, Operative, Spawn}
 
-  # --- a changeful procedure, and one that asks for a spawn ---
+  # --- a changeful tasklet, and one that asks for a spawn ---
 
-  defmodule CounterProc do
+  defmodule CounterTask do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "counter"
     def init_state(_), do: %{value: 0}
     def apply_change(s, {:delta, n}), do: %{s | value: s.value + n}
@@ -38,13 +38,13 @@ defmodule Flezha.SDK.LocalTest do
       do:
         c
         |> Channels.input_with("in", &{:ok, String.to_integer(&1)})
-        |> Channels.into(CounterProc)
+        |> Channels.into(CounterTask)
         |> Channels.sink("c")
   end
 
   defmodule Spawner do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "spawner"
     def init_state(_), do: nil
 
@@ -67,7 +67,7 @@ defmodule Flezha.SDK.LocalTest do
   # --- the moduledoc's worked example ---
 
   defmodule Normalise do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "normalise"
     def init_state(_key), do: nil
 
@@ -78,7 +78,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule Tally do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "tally"
     def init_state(_key), do: 0
 
@@ -127,7 +127,7 @@ defmodule Flezha.SDK.LocalTest do
   defmodule Job do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "local_job"
-    def procedures(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
+    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
   end
 
   # Asks to end its operative on `end`, which a stream never does. Reports every
@@ -135,7 +135,7 @@ defmodule Flezha.SDK.LocalTest do
   @closer_probe :local_mode_closer
 
   defmodule Closer do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "closer"
     def init_state(_key), do: nil
 
@@ -168,18 +168,18 @@ defmodule Flezha.SDK.LocalTest do
     end
   end
 
-  # A procedure that does not return until the test releases it, so what makes
+  # A tasklet that does not return until the test releases it, so what makes
   # `run_until_idle` reach its budget is the test's own word rather than a
   # sleep long enough to hope for.
-  @held_probe :local_mode_held_procedure
+  @held_probe :local_mode_held_tasklet
 
   defmodule Held do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "held"
     def init_state(_key), do: nil
 
     def run(_input, state, _ctx) do
-      send(Process.whereis(:local_mode_held_procedure), {:held, self()})
+      send(Process.whereis(:local_mode_held_tasklet), {:held, self()})
 
       receive do
         :release -> {:ok, state}
@@ -254,12 +254,12 @@ defmodule Flezha.SDK.LocalTest do
     released = payloads()
     assert Enum.sort(released) == Enum.sort(scenario_rows("totals: "))
 
-    # One Entity's releases keep their order whatever the other keys do.
+    # One Cell's releases keep their order whatever the other keys do.
     assert Enum.find_index(released, &(&1 == "the 1")) <
              Enum.find_index(released, &(&1 == "the 2"))
   end
 
-  test "one Entity exists per resolved key" do
+  test "one Cell exists per resolved key" do
     run = start_run(WordCount)
     collect(run, "counts")
 
@@ -267,7 +267,7 @@ defmodule Flezha.SDK.LocalTest do
     assert :ok = Local.run_until_idle(run, 5_000)
 
     {"tally", :dynamic, keyed} =
-      List.keyfind(Operative.entities(Local.operative(run)), "tally", 0)
+      List.keyfind(Operative.cells(Local.operative(run)), "tally", 0)
 
     assert keyed |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ~w(a b c)
   end
@@ -291,7 +291,7 @@ defmodule Flezha.SDK.LocalTest do
     assert :ok = Local.run_until_idle(run, 5_000)
 
     assert [%Local.Output{channel: "counts", payload: "fox 1", metadata: metadata}] = drained()
-    assert metadata["flz.entity"] == "word_count-local/tally/fox"
+    assert metadata["flz.cell"] == "word_count-local/tally/fox"
     assert metadata["flz.key"] == "fox"
     assert metadata["flz.seq"] =~ ~r/^\d+\.\d+$/
   end
@@ -305,7 +305,7 @@ defmodule Flezha.SDK.LocalTest do
     :ok = Local.feed(run, "in", "3")
     assert :ok = Local.run_until_idle(run, 5_000)
 
-    # A changeful procedure: two dispatches wrote two change records onto the
+    # A changeful tasklet: two dispatches wrote two change records onto the
     # same stream the sink rides. Only the two sink values reach the callback.
     assert payloads() == ~w(2 5)
     assert Local.unhandled_sink_outputs() == unhandled
@@ -358,7 +358,7 @@ defmodule Flezha.SDK.LocalTest do
     assert log =~ "unreadable"
   end
 
-  test "a stream procedure asking to complete fails that input once, by name, and the stream runs on" do
+  test "a stream tasklet asking to complete fails that input once, by name, and the stream runs on" do
     Process.register(self(), @closer_probe)
     run = start_run(CloserOp)
     collect(run, "out")
@@ -391,11 +391,11 @@ defmodule Flezha.SDK.LocalTest do
     run = start_run(HeldOp)
 
     :ok = Local.feed(run, "in", "x")
-    assert_receive {:held, entity}
+    assert_receive {:held, cell}
     assert {:error, message} = Local.run_until_idle(run, 30)
     assert message =~ "local_held-local" and message =~ "still working"
 
-    send(entity, :release)
+    send(cell, :release)
   end
 
   # --- the notice, and the class both surfaces accept ---
@@ -422,7 +422,7 @@ defmodule Flezha.SDK.LocalTest do
     assert is_pid(start_run(WordCount))
   end
 
-  test "a procedure's spawn request is answered unavailable at once: there is no control plane" do
+  test "a tasklet's spawn request is answered unavailable at once: there is no control plane" do
     run = start_run(SpawnerOp)
     collect(run, "out")
 

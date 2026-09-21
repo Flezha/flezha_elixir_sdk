@@ -18,14 +18,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Written do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "position", max_entities: 50_000
+    use Flezha.SDK.Tasklet, name: "position", max_cells: 50_000
 
     def run(input, state, _ctx), do: {:ok, Map.put(state || %{}, :last, input)}
   end
 
   defmodule Stateless do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "echo"
+    use Flezha.SDK.Tasklet, name: "echo"
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -35,25 +35,25 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "a written option is a callback, an unwritten one is not" do
     assert Written.name() == "position"
-    assert Written.max_entities() == 50_000
+    assert Written.max_cells() == 50_000
 
     refute function_exported?(Written, :mailbox_capacity, 0),
            "an option the module never wrote must leave the env knob deciding"
 
     for option <- [
-          :entity_keys,
-          :entity_idle_ttl_ms,
+          :cell_keys,
+          :cell_idle_ttl_ms,
           :compact_after_bytes,
           :schema_version,
           :min_readable_schema_version,
           :clock,
-          :max_timers_per_entity
+          :max_timers_per_cell
         ] do
       refute function_exported?(Written, option, 0), "`#{option}` was never written"
     end
   end
 
-  test "a stateless procedure needs no init_state" do
+  test "a stateless tasklet needs no init_state" do
     assert Stateless.init_state(nil) == nil
     assert function_exported?(Stateless, :run, 3)
   end
@@ -61,24 +61,24 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "a misspelt option fails to compile, naming it" do
     error =
       refused("""
-      use Flezha.SDK.Procedure, name: "p", max_entites: 10
+      use Flezha.SDK.Tasklet, name: "p", max_entites: 10
       def run(_i, s, _c), do: {:ok, s}
       """)
 
     assert error.description =~ "max_entites"
   end
 
-  # A nested procedure inherits the operative module's imports, so `use` has to
-  # take `Channels.input/2` back before the procedure's own `input/0` is read.
+  # A nested tasklet inherits the operative module's imports, so `use` has to
+  # take `Channels.input/2` back before the tasklet's own `input/0` is read.
   defmodule NestingOperative do
     @moduledoc false
     use Flezha.SDK.StreamOperative, factory_id: "nesting_operative"
 
     defmodule Nested do
       @moduledoc false
-      use Flezha.SDK.Procedure, name: "nested"
+      use Flezha.SDK.Tasklet, name: "nested"
 
-      def input, do: "the nested procedure's own"
+      def input, do: "the nested tasklet's own"
       def run(_input, state, _ctx), do: {:ok, state}
     end
 
@@ -88,8 +88,8 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "a nested procedure's own input/0 does not clash with the builder's" do
-    assert NestingOperative.Nested.input() == "the nested procedure's own"
+  test "a nested tasklet's own input/0 does not clash with the builder's" do
+    assert NestingOperative.Nested.input() == "the nested tasklet's own"
     assert {:ok, topo} = Topology.build(NestingOperative)
     assert entry_names(NestingOperative) == ["in"]
     assert sink_names(topo) == ["out"]
@@ -99,7 +99,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule HandWritten do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
 
     @impl true
     def name, do: "hand_written"
@@ -138,7 +138,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       retry_attempts: 7
 
     @impl true
-    def procedures(c) do
+    def tasklets(c) do
       c |> input("in") |> into(Stateless) |> sink("out")
     end
   end
@@ -256,7 +256,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Position do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "position_state"
+    use Flezha.SDK.Tasklet, name: "position_state"
 
     state do
       field(:qty, :integer, default: 0)
@@ -302,7 +302,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     for callback <- ["def apply_change(state, _c), do: state", "def state_from_json(j), do: j"] do
       error =
         refused("""
-        use Flezha.SDK.Procedure, name: "conflicting"
+        use Flezha.SDK.Tasklet, name: "conflicting"
         state do
           field(:qty, :integer, default: 0)
         end
@@ -328,7 +328,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule UpcaseTwin do
     @moduledoc false
-    use Flezha.SDK.Procedure, name: "upcase_twin"
+    use Flezha.SDK.Tasklet, name: "upcase_twin"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -356,7 +356,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Counter do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "counter", input: "ticks", max_entities: 10
+    use Flezha.SDK.StreamOperative, factory_id: "counter", input: "ticks", max_cells: 10
 
     state do
       field(:seen, :list, default: [])
@@ -368,7 +368,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "an operative module with a run body is a whole stream operative" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
-    refute function_exported?(Upcase, :procedures, 1)
+    refute function_exported?(Upcase, :tasklets, 1)
 
     assert {:ok, short} = Topology.build(Upcase)
     assert {:ok, hand} = Topology.build(UpcaseTwinOperative)
@@ -379,33 +379,33 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "an operative module with a run body is a whole workflow operative" do
     assert Place.factory_id() == "place"
-    assert function_exported?(Place, :procedures, 1)
+    assert function_exported?(Place, :tasklets, 1)
     refute function_exported?(Place, :channels, 1)
 
     assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Place)
     assert spec.knobs.loop_mode == :once
-    assert entry_names(Place, :procedures) == ["order"]
+    assert entry_names(Place, :tasklets) == ["order"]
   end
 
-  test "the generated procedure is a module of its own, named after the factory id" do
-    assert Upcase.Procedure.name() == "upcase"
-    assert Flezha.SDK.Procedure in behaviours(Upcase.Procedure)
-    refute Flezha.SDK.Procedure in behaviours(Upcase)
+  test "the generated tasklet is a module of its own, named after the factory id" do
+    assert Upcase.Tasklet.name() == "upcase"
+    assert Flezha.SDK.Tasklet in behaviours(Upcase.Tasklet)
+    refute Flezha.SDK.Tasklet in behaviours(Upcase)
     refute function_exported?(Upcase, :name, 0)
 
-    # `run/3` is the author's, reached through the procedure module.
-    assert {[], nil} = journal(Upcase.Procedure, "hi")
+    # `run/3` is the author's, reached through the tasklet module.
+    assert {[], nil} = journal(Upcase.Tasklet, "hi")
   end
 
-  test "a short form with no sink wires its entry channel into the procedure alone" do
+  test "a short form with no sink wires its entry channel into the tasklet alone" do
     assert {:ok, topo} = Topology.build(Counter)
     assert entry_names(Counter) == ["ticks"]
     assert sink_names(topo) == []
 
-    # A procedure option, and the block's recorders, reach the generated procedure.
-    assert Counter.Procedure.max_entities() == 10
-    assert {[{:push, :seen, "a"}], %{seen: ["a"]}} = journal(Counter.Procedure, "a")
-    assert Counter.Procedure.apply_change(%{seen: []}, {:push, :seen, "a"}) == %{seen: ["a"]}
+    # A tasklet option, and the block's recorders, reach the generated tasklet.
+    assert Counter.Tasklet.max_cells() == 10
+    assert {[{:push, :seen, "a"}], %{seen: ["a"]}} = journal(Counter.Tasklet, "a")
+    assert Counter.Tasklet.apply_change(%{seen: []}, {:push, :seen, "a"}) == %{seen: ["a"]}
   end
 
   test "register_factory reads a short form's kind" do
@@ -444,7 +444,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     @moduledoc false
     def factory_id, do: "both_kinds"
     def channels(_c), do: :ok
-    def procedures(_c), do: :ok
+    def tasklets(_c), do: :ok
   end
 
   defmodule NeitherKind do
@@ -472,7 +472,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a run body beside a topology body does not compile" do
-    for {macro, body} <- [{"StreamOperative", "channels"}, {"WorkflowOperative", "procedures"}] do
+    for {macro, body} <- [{"StreamOperative", "channels"}, {"WorkflowOperative", "tasklets"}] do
       error =
         refused("""
         use Flezha.SDK.#{macro}, factory_id: "x", sink: "out"
@@ -490,11 +490,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert error.description =~ "run/3" and error.description =~ "channels/1"
   end
 
-  test "an operative option on a procedure does not compile, naming the operative macro" do
+  test "an operative option on a tasklet does not compile, naming the operative macro" do
     for option <- [~s|sink: "out"|, ~s|input: "ticks"|, "kind: :stream"] do
       error =
         refused("""
-        use Flezha.SDK.Procedure, name: "p", #{option}
+        use Flezha.SDK.Tasklet, name: "p", #{option}
         def run(_i, s, _c), do: {:ok, s}
         """)
 
@@ -514,7 +514,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     assert setting.description =~ "loop_mode"
 
-    for option <- [~s|sink: "out"|, "max_entities: 10"] do
+    for option <- [~s|sink: "out"|, "max_cells: 10"] do
       stray =
         refused("""
         use Flezha.SDK.StreamOperative, factory_id: "x", #{option}
@@ -535,7 +535,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert ["HELLO"] = Enum.map(drained(), & &1.payload)
   end
 
-  # --- driving a procedure through the ctx -----------------------------------
+  # --- driving a tasklet through the ctx -----------------------------------
 
   # The `CompileError` a module body earns, compiled under a name of its own so
   # one test can refuse several bodies.
@@ -553,7 +553,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   # runtime's own read of the journal, so the test reads it the way a commit
   # does rather than reaching into the process dictionary itself.
   defp journal(module, input) do
-    ctx = %Ctx{module: module, ref: make_ref(), now_ms: 0, entity_key: nil}
+    ctx = %Ctx{module: module, ref: make_ref(), now_ms: 0, cell_key: nil}
     {:ok, state} = module.run(input, module.init_state(nil), ctx)
     {Ctx.take_changes(ctx), state}
   end

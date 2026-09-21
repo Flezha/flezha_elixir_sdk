@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Park do
   @moduledoc """
   Shared construction of the tier-off DLQ `ParkBody` map (the input to
-  `Flezha.SDK.Wire.encode_park_body/1`). Every park path — an exhausted Entity,
+  `Flezha.SDK.Wire.encode_park_body/1`). Every park path — an exhausted Cell,
   an entry-parse failure, a partition mis-route — routes its body through here so
   the shape stays in one place. Payload bytes are recoverable for binary inputs
   only (Rust parity); other terms park without bytes. This module also owns the
@@ -37,14 +37,14 @@ defmodule Flezha.SDK.Park do
     }
 
   @doc """
-  The on-wire identity of the Entity a park belongs to — the triple the
-  controller keys its DLQ row by (`operative_class`, `procedure_id`,
-  `entity_key`). A pre-dispatch park (entry parse, partition mis-route) has no
-  Entity yet and parks under an empty key.
+  The on-wire identity of the Cell a park belongs to — the triple the
+  controller keys its DLQ row by (`operative_class`, `tasklet_id`,
+  `cell_key`). A pre-dispatch park (entry parse, partition mis-route) has no
+  Cell yet and parks under an empty key.
   """
   @spec identity(binary(), binary(), binary() | nil) :: binary()
-  def identity(operative_id, procedure_id, entity_key) do
-    Wire.encode_entity_id(operative_id, procedure_id, entity_key || "")
+  def identity(operative_id, tasklet_id, cell_key) do
+    Wire.encode_cell_id(operative_id, tasklet_id, cell_key || "")
   end
 
   @spec recoverable_payload(term()) :: binary() | nil
@@ -52,7 +52,7 @@ defmodule Flezha.SDK.Park do
   defp recoverable_payload(_value), do: nil
 
   @doc """
-  The `park_payload` frame: the Entity identity, a seq and a zero header over
+  The `park_payload` frame: the Cell identity, a seq and a zero header over
   the postcard body. A park carries no record header, so the 16 bytes are
   zero — the same shape the runner core sends.
   """
@@ -62,10 +62,10 @@ defmodule Flezha.SDK.Park do
   end
 
   @doc """
-  Hand a park to `to` — an Entity's operative, or an operative's runner. One hop
+  Hand a park to `to` — a Cell's operative, or an operative's runner. One hop
   per level; the runner owns the ack loop.
   """
   @spec ship(GenServer.server(), pid(), binary(), map()) :: :ok
-  def ship(to, entity_pid, identity, body),
-    do: GenServer.cast(to, {:park, entity_pid, identity, body})
+  def ship(to, cell_pid, identity, body),
+    do: GenServer.cast(to, {:park, cell_pid, identity, body})
 end

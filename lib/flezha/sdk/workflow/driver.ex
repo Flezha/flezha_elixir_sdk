@@ -1,14 +1,14 @@
 defmodule Flezha.SDK.Workflow.Driver do
   @moduledoc """
   One process per workflow instance: the stage driver. It walks the class's
-  DAG frontier by frontier — a procedure becomes runnable once every producer
+  DAG frontier by frontier — a tasklet becomes runnable once every producer
   feeding it has committed, so a fan-in is dispatched exactly once with the
   accumulated batch of all its producers — commits each stage durably, and
   ends by shipping `WorkflowCompleted`.
 
-  It presents the same contract to an `Flezha.SDK.Entity` that
-  `Flezha.SDK.Operative` does: an Entity casts its emits to its `operative`
-  pid and knows nothing else about it. So every Entity mechanism — the state,
+  It presents the same contract to an `Flezha.SDK.Cell` that
+  `Flezha.SDK.Operative` does: a Cell casts its emits to its `operative`
+  pid and knows nothing else about it. So every Cell mechanism — the state,
   the records, the retry ladder, the timers, the tier — is reused as it
   stands, and what is written here is only what a *bounded* run adds: the
   frontier, the barrier and the journal.
@@ -16,8 +16,8 @@ defmodule Flezha.SDK.Workflow.Driver do
   The reference drives a chain on a pool thread that blocks on each barrier.
   This one is event-driven, because a blocked BEAM process cannot answer the
   stop, the inbox push or the restore that must reach it while a stage is in
-  flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from an
-  Entity's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
+  flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from a
+  Cell's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
   and for a `:per_input` loop with nothing queued, its next input or the idle
   window's `{:park_idle, ref}`.
   """
@@ -26,7 +26,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   require Logger
 
-  alias Flezha.SDK.{Entity, Topology}
+  alias Flezha.SDK.{Cell, Topology}
   alias Flezha.SDK.Operative.{Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
@@ -42,16 +42,16 @@ defmodule Flezha.SDK.Workflow.Driver do
       :credit,
       :secondaries,
       :slots,
-      # node_ref => [entity_pid], one per partition in `entities_for` order
-      entities: %{},
+      # node_ref => [cell_pid], one per partition in `cells_for` order
+      cells: %{},
       # the stage barrier refs this frontier still owes
       awaiting: %{},
-      # node_ref => what its entities released this iteration
+      # node_ref => what its cells released this iteration
       collected: %{},
-      # node_ref => the entity identities that ran
+      # node_ref => the cell identities that ran
       ran: %{},
       # node_ref => plugin output staged for this stage's commit, and the
-      # per-{stage, entity} ordinal each item takes.
+      # per-{stage, cell} ordinal each item takes.
       outbox: %{items: %{}, seq: %{}},
       # node_ref => accumulating input batch until every producer committed
       pending: %{},
@@ -70,8 +70,8 @@ defmodule Flezha.SDK.Workflow.Driver do
       consumed_offset: 0,
       iter: 0,
       cancel: nil,
-      # proc_idx => {entity_key, result}: each procedure's completion this
-      # iteration, the one of its Entity whose key sorts last
+      # task_idx => {cell_key, result}: each tasklet's completion this
+      # iteration, the one of its Cell whose key sorts last
       completions: %{},
       resume_owed: 0,
       # set while a `:per_input` loop waits for an input; its idle timer names it
@@ -117,7 +117,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       credit: Keyword.get(opts, :credit),
       secondaries: Keyword.get(opts, :secondaries, []),
       slots: Keyword.get(opts, :slots),
-      resume_owed: Keyword.get(opts, :resume_entity_count, 0)
+      resume_owed: Keyword.get(opts, :resume_cell_count, 0)
     }
 
     arm_duration(spec)
@@ -132,27 +132,27 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp arm_duration(%Spec{knobs: %{max_duration_ms: ms}}),
     do: Process.send_after(self(), :max_duration, ms)
 
-  # Entities are built before anything runs, so a `RestoreInitState` frame
-  # arriving right after the `AddOperative` ack always finds its Entity
+  # Cells are built before anything runs, so a `RestoreInitState` frame
+  # arriving right after the `AddOperative` ack always finds its Cell
   # registered rather than racing the first stage into existence.
   @impl true
   def handle_continue(:bootstrap, %State{} = s) do
-    s = build_stage_entities(s)
+    s = build_stage_cells(s)
     if s.resume_owed > 0, do: settle(s), else: settle(resume_bound(s))
   end
 
   # The two calls the controller's persistence commands make on an operative,
   # answered exactly as `Flezha.SDK.Operative` answers them: a restore, a
   # compaction and a live read reach a workflow instance through the same
-  # `Flezha.SDK.Commands` path a stream one does, and they name a procedure
-  # rather than a node. A stage's Entities are built before anything runs, so
+  # `Flezha.SDK.Commands` path a stream one does, and they name a tasklet
+  # rather than a node. A stage's Cells are built before anything runs, so
   # nothing here materialises — a lookup either finds one or names why not.
   @impl true
-  def handle_call({:lookup, procedure, key, _materialise?}, _from, %State{} = s) do
-    case Topology.node_of(s.spec.topology, procedure) do
+  def handle_call({:lookup, tasklet, key, _materialise?}, _from, %State{} = s) do
+    case Topology.node_of(s.spec.topology, tasklet) do
       {:ok, node_ref} ->
-        case Enum.at(Map.get(s.entities, node_ref, []), Stage.index_of(s.spec, node_ref, key)) do
-          nil -> {:reply, {:error, :entity_not_found}, s}
+        case Enum.at(Map.get(s.cells, node_ref, []), Stage.index_of(s.spec, node_ref, key)) do
+          nil -> {:reply, {:error, :cell_not_found}, s}
           pid -> {:reply, {:ok, pid}, s}
         end
 
@@ -162,30 +162,30 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   # The saga markers one restore frame carried. An unwind the crash
-  # interrupted resumes from these: an Entity whose undo already ran is
+  # interrupted resumes from these: a Cell whose undo already ran is
   # skipped, and the rest of the plan still runs.
   def handle_call({:compensation_markers, identity, intent, done}, _from, %State{} = s),
     do:
       {:reply, :ok,
        %{s | instance: Instance.note_compensation(s.instance, identity, intent, done)}}
 
-  def handle_call(:entities, _from, %State{spec: spec} = s) do
+  def handle_call(:cells, _from, %State{spec: spec} = s) do
     listing =
       Enum.map(spec.dag.order, fn node_ref ->
         keys = Spec.stage_keys(spec, node_ref)
-        pids = s.entities |> Map.get(node_ref, []) |> then(&Enum.zip(keys, &1))
+        pids = s.cells |> Map.get(node_ref, []) |> then(&Enum.zip(keys, &1))
         {spec.topology.node_modules[node_ref].name(), spec.topology.node_mode[node_ref], pids}
       end)
 
     {:reply, listing, s}
   end
 
-  # An Entity finished one invocation. Its outputs are collected for the stage
+  # A Cell finished one invocation. Its outputs are collected for the stage
   # rather than routed: a workflow hands a batch on at the barrier, not per
   # value, so the whole stage's release is what the journal records.
   @impl true
-  def handle_cast({:emitted, node_ref, entity_key, emits, seq, _offset, report}, %State{} = s) do
-    origin = %{node_ref: node_ref, entity_key: entity_key, seq: seq}
+  def handle_cast({:emitted, node_ref, cell_key, emits, seq, _offset, report}, %State{} = s) do
+    origin = %{node_ref: node_ref, cell_key: cell_key, seq: seq}
     values = Enum.map(emits, fn {value, _meta, _key} -> value end)
 
     s =
@@ -195,7 +195,7 @@ defmodule Flezha.SDK.Workflow.Driver do
         stage_outbox(
           acc,
           node_ref,
-          entity_key,
+          cell_key,
           value,
           %{meta: meta, key: key, origin: origin},
           ordinal
@@ -205,7 +205,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     s = %{
       s
       | collected: Map.update(s.collected, node_ref, values, &(&1 ++ values)),
-        ran: Map.update(s.ran, node_ref, [entity_key], &[entity_key | &1])
+        ran: Map.update(s.ran, node_ref, [cell_key], &[cell_key | &1])
     }
 
     Inbox.delivered(report)
@@ -213,7 +213,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     {:noreply, s}
   end
 
-  # An Entity exhausted its ladder: the procedure failed, so the run unwinds.
+  # A Cell exhausted its ladder: the tasklet failed, so the run unwinds.
   def handle_cast({:stage_failed, node_ref, error}, %State{} = s),
     do: settle(fail(s, node_ref, error))
 
@@ -235,19 +235,19 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  # A procedure asked to end the instance. Each procedure keeps the request of
-  # its Entity whose key sorts last, so which Entity answered first never
-  # decides the result; the iteration ends with the procedure latest in the
+  # A tasklet asked to end the instance. Each tasklet keeps the request of
+  # its Cell whose key sorts last, so which Cell answered first never
+  # decides the result; the iteration ends with the tasklet latest in the
   # chain's commit order (`completion/1`).
-  def handle_cast({:complete, node_ref, entity_key, result}, %State{} = s) do
-    proc_idx = Map.fetch!(s.spec.dag.pos, node_ref)
+  def handle_cast({:complete, node_ref, cell_key, result}, %State{} = s) do
+    task_idx = Map.fetch!(s.spec.dag.pos, node_ref)
 
     case s.completions do
-      %{^proc_idx => {kept, _result}} when kept > entity_key ->
+      %{^task_idx => {kept, _result}} when kept > cell_key ->
         {:noreply, s}
 
       completions ->
-        {:noreply, %{s | completions: Map.put(completions, proc_idx, {entity_key, result})}}
+        {:noreply, %{s | completions: Map.put(completions, task_idx, {cell_key, result})}}
     end
   end
 
@@ -273,23 +273,23 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   def handle_info({:park_idle, ref}, %State{idle: ref} = s), do: settle(park(%{s | idle: nil}))
 
-  def handle_info({:restored, _entity}, %State{resume_owed: owed} = s) when owed > 1,
+  def handle_info({:restored, _cell}, %State{resume_owed: owed} = s) when owed > 1,
     do: {:noreply, %{s | resume_owed: owed - 1}}
 
-  def handle_info({:restored, _entity}, %State{} = s), do: settle(resume_bound(s))
+  def handle_info({:restored, _cell}, %State{} = s), do: settle(resume_bound(s))
 
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    Enum.each(all_entities(s), &Entity.rebind(&1, secondaries))
+    Enum.each(all_cells(s), &Cell.rebind(&1, secondaries))
     {:noreply, %{s | secondaries: secondaries}}
   end
 
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
-  # A plugin-bound output of a workflow procedure is STAGED, never shipped:
+  # A plugin-bound output of a workflow tasklet is STAGED, never shipped:
   # nothing reaches a plugin until the controller has journalled the stage's
   # commit and flushed the outbox behind it. That is the whole transactional
   # guarantee, and it is why the driver holds what the stream router sends.
-  defp stage_outbox(%State{} = s, node_ref, entity_key, value, emit, ordinal) do
+  defp stage_outbox(%State{} = s, node_ref, cell_key, value, emit, ordinal) do
     s.spec.topology.routes
     |> Map.get({:node, node_ref}, [])
     |> Enum.filter(&match?(%{to: {:sink, _}}, &1))
@@ -297,11 +297,11 @@ defmodule Flezha.SDK.Workflow.Driver do
       stamp_with = if route.keyed, do: {acc.operative_id, acc.spec.topology.node_modules}
       {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
 
-      slot = {node_ref, entity_key}
+      slot = {node_ref, cell_key}
 
       item = %{
-        entity_id: identity(acc, node_ref, entity_key),
-        seq_in_proc: get_in(acc.outbox, [:seq, slot]) || 0,
+        cell_id: identity(acc, node_ref, cell_key),
+        seq_in_task: get_in(acc.outbox, [:seq, slot]) || 0,
         channel: Map.get(metadata, "channel", route.channel),
         payload: bytes
       }
@@ -442,7 +442,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   defp dispatch_stage(%State{} = s, node_ref, batch) do
-    pids = Map.fetch!(s.entities, node_ref)
+    pids = Map.fetch!(s.cells, node_ref)
     awaiting = Stage.dispatch(s.spec, node_ref, pids, batch, self())
 
     %{
@@ -452,7 +452,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     }
   end
 
-  # Every Entity of this frontier has drained past its barrier: commit the
+  # Every Cell of this frontier has drained past its barrier: commit the
   # stages in DAG order, then accumulate what each released into its children.
   defp stage_settled(%State{awaiting: awaiting} = s) when map_size(awaiting) > 0, do: s
 
@@ -464,28 +464,28 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   defp stage_settled(%State{} = s), do: commit_next_stage(s)
 
-  # One `ProcCommit` at a time: the driver starts the next procedure only on
+  # One `TaskCommit` at a time: the driver starts the next tasklet only on
   # the successful reply, so a crash between them re-runs the uncommitted one.
   defp commit_next_stage(%State{frontier: []} = s), do: dispatch_frontier(s, s.next)
 
   defp commit_next_stage(%State{frontier: [{node_ref, _batch} | _]} = s) do
-    proc_idx = Map.fetch!(s.spec.dag.pos, node_ref)
+    task_idx = Map.fetch!(s.spec.dag.pos, node_ref)
     batch = Map.get(s.collected, node_ref, [])
     ran = s.ran |> Map.get(node_ref, []) |> Enum.reverse() |> Enum.map(&identity(s, node_ref, &1))
 
-    s = record_completed(s, node_ref, proc_idx, ran)
+    s = record_completed(s, node_ref, task_idx, ran)
     Compensation.mark_intent(s, node_ref, ran)
 
     if journals?(s) do
       ref = make_ref()
-      asked = if s.unwind.status == nil, do: Map.get(s.completions, proc_idx)
+      asked = if s.unwind.status == nil, do: Map.get(s.completions, task_idx)
 
       command =
-        Commit.proc(s.runner, self(), ref,
+        Commit.task(s.runner, self(), ref,
           operative_id: s.operative_id,
-          proc_idx: proc_idx,
+          task_idx: task_idx,
           iter: s.iter,
-          entities_ran: ran,
+          cells_ran: ran,
           handoff: handoff(s, node_ref, batch),
           outbox: Map.get(s.outbox.items, node_ref, []),
           compensating: s.unwind.status != nil,
@@ -493,7 +493,7 @@ defmodule Flezha.SDK.Workflow.Driver do
           result: result_of(asked)
         )
 
-      arm(s, ref, :proc, command)
+      arm(s, ref, :task, command)
     else
       advance(s)
     end
@@ -504,10 +504,10 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp arm(%State{} = s, ref, kind, command),
     do: %{s | barrier: %{ref: ref, kind: kind, attempt: 1, command: command}}
 
-  defp record_completed(%State{} = s, node_ref, proc_idx, ran),
+  defp record_completed(%State{} = s, node_ref, task_idx, ran),
     do: %{
       s
-      | completed: s.completed ++ [%{node_ref: node_ref, proc_idx: proc_idx, entities: ran}]
+      | completed: s.completed ++ [%{node_ref: node_ref, task_idx: task_idx, cells: ran}]
     }
 
   # The committed stage's release accumulates into each child, which becomes
@@ -563,7 +563,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  # The iteration is committed. If a procedure in it asked to end the instance,
+  # The iteration is committed. If a tasklet in it asked to end the instance,
   # the run ends here: no next input, no re-seed, no park.
   defp next_iteration(%State{} = s) do
     case completion(s) do
@@ -572,7 +572,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  # The completion the iteration ends with: the procedure latest in the chain's
+  # The completion the iteration ends with: the tasklet latest in the chain's
   # commit order.
   defp completion(%State{completions: completions}) when completions == %{}, do: nil
 
@@ -580,7 +580,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     do: completions |> Enum.max_by(&elem(&1, 0)) |> elem(1)
 
   defp result_of(nil), do: <<>>
-  defp result_of({_entity_key, result}), do: result
+  defp result_of({_cell_key, result}), do: result
 
   # --- barriers ---
 
@@ -588,7 +588,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     s = %{s | barrier: nil}
 
     case kind do
-      :proc -> advance(s)
+      :task -> advance(s)
       :iter -> next_iteration(s)
       :comp -> unwind_step(s, &Compensation.commit/1)
     end
@@ -623,7 +623,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   defp fail(%State{unwind: %{status: st}} = s, node_ref, error) when st != nil do
     Logger.warning(
-      "[Flezha.SDK] #{s.operative_id} compensate hook on #{Spec.procedure_name(s.spec, node_ref)} " <>
+      "[Flezha.SDK] #{s.operative_id} compensate hook on #{Spec.tasklet_name(s.spec, node_ref)} " <>
         "failed: #{error}; the rest of the plan still runs"
     )
 
@@ -631,7 +631,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   defp fail(%State{} = s, node_ref, error),
-    do: unwind(s, "error", "#{Spec.procedure_name(s.spec, node_ref)}: #{error}")
+    do: unwind(s, "error", "#{Spec.tasklet_name(s.spec, node_ref)}: #{error}")
 
   # The saga unwind is a phase, not a call: each stage's undo drains through
   # the same barrier a forward stage does, and the terminal frame is shipped
@@ -706,10 +706,10 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp settle(%State{terminal: nil} = s), do: {:noreply, s}
   defp settle(%State{} = s), do: {:stop, :normal, s}
 
-  # --- entities ---
+  # --- cells ---
 
-  defp build_stage_entities(%State{} = s) do
-    entities =
+  defp build_stage_cells(%State{} = s) do
+    cells =
       Stage.build_all(s.spec,
         operative: self(),
         operative_id: s.operative_id,
@@ -720,21 +720,21 @@ defmodule Flezha.SDK.Workflow.Driver do
         runner: s.runner
       )
 
-    %{s | entities: entities}
+    %{s | cells: cells}
   end
 
-  defp all_entities(%State{entities: entities}),
-    do: entities |> Map.values() |> List.flatten()
+  defp all_cells(%State{cells: cells}),
+    do: cells |> Map.values() |> List.flatten()
 
   defp identity(%State{} = s, node_ref, key),
-    do: Spec.entity_identity(s.spec, s.operative_id, node_ref, key)
+    do: Spec.cell_identity(s.spec, s.operative_id, node_ref, key)
 
   # --- projections ---
 
   defp journals?(%State{spec: spec}), do: spec.knobs.persistence_enabled
 
   # A stage's release through its output channel, as the journal records it.
-  # The channel a procedure releases on is its node's — one per node — so the
+  # The channel a tasklet releases on is its node's — one per node — so the
   # id is the stage's own position, which is what re-seeds its children.
   defp handoff(%State{} = s, node_ref, batch) do
     id = Map.fetch!(s.spec.dag.pos, node_ref)

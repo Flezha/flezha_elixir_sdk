@@ -8,12 +8,12 @@ defmodule Flezha.SDK.Credit do
   arrival order; a grant for another session is stale and dropped; a reconnect
   disarms the session and parked senders proceed un-metered until the next
   offer. `arm`, `grant` and `disarm` are casts and never block; only
-  `acquire/2` waits, in the calling Entity. Every park iteration — a park, and
+  `acquire/2` waits, in the calling Cell. Every park iteration — a park, and
   each grant that wakes a parked sender without covering it — bumps
   `credit_parked` on the runner's counters, which the heartbeat carries.
 
   One process per runner, linked to its RunnerServer, which hands the pid down
-  to every Entity it starts; a test starts its own.
+  to every Cell it starts; a test starts its own.
   """
 
   use GenServer
@@ -44,7 +44,7 @@ defmodule Flezha.SDK.Credit do
 
   Unbounded on purpose: the park IS the protocol. A sender that gave up on a
   bound would either drop a durable record or ship it past a window the
-  Controller is metering, and the caller is this runner's own Entity, never a
+  Controller is metering, and the caller is this runner's own Cell, never a
   process the host application supervises.
   """
   @spec acquire(GenServer.server() | nil, non_neg_integer()) :: :ok

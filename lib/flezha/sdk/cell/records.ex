@@ -1,37 +1,37 @@
-defmodule Flezha.SDK.Entity.Records do
+defmodule Flezha.SDK.Cell.Records do
   @moduledoc """
-  The durable half of an Entity — every function that moves `proc_state`,
+  The durable half of a Cell — every function that moves `task_state`,
   `change_seq`, the record stream or the slot: the records a dispatch ships
   (before its outputs leave), the one effect record the effectively-once tier
   ships in place of them, the restore fold, the compaction snapshot after
-  the records, the eviction's delete, and the slot a replacement of an Entity
+  the records, the eviction's delete, and the slot a replacement of a Cell
   killed untrappably seeds from. The process — its mailbox, its ladder, its
-  park — is `Flezha.SDK.Entity`, which enters here from `dispatch/2` and
+  park — is `Flezha.SDK.Cell`, which enters here from `dispatch/2` and
   `init/1` only.
   """
 
   require Logger
 
   alias Flezha.SDK.{Counters, Hold, Record, Timers}
-  alias Flezha.SDK.Entity.{Interval, State}
+  alias Flezha.SDK.Cell.{Interval, State}
 
   @doc """
   Rebuild the state from a `RestoreInitState`; `{:ok, state, terminal, migrated}`.
-  The open interval is discarded — the Entity re-seats on a past in which none
+  The open interval is discarded — the Cell re-seats on a past in which none
   of it was applied — and the tier's consumed floor and the event-time
   high-water come back off the restored effect records.
   """
   @spec restore(State.t(), binary(), binary(), binary(), non_neg_integer()) ::
           {:ok, State.t(), non_neg_integer(), boolean()} | {:error, String.t()}
   def restore(%State{changeful?: true} = s, header, snapshot, log, hint) do
-    case Record.fold(s.module, s.entity_key, header, snapshot, log, hint) do
+    case Record.fold(s.module, s.cell_key, header, snapshot, log, hint) do
       {:ok, restored, terminal, migrated} ->
         timers = %{s.timers | pending: restored.timers, high_water: restored.high_water}
-        # The slice goes with the interval: a restore re-seats the Entity on a
+        # The slice goes with the interval: a restore re-seats the Cell on a
         # past in which no buffered member was seen, and the controller
         # re-forwards the slice from the rewound watermark. What goes is
         # counted, because a discard no runtime reports is a discard an
-        # operator cannot tell from an idle Entity.
+        # operator cannot tell from an idle Cell.
         Counters.add_restore_discarded_inputs(
           s.counters,
           Interval.inputs(s.tier.staged) + length(s.tier.slice)
@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Entity.Records do
 
         s = %{
           s
-          | proc_state: restored.state,
+          | task_state: restored.state,
             timers: timers,
             tier: tier,
             change_seq: terminal + 1
@@ -68,7 +68,7 @@ defmodule Flezha.SDK.Entity.Records do
   # that seq afterwards: the snapshot's body holds the state alone, and the
   # truncation it authorises would otherwise take the timers with it.
   @doc """
-  Ship the state as an `entity_state_snapshot`; `{:ok, state, snapshot_seq,
+  Ship the state as a `cell_state_snapshot`; `{:ok, state, snapshot_seq,
   body_size}`. A refused write is answered to the caller — the controller
   retries compaction — and the frame is still held for the next bound stream.
   """
@@ -80,9 +80,9 @@ defmodule Flezha.SDK.Entity.Records do
 
   def snapshot(%State{} = s) do
     seq = max(s.change_seq - 1, 0)
-    body = Record.encode_body(s.proc_state)
+    body = Record.encode_body(s.task_state)
     frame = Record.frame(s.identity, seq, body, s.schema_version)
-    {verdict, hold} = Hold.write("entity_state_snapshot", s.stream, {frame, %{}})
+    {verdict, hold} = Hold.write("cell_state_snapshot", s.stream, {frame, %{}})
     # The re-statement follows the snapshot whichever answer the wire gave, so
     # a held pair replays in the order that keeps the timers above the seq the
     # truncation is authorised to.
@@ -96,15 +96,15 @@ defmodule Flezha.SDK.Entity.Records do
 
   # Destructive: the delete follows the records on the same stream from the
   # same process, and the slot goes so a successor starts from `init_state/1`
-  # rather than from what this Entity last shipped. A hold that dies with the
+  # rather than from what this Cell last shipped. A hold that dies with the
   # process that owned it is not a hold, so what no stream would take — the
   # records still held, then the delete — passes to the Operative, which
-  # outlives this Entity and replays it on the next bound stream.
+  # outlives this Cell and replays it on the next bound stream.
   @doc "What an eviction leaves behind: the delete when persistent, no slot, and no lost frame."
   @spec delete(State.t()) :: :ok
   def delete(%State{} = s) do
     {items, _empty} = Hold.drain(s.stream)
-    # The route goes with the Entity: the Operative writes what it takes over
+    # The route goes with the Cell: the Operative writes what it takes over
     # on the stream this identity chooses, never on the one this hold used.
     held = Enum.map(items, fn {key, body, meta, _route} -> {key, body, meta} end)
     hand_off(s, held ++ owed_delete(s, held))
@@ -130,11 +130,11 @@ defmodule Flezha.SDK.Entity.Records do
   defp ship_change(%State{persistent?: false} = s, _seq, _change), do: s
 
   defp ship_change(%State{} = s, seq, change),
-    do: send_record(s, "entity_state_change", change_frame(s, seq, change))
+    do: send_record(s, "cell_state_change", change_frame(s, seq, change))
 
   @doc """
   The tier's ship: fold one invocation into the staged interval, then — when
-  the fold produced a record — one `entity_effect_record` at the next seq, then
+  the fold produced a record — one `cell_effect_record` at the next seq, then
   the slot. One frame where `ship/3` writes many, and the offset it carries is
   what makes a re-forward a completed dispatch rather than a re-run.
   """
@@ -175,7 +175,7 @@ defmodule Flezha.SDK.Entity.Records do
   end
 
   @doc """
-  Ship the head of the owed FIFO: the record whose inter-procedure pushes the
+  Ship the head of the owed FIFO: the record whose inter-tasklet pushes the
   router has now delivered. The router reports in the order it was cast, so the
   head is always the reported one; anything else is a bug rather than a race,
   and it is said out loud.
@@ -184,7 +184,7 @@ defmodule Flezha.SDK.Entity.Records do
   def release(%State{tier: tier} = s, ref) do
     case :queue.out(tier.owed) do
       {{:value, {^ref, _seq, frame}}, rest} ->
-        s = send_record(s, "entity_effect_record", frame)
+        s = send_record(s, "cell_effect_record", frame)
         %{s | tier: %{s.tier | owed: rest}}
 
       _other ->
@@ -198,7 +198,7 @@ defmodule Flezha.SDK.Entity.Records do
 
   @doc """
   Ask the controller to correct behind `target_event_time`: one fire-and-forget
-  frame on the Entity's own state stream. The controller coalesces duplicates
+  frame on the Cell's own state stream. The controller coalesces duplicates
   and re-raises a lost one when the input is re-delivered, so there is no ack
   and nothing here to keep.
   """
@@ -226,13 +226,13 @@ defmodule Flezha.SDK.Entity.Records do
     write_slot(hold_or_ship(%{s | change_seq: seq + 1}, seq, frame, hold_ref))
   end
 
-  # An invocation with no inter-procedure output ships at once. One that has
+  # An invocation with no inter-tasklet output ships at once. One that has
   # them holds its RECORD until the router reports every push admitted, so an
   # offset is never durable ahead of the output it produced. Never its queue:
-  # the router may be blocked pushing INTO this Entity, and an Entity that
+  # the router may be blocked pushing INTO this Cell, and a Cell that
   # stopped draining to wait for that router would be half of a cycle.
   defp hold_or_ship(%State{} = s, _seq, frame, nil),
-    do: send_record(s, "entity_effect_record", frame)
+    do: send_record(s, "cell_effect_record", frame)
 
   defp hold_or_ship(%State{tier: tier} = s, seq, frame, ref),
     do: %{s | tier: %{tier | owed: :queue.in({ref, seq, frame}, tier.owed)}}
@@ -264,7 +264,7 @@ defmodule Flezha.SDK.Entity.Records do
 
   defp ship_ops(%State{} = s, seq, ops) do
     frame = Record.timer_ops_frame(s.identity, seq, ops, s.schema_version)
-    {send_record(s, "entity_state_change", frame), seq + 1}
+    {send_record(s, "cell_state_change", frame), seq + 1}
   end
 
   defp restate_timers(%State{timers: %{pending: pending}} = s) do
@@ -279,7 +279,7 @@ defmodule Flezha.SDK.Entity.Records do
   # Between a close and its reconnect there is no stream: the class holds the
   # record for the next bound one, and the drain replays it in the order the
   # changes were made. Parking on an exhausted credit window happens here, in
-  # the Entity, and the router's push behind it waits — the emit-path park.
+  # the Cell, and the router's push behind it waits — the emit-path park.
   defp send_record(%State{} = s, payload_id, frame) do
     {_verdict, hold} = Hold.write(payload_id, s.stream, {frame, %{}})
     %{s | stream: hold}
@@ -287,27 +287,27 @@ defmodule Flezha.SDK.Entity.Records do
 
   # Fire-and-forget, outside the credit window, as the shared core's own is. It
   # goes on the wire only when nothing is held ahead of it: a delete that
-  # overtook this Entity's own records would tell the controller to forget
+  # overtook this Cell's own records would tell the controller to forget
   # state it has not been told about yet.
   defp owed_delete(%State{persistent?: false}, _ahead), do: []
 
   defp owed_delete(%State{} = s, []) do
-    case Hold.write("delete_entity_state", s.stream, {s.identity, %{}}) do
+    case Hold.write("delete_cell_state", s.stream, {s.identity, %{}}) do
       {:ok, _hold} -> []
-      {{:held, _reason}, _hold} -> [{"delete_entity_state", s.identity, %{}}]
+      {{:held, _reason}, _hold} -> [{"delete_cell_state", s.identity, %{}}]
     end
   end
 
-  defp owed_delete(%State{} = s, _ahead), do: [{"delete_entity_state", s.identity, %{}}]
+  defp owed_delete(%State{} = s, _ahead), do: [{"delete_cell_state", s.identity, %{}}]
 
   # The identity rides with the frames: the Operative writes them on the stream
-  # that identity chooses — the one a replacement Entity will bind to — so this
-  # Entity's last frames stay ahead of its replacement's first.
+  # that identity chooses — the one a replacement Cell will bind to — so this
+  # Cell's last frames stay ahead of its replacement's first.
   defp hand_off(%State{}, []), do: :ok
   defp hand_off(%State{} = s, frames), do: send(s.operative, {:handed, s.identity, frames})
 
-  # A replacement for an Entity killed untrappably continues from what its
-  # predecessor last shipped; a first Entity starts from `init_state/1`. The
+  # A replacement for a Cell killed untrappably continues from what its
+  # predecessor last shipped; a first Cell starts from `init_state/1`. The
   # tier's staged interval and consumed floor ride the slot too, so the
   # replacement re-holds what its predecessor had not yet made durable.
   def seed(nil, _identity, module, key), do: fresh(module, key)
@@ -330,13 +330,13 @@ defmodule Flezha.SDK.Entity.Records do
   end
 
   # The slot is what the WAL holds — written after the records are on the
-  # wire, read by the replacement of an Entity killed untrappably.
+  # wire, read by the replacement of a Cell killed untrappably.
   def write_slot(%State{changeful?: true, slots: slots} = s) when slots != nil do
     :ets.insert(
       slots,
       {s.identity,
        %{
-         state: s.proc_state,
+         state: s.task_state,
          seq: s.change_seq,
          timers: s.timers.pending,
          staged: s.tier.staged,
@@ -350,8 +350,8 @@ defmodule Flezha.SDK.Entity.Records do
   def write_slot(s), do: s
 
   @doc """
-  Bind the Entity to one of `secondaries` and replay what it held while there
-  was none. One stream per Entity, chosen by identity: its records and its
+  Bind the Cell to one of `secondaries` and replay what it held while there
+  was none. One stream per Cell, chosen by identity: its records and its
   snapshot stay in order because one process writes them to one stream.
   """
   @spec rebind(State.t(), [term()]) :: State.t()

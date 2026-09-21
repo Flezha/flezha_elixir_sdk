@@ -1,11 +1,11 @@
 # Twins of the rust_runner durable structured workflow fixtures
 # (test/apps/rust_runner/src/workflow.rs) under the same factory ids,
-# procedure names, channel names and output bytes; the loop and bench family
+# tasklet names, channel names and output bytes; the loop and bench family
 # is in workflows_loop.ex.
 #
 # Elixir SDK notes, each the same for every fixture here:
 #
-#   * the release gate is a `receive` with no `after`. It parks the Entity's
+#   * the release gate is a `receive` with no `after`. It parks the Cell's
 #     own process, which is what makes the crash window deterministic without
 #     a timer — and `Process.sleep` would trip the `sleeps` ratchet as well as
 #     freezing a scheduler for nothing.
@@ -21,7 +21,7 @@ defmodule ElixirRunner.Workflows.Gate do
   @retry_fails_env "FLEZHA_WORKFLOW_RETRY_FAILS"
 
   @doc """
-  Park this Entity until the release env is set. The harness kills the first
+  Park this Cell until the release env is set. The harness kills the first
   runner and launches the replacement WITH the variable, so the gate is a
   boot-time decision: never releasing on the first runner, returning at once
   on the second.
@@ -45,7 +45,7 @@ defmodule ElixirRunner.Workflows.Gate do
     end
   end
 
-  @doc "Attempts the flaky procedure has made in this runner."
+  @doc "Attempts the flaky tasklet has made in this runner."
   def note_attempt do
     count = (:persistent_term.get({__MODULE__, :attempts}, 0) || 0) + 1
     :persistent_term.put({__MODULE__, :attempts}, count)
@@ -58,7 +58,7 @@ defmodule ElixirRunner.Workflows.Seen do
 
   @doc """
   The reference's `SeenState`: a set kept sorted so snapshot bytes are
-  deterministic, and idempotent on insert so re-running a procedure after a
+  deterministic, and idempotent on insert so re-running a tasklet after a
   resume changes nothing. Every durable fixture here folds its changes with it.
   """
   def empty, do: %{items: []}
@@ -71,7 +71,7 @@ defmodule ElixirRunner.Workflows.Step do
   @moduledoc false
 
   @doc """
-  The reference's `durable_step!`: a durable `String -> String` procedure that
+  The reference's `durable_step!`: a durable `String -> String` tasklet that
   records one idempotent change keyed by its own name — so a resume re-running
   it is a no-op over the restored state — and passes the input on. `compensate`
   names the undo body when the step declares one.
@@ -95,7 +95,7 @@ defmodule ElixirRunner.Workflows.Step do
   """
   def durable_body(name, compensate \\ nil) do
     quote do
-      @behaviour Flezha.SDK.Procedure
+      @behaviour Flezha.SDK.Tasklet
 
       alias Flezha.SDK.Ctx
 
@@ -158,7 +158,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule BlockB do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "block_b"
     def init_state(_), do: nil
 
@@ -170,7 +170,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule SagaC do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "saga_c"
     def init_state(_), do: nil
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "saga_c always fails"}}
@@ -178,7 +178,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule UndoC do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "undo_outbox_c"
     def init_state(_), do: nil
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "undo_outbox_c always fails"}}
@@ -186,7 +186,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule TierCommitA do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "tier_commit_a"
     def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
     def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
@@ -202,7 +202,7 @@ defmodule ElixirRunner.Workflows do
   # undo does too.
   defmodule BranchC do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "branch_c"
     def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
     def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
@@ -222,7 +222,7 @@ defmodule ElixirRunner.Workflows do
   # The deep leaf under BranchB: blocks (crash-resume), or fails (compensation).
   defmodule BranchD do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "branch_d"
     def init_state(_), do: nil
 
@@ -242,7 +242,7 @@ defmodule ElixirRunner.Workflows do
   # committed.
   defmodule DiamB2 do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "diam_b2"
     def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
     def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
@@ -257,7 +257,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule DiamC do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "diam_c"
     def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
     def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
@@ -271,7 +271,7 @@ defmodule ElixirRunner.Workflows do
 
   defmodule DiamJoin do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "diam_join"
     def init_state(_), do: nil
 
@@ -286,7 +286,7 @@ defmodule ElixirRunner.Workflows do
   # counter is the whole ladder's view.
   defmodule RetryFlaky do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "retry_flaky"
     def init_state(_), do: nil
 
@@ -305,7 +305,7 @@ defmodule ElixirRunner.Workflows do
   # Echoes the spawn args, which a `:once` workflow's first pass is seeded with.
   defmodule Echo do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "echo"
     def init_state(_), do: nil
 
@@ -322,7 +322,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "echo_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -337,7 +337,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "commit_block_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -354,7 +354,7 @@ defmodule ElixirRunner.Workflows do
     def factory_id, do: "sync_durable_workflow"
     def sync_durability, do: true
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -371,7 +371,7 @@ defmodule ElixirRunner.Workflows do
     def factory_id, do: "optout_commit_block"
     def persistence_enabled, do: false
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -387,7 +387,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "tier_commit_block_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -405,7 +405,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "saga_block_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -423,7 +423,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "outbox_block_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -439,7 +439,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "undo_outbox_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -450,7 +450,7 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  # The procedure TREE. One channel, two consumers, is THE fan-out: both
+  # The tasklet TREE. One channel, two consumers, is THE fan-out: both
   # branches read exactly what BranchA released on it.
   defmodule BranchWorkflow do
     @moduledoc false
@@ -461,7 +461,7 @@ defmodule ElixirRunner.Workflows do
     # the ladder before it.
     def retry_attempts, do: 0
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       mid =
@@ -489,7 +489,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "diamond_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       fan =
@@ -518,7 +518,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "retry_workflow"
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c

@@ -8,7 +8,7 @@ defmodule Flezha.SDK.TimersTest do
 
   alias Flezha.SDK.Timers
 
-  @policy %{procedure: "counter_probe_procedure", cap: 10_000, clock: :wall}
+  @policy %{tasklet: "counter_probe_tasklet", cap: 10_000, clock: :wall}
 
   describe "the pending set" do
     test "registration is idempotent and cancellation removes" do
@@ -78,11 +78,11 @@ defmodule Flezha.SDK.TimersTest do
       assert tally == %{registered: 1, fired: 0, cancelled: 0, refused: 0}
     end
 
-    test "past the cap a registration is refused naming the procedure and the bound; the set is unchanged" do
+    test "past the cap a registration is refused naming the tasklet and the bound; the set is unchanged" do
       session = Timers.session(Timers.new(), %{@policy | cap: 1}, 1_000)
       {:ok, 31_000, session} = Timers.register_after(session, 30_000)
 
-      assert {:error, {:timer_cap_exceeded, "counter_probe_procedure", 1}, session} =
+      assert {:error, {:timer_cap_exceeded, "counter_probe_tasklet", 1}, session} =
                Timers.register_after(session, 60_000)
 
       # Re-registering a pending timestamp is not an allocation.
@@ -91,11 +91,11 @@ defmodule Flezha.SDK.TimersTest do
       assert Timers.size(pending) == 1
     end
 
-    test "an event-time register under a wall clock is refused naming the procedure and the clock" do
+    test "an event-time register under a wall clock is refused naming the tasklet and the clock" do
       session = Timers.session(Timers.new(), @policy, 1_000)
 
       assert {:error,
-              {:event_time_timer_without_event_time_clock, "counter_probe_procedure", :wall},
+              {:event_time_timer_without_event_time_clock, "counter_probe_tasklet", :wall},
               session} = Timers.register(session, :event_time, 5_000)
 
       assert {pending, [], %{refused: 1}} = Timers.commit(session)

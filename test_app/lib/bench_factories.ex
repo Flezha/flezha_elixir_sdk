@@ -2,24 +2,24 @@
 # under the same factory ids and topologies so `mix bench --runtime elixir`
 # measures the same shapes:
 #   do_nothing     — regression: input → echo → sink
-#   entity_stress  — entity:     A(8 keys) → B → C → D → sink (fan-out then fan-in)
-#   dynamic_entity — dynamic:    filter + key_by(prefix) → keyed Entity → sink
+#   cell_stress  — cell:     A(8 keys) → B → C → D → sink (fan-out then fan-in)
+#   dynamic_cell — dynamic:    filter + key_by(prefix) → keyed Cell → sink
 # plus the `mix bench.roundtrip` twins:
 #   bench_echo            — do_nothing with a declared Block on the entry mailbox
-#   bench_keyed           — "key:value" upsert, emits "key=value" (Single Entity), persisted
+#   bench_keyed           — "key:value" upsert, emits "key=value" (Single Cell), persisted
 #   bench_keyed_nopersist — the same upsert with the class's persistence off
 #   tier_store            — the same upsert under the effectively-once tier
 #   bench_checkpoint      — the tier acknowledging on a declared input cadence
 # The controller's in-process `--transport native` bench and its in-node tests
 # reach the same modules through a path dependency on this app.
 
-defmodule Flezha.Bench.EchoProc do
+defmodule Flezha.Bench.EchoTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "do_nothing_procedure"
+  def name, do: "do_nothing_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx),
@@ -37,13 +37,13 @@ defmodule Flezha.Bench.DoNothing do
 
   def channels(c) do
     import Flezha.SDK.Channels
-    c |> input("input") |> into(Flezha.Bench.EchoProc) |> sink("echo")
+    c |> input("input") |> into(Flezha.Bench.EchoTask) |> sink("echo")
   end
 end
 
 defmodule Flezha.Bench.StressA do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -58,13 +58,13 @@ defmodule Flezha.Bench.StressA do
       )
 
   # The shared 8-key static set (Rust's `STRESS_KEYS`); B/C/D declare the same
-  # keyset and narrow the routing to `p0` through `entities_for/1`.
-  def entity_keys, do: ~w(p0 p1 p2 p3 p4 p5 p6 p7)
+  # keyset and narrow the routing to `p0` through `cells_for/1`.
+  def cell_keys, do: ~w(p0 p1 p2 p3 p4 p5 p6 p7)
 end
 
 defmodule Flezha.Bench.StressB do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -78,13 +78,13 @@ defmodule Flezha.Bench.StressB do
         {:ok, s}
       )
 
-  defdelegate entity_keys, to: Flezha.Bench.StressA
-  def entities_for(_), do: ["p0"]
+  defdelegate cell_keys, to: Flezha.Bench.StressA
+  def cells_for(_), do: ["p0"]
 end
 
 defmodule Flezha.Bench.StressC do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -98,13 +98,13 @@ defmodule Flezha.Bench.StressC do
         {:ok, s}
       )
 
-  defdelegate entity_keys, to: Flezha.Bench.StressA
-  def entities_for(_), do: ["p0"]
+  defdelegate cell_keys, to: Flezha.Bench.StressA
+  def cells_for(_), do: ["p0"]
 end
 
 defmodule Flezha.Bench.StressD do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -118,14 +118,14 @@ defmodule Flezha.Bench.StressD do
         {:ok, s}
       )
 
-  defdelegate entity_keys, to: Flezha.Bench.StressA
-  def entities_for(_), do: ["p0"]
+  defdelegate cell_keys, to: Flezha.Bench.StressA
+  def cells_for(_), do: ["p0"]
 end
 
-defmodule Flezha.Bench.EntityStress do
+defmodule Flezha.Bench.CellStress do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "entity_stress"
+  def factory_id, do: "cell_stress"
 
   def channels(c) do
     import Flezha.SDK.Channels
@@ -143,20 +143,20 @@ defmodule Flezha.Bench.EntityStress do
   end
 end
 
-defmodule Flezha.Bench.DynamicProc do
+defmodule Flezha.Bench.DynamicTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "dynamic_entity_procedure"
+  def name, do: "dynamic_cell_tasklet"
   def init_state(_), do: %{seen: []}
   def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
-  # The e2e sets the idle TTL short; unset, the Entities live for the
+  # The e2e sets the idle TTL short; unset, the Cells live for the
   # operative's lifetime, as the reference's do.
-  def entity_idle_ttl_ms do
+  def cell_idle_ttl_ms do
     case System.get_env("DYN_TEST_TTL_MS") do
       nil -> nil
       ms -> String.to_integer(ms)
@@ -170,10 +170,10 @@ defmodule Flezha.Bench.DynamicProc do
   end
 end
 
-defmodule Flezha.Bench.DynamicEntity do
+defmodule Flezha.Bench.DynamicCell do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
-  def factory_id, do: "dynamic_entity"
+  def factory_id, do: "dynamic_cell"
 
   def channels(c) do
     import Flezha.SDK.Channels
@@ -183,7 +183,7 @@ defmodule Flezha.Bench.DynamicEntity do
     |> on_full(:drop_nothing)
     |> filter(fn s -> s != "drop" end)
     |> key_by(fn s -> s |> to_string() |> String.split(":") |> hd() end)
-    |> into(Flezha.Bench.DynamicProc)
+    |> into(Flezha.Bench.DynamicTask)
     |> sink("kafka")
   end
 end
@@ -199,18 +199,18 @@ defmodule Flezha.Bench.BenchEcho do
     c
     |> input("input")
     |> on_full(:drop_nothing)
-    |> into(Flezha.Bench.EchoProc)
+    |> into(Flezha.Bench.EchoTask)
     |> sink("echo")
   end
 end
 
-defmodule Flezha.Bench.TierStoreProc do
+defmodule Flezha.Bench.TierStoreTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "tier_store_procedure"
+  def name, do: "tier_store_tasklet"
   def init_state(_), do: %{}
   def apply_change(values, {:set, key, value}), do: Map.put(values, key, value)
 
@@ -250,7 +250,7 @@ defmodule Flezha.Bench.BenchKeyed do
     c
     |> input("input")
     |> on_full(:drop_nothing)
-    |> into(Flezha.Bench.TierStoreProc)
+    |> into(Flezha.Bench.TierStoreTask)
     |> keyed()
     |> sink("sink")
   end
@@ -286,22 +286,22 @@ defmodule Flezha.Bench.TierStore do
     |> input("input")
     |> on_full(:drop_nothing)
     |> retry_backoff_ms(300)
-    |> into(Flezha.Bench.TierStoreProc)
+    |> into(Flezha.Bench.TierStoreTask)
     |> keyed()
     |> sink("sink")
   end
 end
 
-defmodule Flezha.Bench.BenchCheckpointProc do
+defmodule Flezha.Bench.BenchCheckpointTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
-  # The same upsert under its own procedure name, so the declaration a
+  # The same upsert under its own tasklet name, so the declaration a
   # checkpoint class registers is distinguishable from `tier_store`'s.
-  def name, do: "bench_checkpoint_procedure"
-  defdelegate init_state(key), to: Flezha.Bench.TierStoreProc
-  defdelegate apply_change(state, change), to: Flezha.Bench.TierStoreProc
-  defdelegate run(input, state, ctx), to: Flezha.Bench.TierStoreProc
+  def name, do: "bench_checkpoint_tasklet"
+  defdelegate init_state(key), to: Flezha.Bench.TierStoreTask
+  defdelegate apply_change(state, change), to: Flezha.Bench.TierStoreTask
+  defdelegate run(input, state, ctx), to: Flezha.Bench.TierStoreTask
 end
 
 defmodule Flezha.Bench.BenchCheckpoint do
@@ -314,7 +314,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
 
   # `tier_store` driven by a declared cadence instead of a `commit:` input:
   # the amortised posture, acknowledging every FLEZHA_BENCH_CHECKPOINT_EVERY
-  # inputs per Entity. FLEZHA_BENCH_CHECKPOINT_OUTPUTS=at_checkpoint
+  # inputs per Cell. FLEZHA_BENCH_CHECKPOINT_OUTPUTS=at_checkpoint
   # additionally holds the interval's outputs until it closes.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -332,7 +332,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
     c
     |> input("input")
     |> on_full(:drop_nothing)
-    |> into(Flezha.Bench.BenchCheckpointProc)
+    |> into(Flezha.Bench.BenchCheckpointTask)
     |> keyed()
     |> sink("sink")
   end
@@ -356,8 +356,8 @@ defmodule ElixirRunner.BenchFactories do
   def all do
     [
       Flezha.Bench.DoNothing,
-      Flezha.Bench.EntityStress,
-      Flezha.Bench.DynamicEntity,
+      Flezha.Bench.CellStress,
+      Flezha.Bench.DynamicCell,
       Flezha.Bench.BenchEcho,
       Flezha.Bench.BenchKeyed,
       Flezha.Bench.KeyedNoPersist,

@@ -1,7 +1,7 @@
 # flezha_sdk
 
-The Elixir SDK for Flezha. You write procedures that handle one message at a
-time and operatives that declare how those procedures are connected; a Flezha
+The Elixir SDK for Flezha. You write tasklets that handle one message at a
+time and operatives that declare how those tasklets are connected; a Flezha
 controller places them, keeps their state durable, retries failures and moves
 work when a host goes away.
 

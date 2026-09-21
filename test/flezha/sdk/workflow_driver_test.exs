@@ -40,7 +40,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   # --- fixtures ---
 
   defmodule Tagger do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "tagger"
     def init_state(_), do: nil
 
@@ -51,7 +51,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defmodule Left do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "left"
     def init_state(_), do: nil
 
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defmodule Right do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "right"
     def init_state(_), do: nil
 
@@ -73,7 +73,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defmodule Join do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "join"
     def init_state(_), do: nil
 
@@ -84,14 +84,14 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defmodule Boom do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "boom"
     def init_state(_), do: nil
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "boom"}}
   end
 
   defmodule Undoable do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "undoable"
     def init_state(_), do: nil
 
@@ -107,7 +107,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defmodule Undoable2 do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "undoable2"
     def init_state(_), do: nil
 
@@ -127,7 +127,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule LinearFlow do
     def factory_id, do: "linear_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Tagger) |> Channels.into(Join)
     end
   end
@@ -135,7 +135,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule DiamondFlow do
     def factory_id, do: "diamond_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       fan |> Channels.into(Left) |> Channels.into(Join)
       fan |> Channels.into(Right) |> Channels.into(Join)
@@ -145,7 +145,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule FailingFlow do
     def factory_id, do: "failing_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Undoable) |> Channels.into(Boom)
     end
   end
@@ -153,7 +153,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule SagaFlow do
     def factory_id, do: "saga_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       c
       |> Channels.input("in")
       |> Channels.into(Undoable)
@@ -166,14 +166,14 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def factory_id, do: "opted_out_flow"
     def persistence_enabled, do: false
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Tagger)
     end
   end
 
-  # A spawn request from a procedure, released as its stage's handoff.
+  # A spawn request from a tasklet, released as its stage's handoff.
   defmodule SpawnStep do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "spawn_step"
     def init_state(_), do: nil
 
@@ -186,7 +186,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defmodule SpawningFlow do
     def factory_id, do: "spawning_flow"
-    def procedures(c), do: c |> Channels.input("in") |> Channels.into(SpawnStep)
+    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(SpawnStep)
   end
 
   # --- harness ---
@@ -229,7 +229,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   end
 
   defp commits(messages) do
-    for {:shipped, {:proc_commit, commit}} <- messages, do: commit
+    for {:shipped, {:task_commit, commit}} <- messages, do: commit
   end
 
   defp completion(messages) do
@@ -241,7 +241,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   # --- spawn ---
 
-  test "a structured procedure's spawn reaches the runner through its stage Entity" do
+  test "a structured tasklet's spawn reaches the runner through its stage Cell" do
     messages = drive(SpawningFlow)
     assert {:spawn_requested, "go", :error} in messages
     assert [commit] = commits(messages)
@@ -255,17 +255,17 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a linear chain commits each stage in DAG order and completes ok" do
     messages = drive(LinearFlow)
     assert [first, second] = commits(messages)
-    assert first.proc_idx == 0
-    assert second.proc_idx == 1
+    assert first.task_idx == 0
+    assert second.task_idx == 1
     assert first.handoff |> hd() |> Map.get(:payload) |> Resume.decode() == "a:go"
     assert second.handoff |> hd() |> Map.get(:payload) |> Resume.decode() == "j:a:go"
     assert %{status: "ok"} = completion(messages)
   end
 
-  test "a stage commits the entity identities that ran" do
+  test "a stage commits the cell identities that ran" do
     messages = drive(LinearFlow, operative_id: "wf-ids")
     assert [first | _] = commits(messages)
-    assert [identity] = first.entities_ran
+    assert [identity] = first.cells_ran
     assert is_binary(identity)
   end
 
@@ -281,7 +281,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert "r:a:go" in payloads
     assert %{status: "ok"} = completion(messages)
 
-    join = Enum.find(commits(messages), &(&1.proc_idx == 3))
+    join = Enum.find(commits(messages), &(&1.task_idx == 3))
     assert length(join.handoff) == 2
 
     assert join.handoff |> Enum.map(&Resume.decode(&1.payload)) |> Enum.sort() ==
@@ -294,25 +294,25 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule OneArmedFlow do
     def factory_id, do: "one_armed_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       fan |> Channels.into(Left) |> Channels.into(Join)
     end
   end
 
   test "removing one arm of the fan-out leaves the join one payload, not two" do
-    join = OneArmedFlow |> drive() |> commits() |> Enum.find(&(&1.proc_idx == 2))
+    join = OneArmedFlow |> drive() |> commits() |> Enum.find(&(&1.task_idx == 2))
     assert Enum.map(join.handoff, &Resume.decode(&1.payload)) == ["j:l:a:go"]
   end
 
   test "the join is committed once, not once per producer" do
     commits = DiamondFlow |> drive() |> commits()
-    assert commits |> Enum.map(& &1.proc_idx) |> Enum.sort() == [0, 1, 2, 3]
+    assert commits |> Enum.map(& &1.task_idx) |> Enum.sort() == [0, 1, 2, 3]
   end
 
   # --- failure and the saga ---
 
-  test "a failing procedure ends the run as an error naming it" do
+  test "a failing tasklet ends the run as an error naming it" do
     messages = drive(FailingFlow)
     assert %{status: "error", error: error} = completion(messages)
     assert error =~ "boom"
@@ -338,7 +338,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Tagger)
     end
   end
@@ -346,7 +346,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   # Reports every input it runs over, so a class that journals nothing, and so
   # commits nothing, can still be seen to have run.
   defmodule Heard do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "heard"
     def init_state(_), do: nil
 
@@ -363,13 +363,13 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def max_duration_ms, do: 600_000
     def persistence_enabled, do: false
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Heard)
     end
   end
 
   defmodule Countdown do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "countdown"
     def init_state(_), do: nil
 
@@ -386,7 +386,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def loop_mode, do: :chained
     def persistence_enabled, do: false
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Countdown)
     end
   end
@@ -436,7 +436,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     driver = start_loop(ChatLoop, park_idle_ms: 0, owed_inbox: 1)
 
     Driver.push_inbox(driver, "owed")
-    assert_receive {:shipped, {:proc_commit, commit}}, 5_000
+    assert_receive {:shipped, {:task_commit, commit}}, 5_000
     assert Enum.map(commit.handoff, &Resume.decode(&1.payload)) == ["a:owed"]
     assert_receive {:shipped, {:iter_park, _}}, 5_000
   end
@@ -467,7 +467,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule HybridFlow do
     def factory_id, do: "hybrid_flow"
 
-    def procedures(c) do
+    def tasklets(c) do
       c
       |> Channels.input("in")
       |> Channels.into(Tagger)
@@ -484,10 +484,10 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert [item] = producer.outbox
     assert item.payload == "a-out:a:go"
     assert item.channel == "mid"
-    assert item.seq_in_proc == 0
+    assert item.seq_in_task == 0
 
     # The consumer still receives the value itself, not the sink's bytes: one
-    # release reaches both the plugin and the next procedure.
+    # release reaches both the plugin and the next tasklet.
     assert consumer.handoff |> hd() |> Map.get(:payload) |> Resume.decode() == "j:a:go"
     assert consumer.outbox == []
     assert %{status: "ok"} = completion(messages)
@@ -501,19 +501,19 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defp resume(module, journal), do: drive(module, operative_id: "wf-resume", journal: journal)
 
-  test "a committed procedure is skipped and its child re-seeds from the journal" do
+  test "a committed tasklet is skipped and its child re-seeds from the journal" do
     messages =
       resume(LinearFlow, %{
-        committed_proc_idxs: [0],
+        committed_task_idxs: [0],
         iter: 0,
-        proc_handoffs: %{0 => [{0, Resume.encode("a:journaled")}]},
-        committed_procs: [%{proc_idx: 0, iter: 0, entities_ran: []}]
+        task_handoffs: %{0 => [{0, Resume.encode("a:journaled")}]},
+        committed_tasks: [%{task_idx: 0, iter: 0, cells_ran: []}]
       })
 
     # Only the uncommitted stage commits, and it ran on what the journal held
     # rather than on anything the skipped producer would have released now.
     assert [only] = commits(messages)
-    assert only.proc_idx == 1
+    assert only.task_idx == 1
     assert Enum.map(only.handoff, & &1.payload) == [Resume.encode("j:a:journaled")]
     assert %{status: "ok"} = completion(messages)
   end
@@ -521,19 +521,19 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a join with one producer still uncommitted banks and waits for the other" do
     messages =
       resume(DiamondFlow, %{
-        committed_proc_idxs: [0, 1],
+        committed_task_idxs: [0, 1],
         iter: 0,
-        proc_handoffs: %{
+        task_handoffs: %{
           0 => [{0, Resume.encode("a:j")}],
           1 => [{1, Resume.encode("l:a:j")}]
         },
-        committed_procs: []
+        committed_tasks: []
       })
 
     committed = commits(messages)
-    assert committed |> Enum.map(& &1.proc_idx) |> Enum.sort() == [2, 3]
+    assert committed |> Enum.map(& &1.task_idx) |> Enum.sort() == [2, 3]
 
-    join = Enum.find(committed, &(&1.proc_idx == 3))
+    join = Enum.find(committed, &(&1.task_idx == 3))
     payloads = join.handoff |> Enum.map(&decode_payload(&1.payload)) |> Enum.sort()
     assert payloads == ["j:l:a:j", "j:r:a:j"]
   end
@@ -563,12 +563,12 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert length(commits(messages)) == 3
   end
 
-  # --- a procedure ending its instance ---
+  # --- a tasklet ending its instance ---
 
   # Ends the instance on `bye` with how many turns it counted before, and
   # passes every input on, so the stage after it still has work to do.
   defmodule Closer do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "closer"
     def init_state(_), do: 0
 
@@ -589,7 +589,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def loop_mode, do: :per_input
     def max_duration_ms, do: 600_000
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
     end
   end
@@ -597,7 +597,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule ClosingPass do
     def factory_id, do: "closing_pass"
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
     end
   end
@@ -605,29 +605,29 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule ClosingThenFailing do
     def factory_id, do: "closing_then_failing"
 
-    def procedures(c) do
+    def tasklets(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Boom)
     end
   end
 
-  # Every Entity of the stage asks to complete, each with its own key. The keys
+  # Every Cell of the stage asks to complete, each with its own key. The keys
   # are declared out of order, so the one that sorts last is neither the first
   # dispatched nor the last.
   defmodule KeyedCloser do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "keyed_closer"
-    def entity_keys, do: ["b", "c", "a"]
+    def cell_keys, do: ["b", "c", "a"]
     def init_state(_), do: nil
 
     def run(input, state, ctx) do
-      Ctx.complete(ctx, "key:" <> Ctx.entity_key(ctx))
+      Ctx.complete(ctx, "key:" <> Ctx.cell_key(ctx))
       Ctx.emit(ctx, input)
       {:ok, state}
     end
   end
 
   defmodule LateCloser do
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
     def name, do: "late_closer"
     def init_state(_), do: nil
 
@@ -640,15 +640,15 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defmodule KeyedClosing do
     def factory_id, do: "keyed_closing"
-    def procedures(c), do: c |> Channels.input("in") |> Channels.into(KeyedCloser)
+    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(KeyedCloser)
   end
 
-  # Two procedures of one frontier both complete: the later-declared one wins
+  # Two tasklets of one frontier both complete: the later-declared one wins
   # whichever answers first.
   defmodule FannedClosing do
     def factory_id, do: "fanned_closing"
 
-    def procedures(c) do
+    def tasklets(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       Channels.into(fan, KeyedCloser)
       Channels.into(fan, LateCloser)
@@ -657,7 +657,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defp iter_commits(messages), do: for({:shipped, {:iter_commit, c}} <- messages, do: c)
 
-  test "a per-input loop ends on a procedure's completion once its iteration commits, and does not park" do
+  test "a per-input loop ends on a tasklet's completion once its iteration commits, and does not park" do
     # No idle window once the owed tail has arrived: a loop that went on to wait
     # after the last turn would park at once.
     driver = start_loop(ClosingLoop, park_idle_ms: 0, owed_inbox: 2)
@@ -669,12 +669,12 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{completes: false, result: ""} = first
     assert %{completes: true, result: "turns:1"} = last
 
-    # The stage after the completing procedure still ran, inside that iteration,
-    # and the completing procedure's own commit carries the completion too.
+    # The stage after the completing tasklet still ran, inside that iteration,
+    # and the completing tasklet's own commit carries the completion too.
     assert for(
              c <- commits(messages),
              c.iter == last.iter,
-             do: {c.proc_idx, c.completes, c.result}
+             do: {c.task_idx, c.completes, c.result}
            ) ==
              [{0, true, "turns:1"}, {1, false, ""}]
 
@@ -682,26 +682,26 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{status: "ok", error: "", result: "turns:1"} = completion(messages)
   end
 
-  test "a once pass ends with the result a procedure completed with, after every stage ran" do
+  test "a once pass ends with the result a tasklet completed with, after every stage ran" do
     messages = drive(ClosingPass, args: "bye")
-    assert commits(messages) |> Enum.map(& &1.proc_idx) == [0, 1]
+    assert commits(messages) |> Enum.map(& &1.task_idx) == [0, 1]
     assert iter_commits(messages) == []
     assert %{status: "ok", result: "turns:0"} = completion(messages)
   end
 
-  test "a once pass no procedure completed ends with an empty result" do
+  test "a once pass no tasklet completed ends with an empty result" do
     assert %{status: "ok", result: ""} = ClosingPass |> drive(args: "hi") |> completion()
   end
 
-  test "of several completions in one procedure, the Entity whose key sorts last decides" do
+  test "of several completions in one tasklet, the Cell whose key sorts last decides" do
     assert %{status: "ok", result: "key:c"} = KeyedClosing |> drive() |> completion()
   end
 
-  test "of completions in several procedures, the one latest in the chain decides" do
+  test "of completions in several tasklets, the one latest in the chain decides" do
     assert %{status: "ok", result: "late"} = FannedClosing |> drive() |> completion()
   end
 
-  test "an iteration that fails after a procedure completed discards the completion" do
+  test "an iteration that fails after a tasklet completed discards the completion" do
     messages = drive(ClosingThenFailing, args: "bye")
     assert %{status: "error", error: error, result: ""} = completion(messages)
     assert error =~ "boom"
@@ -709,7 +709,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   test "a resume whose last committed iteration completed ends at once with its result" do
     journal =
-      Codec.journal_facts(%RunnerCommands.ProcJournalState{
+      Codec.journal_facts(%RunnerCommands.TaskJournalState{
         iter: 3,
         completed: true,
         result: "turns:2"
@@ -721,23 +721,23 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{status: "ok", result: "turns:2"} = completion(messages)
   end
 
-  test "a resume after the completing procedure committed, before its iteration did, completes" do
+  test "a resume after the completing tasklet committed, before its iteration did, completes" do
     journal =
-      Codec.journal_facts(%RunnerCommands.ProcJournalState{
+      Codec.journal_facts(%RunnerCommands.TaskJournalState{
         iter: 1,
-        committed_proc_idxs: [0],
-        proc_handoffs: [
-          %RunnerCommands.ProcEdgeHandoff{
-            proc_idx: 0,
+        committed_task_idxs: [0],
+        task_handoffs: [
+          %RunnerCommands.TaskEdgeHandoff{
+            task_idx: 0,
             handoff: [
-              %RunnerCommands.ProcHandoffItem{channel_id: 1, payload: Resume.encode("bye")}
+              %RunnerCommands.TaskHandoffItem{channel_id: 1, payload: Resume.encode("bye")}
             ]
           }
         ],
-        committed_procs: [
-          %RunnerCommands.ProcCommittedProc{proc_idx: 0, iter: 0},
-          %RunnerCommands.ProcCommittedProc{
-            proc_idx: 0,
+        committed_tasks: [
+          %RunnerCommands.TaskCommittedTask{task_idx: 0, iter: 0},
+          %RunnerCommands.TaskCommittedTask{
+            task_idx: 0,
             iter: 1,
             completes: true,
             result: "turns:1"
@@ -746,14 +746,14 @@ defmodule Flezha.SDK.Workflow.DriverTest do
       })
 
     messages = drive(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)
-    assert for(c <- commits(messages), do: c.proc_idx) == [1]
+    assert for(c <- commits(messages), do: c.task_idx) == [1]
     assert [%{iter: 1, completes: true, result: "turns:1"}] = iter_commits(messages)
     refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
     assert %{status: "ok", result: "turns:1"} = completion(messages)
   end
 
   test "a resume whose last committed iteration did not complete waits for input" do
-    journal = Codec.journal_facts(%RunnerCommands.ProcJournalState{iter: 3})
+    journal = Codec.journal_facts(%RunnerCommands.TaskJournalState{iter: 3})
 
     driver =
       start_driver(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)

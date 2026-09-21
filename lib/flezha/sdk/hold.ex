@@ -63,10 +63,10 @@ defmodule Flezha.SDK.Hold do
   # key: the frame's `Command` variant, because a shutdown state ship is a
   # durable record and every other variant is a control frame.
   @classes %{
-    Wire.payload_id_entity_state_change() => :durable,
-    Wire.payload_id_entity_effect_record() => :durable,
-    Wire.payload_id_entity_state_snapshot() => :durable,
-    Wire.payload_id_delete_entity_state() => :durable,
+    Wire.payload_id_cell_state_change() => :durable,
+    Wire.payload_id_cell_effect_record() => :durable,
+    Wire.payload_id_cell_state_snapshot() => :durable,
+    Wire.payload_id_delete_cell_state() => :durable,
     Wire.payload_id_compensation_intent() => :durable,
     Wire.payload_id_compensation_done() => :durable,
     Wire.payload_id_park_payload() => :durable,
@@ -87,7 +87,7 @@ defmodule Flezha.SDK.Hold do
     update_factories: :control,
     admin_request: :control,
     spawn_workflow_request: :control,
-    proc_commit: :control,
+    task_commit: :control,
     iter_commit: :control,
     iter_park: :control,
     workflow_completed: :control,
@@ -99,8 +99,8 @@ defmodule Flezha.SDK.Hold do
   # refused it. A compaction snapshot and an eviction's delete ride outside the
   # window, as the shared core's do.
   @credited [
-    Wire.payload_id_entity_state_change(),
-    Wire.payload_id_entity_effect_record(),
+    Wire.payload_id_cell_state_change(),
+    Wire.payload_id_cell_effect_record(),
     "correction_request"
   ]
 
@@ -141,7 +141,7 @@ defmodule Flezha.SDK.Hold do
   @doc """
   Which of `secondaries` a key's frames go on. One stream per key, so every
   writer of them picks the same one and their order on the wire is the order
-  they were written: an Entity and the Operative replaying what that Entity
+  they were written: a Cell and the Operative replaying what that Cell
   handed on when it stopped agree by computing this, never by comparing notes.
   """
   @spec secondary_for([term(), ...], term()) :: term()

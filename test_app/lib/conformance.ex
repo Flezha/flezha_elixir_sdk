@@ -1,12 +1,12 @@
 # The row interpreter for `test/fixtures/reference_topologies.txt`.
 #
-# The palette procedures below are the fixture's roles bound to this SDK. They
+# The palette tasklets below are the fixture's roles bound to this SDK. They
 # exist only for the conformance run and are deliberately outside
 # `ElixirRunner.Factories.all/0` — a runner never advertises them.
 
-defmodule ElixirRunner.Conformance.PlainProc do
+defmodule ElixirRunner.Conformance.PlainTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   def name, do: "plain"
   def init_state(_key), do: nil
@@ -14,9 +14,9 @@ defmodule ElixirRunner.Conformance.PlainProc do
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("plain")
 end
 
-defmodule ElixirRunner.Conformance.SecondProc do
+defmodule ElixirRunner.Conformance.SecondTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   def name, do: "second"
   def init_state(_key), do: nil
@@ -24,9 +24,9 @@ defmodule ElixirRunner.Conformance.SecondProc do
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("second")
 end
 
-defmodule ElixirRunner.Conformance.TwinProc do
+defmodule ElixirRunner.Conformance.TwinTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   # A distinct module answering the SAME name as `plain`: that IS the collision.
   def name, do: "plain"
@@ -35,49 +35,49 @@ defmodule ElixirRunner.Conformance.TwinProc do
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("twin")
 end
 
-defmodule ElixirRunner.Conformance.StaticProc do
+defmodule ElixirRunner.Conformance.StaticTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   # The role is "the static declaration missing its other half". In this SDK
-  # `entities_for/1` defaults to the whole keyset, so keys without a router are
+  # `cells_for/1` defaults to the whole keyset, so keys without a router are
   # complete and a router without keys is the incomplete half — the mirror of
-  # the reference's, and the shape `EntitiesForMissing` names here.
+  # the reference's, and the shape `CellsForMissing` names here.
   def name, do: "static"
   def init_state(_key), do: nil
   def run(_input, state, _ctx), do: {:ok, state}
-  def entities_for(_input), do: ["a"]
+  def cells_for(_input), do: ["a"]
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("static")
 end
 
-defmodule ElixirRunner.Conformance.RoutedProc do
+defmodule ElixirRunner.Conformance.RoutedTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   def name, do: "routed"
   def init_state(_key), do: nil
   def run(_input, state, _ctx), do: {:ok, state}
-  def entity_keys, do: ["a", "b"]
-  def entities_for(_input), do: ["a"]
+  def cell_keys, do: ["a", "b"]
+  def cells_for(_input), do: ["a"]
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("routed")
 end
 
-defmodule ElixirRunner.Conformance.DynamicProc do
+defmodule ElixirRunner.Conformance.DynamicTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
-  # Dynamic mode is DERIVED here: a keyless procedure a keyed edge reaches.
+  # Dynamic mode is DERIVED here: a keyless tasklet a keyed edge reaches.
   def name, do: "dynamic"
   def init_state(_key), do: nil
   def run(_input, state, _ctx), do: {:ok, state}
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("dynamic")
 end
 
-defmodule ElixirRunner.Conformance.NochangeProc do
+defmodule ElixirRunner.Conformance.NochangeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
-  # A logical clock over a procedure that journals nothing: no `apply_change/2`.
+  # A logical clock over a tasklet that journals nothing: no `apply_change/2`.
   def name, do: "nochange"
   def init_state(_key), do: nil
   def run(_input, state, _ctx), do: {:ok, state}
@@ -85,9 +85,9 @@ defmodule ElixirRunner.Conformance.NochangeProc do
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("nochange")
 end
 
-defmodule ElixirRunner.Conformance.EventTimeProc do
+defmodule ElixirRunner.Conformance.EventTimeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   def name, do: "eventtime"
   def init_state(_key), do: nil
@@ -146,7 +146,7 @@ defmodule ElixirRunner.Conformance do
     * `FLEZHA_REFUSAL_FIXTURE=<topology id>` registers ONLY that row's
       topology at boot, so a refused one exits non-zero naming its refusal.
 
-  One mapping this SDK's surface forces: `<proc>.mailbox(n)` is a procedure
+  One mapping this SDK's surface forces: `<task>.mailbox(n)` is a tasklet
   declaration here, not a builder knob, so the palette reads the row's capacity
   off `mailbox_capacity/1` rather than the handle carrying it.
 
@@ -168,7 +168,7 @@ defmodule ElixirRunner.Conformance do
   # fixtures, whose derived lines are the seven-column table at the top.
   @cited %{
     "hybrid_channel" => {ElixirRunner.HybridChannelOp, :channels},
-    "commit_block_chain" => {ElixirRunner.Workflows.TierCommitBlockWorkflow, :procedures}
+    "commit_block_chain" => {ElixirRunner.Workflows.TierCommitBlockWorkflow, :tasklets}
   }
 
   @default_mailbox_capacity 1024
@@ -271,7 +271,7 @@ defmodule ElixirRunner.Conformance do
 
   # --- the §5 short form ---
   #
-  # Elixir refuses a malformed short form where `use Flezha.SDK.Procedure`
+  # Elixir refuses a malformed short form where `use Flezha.SDK.Tasklet`
   # expands, so a module that earns one cannot be compiled and the row is
   # answered by citing the test that compiles it from a string and asserts the
   # `CompileError`. The one runtime refusal, a duplicate factory id, boots for
@@ -382,7 +382,7 @@ defmodule ElixirRunner.Conformance do
       producer == nil -> line(name, "entry", nil, consumers, sinks)
       sinks == [] and consumers == [] -> nil
       consumers == [] -> line(name, "plugin", producer, consumers, sinks)
-      true -> line(name, "inter_proc", producer, consumers, sinks)
+      true -> line(name, "inter_task", producer, consumers, sinks)
     end
   end
 
@@ -420,8 +420,8 @@ defmodule ElixirRunner.Conformance do
     %{acc | handles: Map.put(acc.handles, name, Channels.input(acc.token, name))}
   end
 
-  # `merge(<proc>, <x>…)`: one identity mapping per listed source, a repeated
-  # one included, closed on the procedure, whose output its role addresses.
+  # `merge(<task>, <x>…)`: one identity mapping per listed source, a repeated
+  # one included, closed on the tasklet, whose output its role addresses.
   defp step("merge(" <> _ = step, acc) do
     [role | sources] = step |> argument() |> String.split(",") |> Enum.map(&String.trim/1)
 
@@ -430,7 +430,7 @@ defmodule ElixirRunner.Conformance do
       |> Enum.reduce(Channels.merge(acc.token), fn source, merge ->
         Channels.from(merge, Map.fetch!(acc.handles, source), & &1)
       end)
-      |> Channels.into(procedure(role))
+      |> Channels.into(tasklet(role))
 
     %{acc | handles: Map.put(acc.handles, role, out)}
   end
@@ -445,7 +445,7 @@ defmodule ElixirRunner.Conformance do
     class_flag(name, value, acc)
   end
 
-  # A procedure knob, read off the palette's own declaration rather than here.
+  # A tasklet knob, read off the palette's own declaration rather than here.
   defp dotted(_head, ["mailbox(" <> _], acc), do: acc
 
   defp dotted(head, links, acc), do: chain(head, links, acc)
@@ -466,7 +466,7 @@ defmodule ElixirRunner.Conformance do
 
   # `into` answers the consumer's own output channel, addressed by its role.
   defp into(stream, role, acc) do
-    out = Channels.into(stream, procedure(role))
+    out = Channels.into(stream, tasklet(role))
     {out, %{acc | handles: Map.put(acc.handles, role, out)}}
   end
 
@@ -505,16 +505,16 @@ defmodule ElixirRunner.Conformance do
   defp class_flag(other, _value, _acc),
     do: raise("the fixture spells a class flag this interpreter does not map: #{other}")
 
-  defp procedure("plain"), do: ElixirRunner.Conformance.PlainProc
-  defp procedure("second"), do: ElixirRunner.Conformance.SecondProc
-  defp procedure("twin"), do: ElixirRunner.Conformance.TwinProc
-  defp procedure("static"), do: ElixirRunner.Conformance.StaticProc
-  defp procedure("routed"), do: ElixirRunner.Conformance.RoutedProc
-  defp procedure("dynamic"), do: ElixirRunner.Conformance.DynamicProc
-  defp procedure("nochange"), do: ElixirRunner.Conformance.NochangeProc
-  defp procedure("eventtime"), do: ElixirRunner.Conformance.EventTimeProc
+  defp tasklet("plain"), do: ElixirRunner.Conformance.PlainTask
+  defp tasklet("second"), do: ElixirRunner.Conformance.SecondTask
+  defp tasklet("twin"), do: ElixirRunner.Conformance.TwinTask
+  defp tasklet("static"), do: ElixirRunner.Conformance.StaticTask
+  defp tasklet("routed"), do: ElixirRunner.Conformance.RoutedTask
+  defp tasklet("dynamic"), do: ElixirRunner.Conformance.DynamicTask
+  defp tasklet("nochange"), do: ElixirRunner.Conformance.NochangeTask
+  defp tasklet("eventtime"), do: ElixirRunner.Conformance.EventTimeTask
 
-  defp procedure(role),
+  defp tasklet(role),
     do: raise("the fixture names a palette role that is not one: #{role}")
 
   defp overflow("drop_nothing"), do: :drop_nothing
@@ -527,7 +527,7 @@ defmodule ElixirRunner.Conformance do
   def context, do: Application.get_env(:elixir_runner, :conformance_row, @empty_context)
 
   @doc false
-  # The per-Entity mailbox capacity the row declares for `role`.
+  # The per-Cell mailbox capacity the row declares for `role`.
   def mailbox_capacity(role),
     do: Map.get(context().mailbox, role, @default_mailbox_capacity)
 

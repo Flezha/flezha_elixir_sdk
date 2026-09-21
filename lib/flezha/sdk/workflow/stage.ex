@@ -1,28 +1,28 @@
 defmodule Flezha.SDK.Workflow.Stage do
   @moduledoc """
-  One stage of a workflow chain: its Entities, how a batch is split across
+  One stage of a workflow chain: its Cells, how a batch is split across
   them, and how the driver learns the stage has finished.
 
-  Every Entity here is an ordinary `Flezha.SDK.Entity` — the same process a
+  Every Cell here is an ordinary `Flezha.SDK.Cell` — the same process a
   stream operative runs, with the same state, records, ladder and timers. Two
   options are all that differ: the ladder comes from the class's
   `retry_attempts`/`retry_backoff_ms` rather than from an edge's knobs, and an
   exhausted ladder reports the failure instead of parking to the DLQ, because
-  a workflow answers a failed procedure by unwinding rather than by shedding
+  a workflow answers a failed tasklet by unwinding rather than by shedding
   the input.
 
-  A stage is finished when every one of its Entities has drained past a
+  A stage is finished when every one of its Cells has drained past a
   barrier queued behind its batch. An invocation that emits nothing reports
   nothing, so counting outputs could never tell the driver a stage was done.
   """
 
-  alias Flezha.SDK.{Entity, Procedure}
+  alias Flezha.SDK.{Cell, Tasklet}
   alias Flezha.SDK.Workflow.Spec
 
   @doc """
-  Build every stage's Entities, in DAG order. They exist before anything runs
+  Build every stage's Cells, in DAG order. They exist before anything runs
   so a `RestoreInitState` frame arriving right after the `AddOperative` ack
-  always finds its Entity registered.
+  always finds its Cell registered.
   """
   @spec build_all(Spec.t(), keyword()) :: %{reference() => [pid()]}
   def build_all(%Spec{} = spec, opts) do
@@ -30,14 +30,14 @@ defmodule Flezha.SDK.Workflow.Stage do
       pids =
         spec
         |> Spec.stage_keys(node_ref)
-        |> Enum.map(&start_entity(spec, node_ref, &1, opts))
+        |> Enum.map(&start_cell(spec, node_ref, &1, opts))
 
       {node_ref, pids}
     end)
   end
 
   @doc """
-  Hand `batch` to a stage's Entities and queue a barrier behind each. Answers
+  Hand `batch` to a stage's Cells and queue a barrier behind each. Answers
   `{ref, node_ref}` pairs the driver waits on: the stage is finished when the
   last of them has replied.
   """
@@ -48,16 +48,16 @@ defmodule Flezha.SDK.Workflow.Stage do
     pids
     |> Enum.with_index()
     |> Enum.map(fn {pid, index} ->
-      Enum.each(Map.get(partitions, index, []), &Entity.enqueue_block(pid, &1))
+      Enum.each(Map.get(partitions, index, []), &Cell.enqueue_block(pid, &1))
       ref = make_ref()
-      Entity.barrier(pid, ref, reply_to)
+      Cell.barrier(pid, ref, reply_to)
       {ref, node_ref}
     end)
   end
 
   @doc """
-  Split `batch` across a stage's Entities by slot index: everything to slot 0
-  in Single mode, by `entities_for/1` in Static mode. A value naming a key the
+  Split `batch` across a stage's Cells by slot index: everything to slot 0
+  in Single mode, by `cells_for/1` in Static mode. A value naming a key the
   stage does not declare reaches nothing, as it does on the stream path.
   """
   @spec partition(Spec.t(), reference(), [term()]) :: %{non_neg_integer() => [term()]}
@@ -71,7 +71,7 @@ defmodule Flezha.SDK.Workflow.Stage do
     end)
   end
 
-  @doc "The slot `key` is registered in, or 0 when the stage has one Entity."
+  @doc "The slot `key` is registered in, or 0 when the stage has one Cell."
   @spec index_of(Spec.t(), reference(), String.t() | nil) :: non_neg_integer()
   def index_of(%Spec{} = spec, node_ref, key),
     do: spec |> Spec.stage_keys(node_ref) |> Enum.find_index(&(&1 == key)) |> Kernel.||(0)
@@ -81,7 +81,7 @@ defmodule Flezha.SDK.Workflow.Stage do
       :static ->
         topology.node_modules
         |> Map.fetch!(node_ref)
-        |> Procedure.entities_for(value)
+        |> Tasklet.cells_for(value)
         |> Enum.map(&Enum.find_index(keys, fn k -> k == &1 end))
         |> Enum.reject(&is_nil/1)
 
@@ -90,20 +90,20 @@ defmodule Flezha.SDK.Workflow.Stage do
     end
   end
 
-  defp start_entity(%Spec{topology: topology, knobs: knobs}, node_ref, key, opts) do
+  defp start_cell(%Spec{topology: topology, knobs: knobs}, node_ref, key, opts) do
     module = Map.fetch!(topology.node_modules, node_ref)
     operative_id = Keyword.fetch!(opts, :operative_id)
 
     {:ok, pid} =
-      Entity.start(
+      Cell.start(
         operative: Keyword.fetch!(opts, :operative),
         operative_id: operative_id,
         node_ref: node_ref,
         node_name: topology.node_name[node_ref],
         input_channel: topology.node_channel[node_ref],
         module: module,
-        entity_key: key,
-        capacity: Procedure.mailbox_capacity(module),
+        cell_key: key,
+        capacity: Tasklet.mailbox_capacity(module),
         policy: :drop_nothing,
         retry_max: max(knobs.retry_attempts, 1),
         retry_backoff_ms: knobs.retry_backoff_ms,

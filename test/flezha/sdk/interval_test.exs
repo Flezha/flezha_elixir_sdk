@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.IntervalTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.Entity.Interval
+  alias Flezha.SDK.Cell.Interval
 
   defp output(payload), do: %{channel: "out", key: "k", metadata: [], payload: payload}
 
@@ -79,7 +79,7 @@ defmodule Flezha.SDK.IntervalTest do
     assert length(shipped.outputs) == 2
   end
 
-  test "the delay closes a quiet Entity's interval, and a spent deadline does nothing" do
+  test "the delay closes a quiet Cell's interval, and a spent deadline does nothing" do
     policy = at_checkpoint(nil, 50)
 
     assert {nil, staged} =

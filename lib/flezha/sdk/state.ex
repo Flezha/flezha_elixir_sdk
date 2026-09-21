@@ -3,10 +3,10 @@ defmodule Flezha.SDK.State do
   The `state` block and `defchange`: §3's change derivation, in Elixir.
 
   Declared state is mutated only through declared changes, because the change
-  log IS how an entity is rebuilt. A `state` block writes that path for the
+  log IS how a cell is rebuilt. A `state` block writes that path for the
   field-granular half:
 
-      use Flezha.SDK.Procedure, name: "position"
+      use Flezha.SDK.Tasklet, name: "position"
 
       state do
         field :qty, :integer, default: 0
@@ -53,7 +53,7 @@ defmodule Flezha.SDK.State do
   end
 
   @doc """
-  Declare the fields an entity's state carries. See the module doc.
+  Declare the fields a cell's state carries. See the module doc.
   """
   defmacro state(do: block) do
     quote do
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.State do
       raise CompileError,
         description:
           "`field #{inspect(name)}` declares no `default:`; a state field's starting value is " <>
-            "what a fresh entity holds and what a JSON object falls back to"
+            "what a fresh cell holds and what a JSON object falls back to"
     end
 
     Module.put_attribute(
@@ -127,9 +127,9 @@ defmodule Flezha.SDK.State do
     fields = Module.get_attribute(env.module, :flezha_state_fields, []) |> Enum.reverse()
     changes = Module.get_attribute(env.module, :flezha_changes, [])
     block? = Module.get_attribute(env.module, :flezha_state_block, false)
-    # A short-form operative module carries the block for the procedure the
+    # A short-form operative module carries the block for the tasklet the
     # operative generates, so there the callbacks implement no behaviour.
-    impl = Flezha.SDK.Procedure in Module.get_attribute(env.module, :behaviour, [])
+    impl = Flezha.SDK.Tasklet in Module.get_attribute(env.module, :behaviour, [])
 
     if block? or changes != [] do
       refuse_hand_written(env.module, block?)
@@ -198,11 +198,11 @@ defmodule Flezha.SDK.State do
   end
 
   # `init_state/1` is overridable, which is Elixir's spelling of Rust's
-  # `init = f`: an author who needs the entity key writes their own.
+  # `init = f`: an author who needs the cell key writes their own.
   defp init_state(impl) do
     quote do
       @impl unquote(impl)
-      def init_state(_entity_key), do: __flezha_state_defaults__()
+      def init_state(_cell_key), do: __flezha_state_defaults__()
 
       defoverridable init_state: 1
     end

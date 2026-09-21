@@ -95,7 +95,7 @@ defmodule Flezha.SDK.Transport do
   end
 
   def connect_sockets(:quic, _runner_id, count, owner, conn) do
-    # A single cell holding the next payload index. One cell has no slot
+    # A single counter holding the next payload index. One counter has no slot
     # layout to declare, so it is not a `Flezha.SDK.CounterTable` table.
     idx = :counters.new(1, [])
 

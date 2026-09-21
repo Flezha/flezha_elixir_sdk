@@ -30,7 +30,7 @@ defmodule Flezha.SDK.Knob do
   @typedoc "How a knob's text is read."
   @type type :: :ms | :int | :positive_int | :bool | :string | :path
   @typedoc "A declared retry ladder's name."
-  @type ladder :: :sdk_reconnect | :sdk_retry | :park_resend | :entity_wake_retry
+  @type ladder :: :sdk_reconnect | :sdk_retry | :park_resend | :cell_wake_retry
 
   # {name, variable, type, default}
   @rows [
@@ -44,8 +44,8 @@ defmodule Flezha.SDK.Knob do
     {:mailbox_capacity, "FLEZHA_MAILBOX_CAPACITY", :positive_int, 1_024},
     {:namespace_secret, "FLEZHA_NAMESPACE_SECRET", :string, nil},
     {:quic_addresses, "FLEZHA_QUIC_ADDRESSES", :string, "127.0.0.1:4433"},
-    # The cadence a keyed host sweeps idle entities at. Unset, the caller's own
-    # default applies: a quarter of the entity TTL.
+    # The cadence a keyed host sweeps idle cells at. Unset, the caller's own
+    # default applies: a quarter of the cell TTL.
     {:reap_interval_ms, "FLEZHA_REAP_INTERVAL_MS", :ms, nil},
     {:reconnect_request_retry_ms, "FLEZHA_RECONNECT_REQUEST_RETRY_MS", :ms, 30_000},
     {:reconnect_ring_capacity, "FLEZHA_RECONNECT_RING_CAPACITY", :positive_int, 1_024},
@@ -54,26 +54,26 @@ defmodule Flezha.SDK.Knob do
     # Operative, a local run. None of them runs author code on the answering
     # clause, so a wait here is a wedged process rather than a busy one.
     {:sdk_control_call_ms, nil, :ms, 5_000},
-    # A call into an Entity that answers from its queue rather than its state.
-    {:sdk_entity_call_ms, nil, :ms, 5_000},
+    # A call into a Cell that answers from its queue rather than its state.
+    {:sdk_cell_call_ms, nil, :ms, 5_000},
     # The three calls whose duration grows with the state. Each waits inside the
     # controller request that asked for it, one or five seconds short of it: a
     # refused call is not a cancelled one, and an inner bound equal to the outer
     # is no bound at all.
-    {:sdk_entity_apply_ms, nil, :ms, 4_000},
-    {:sdk_entity_restore_ms, nil, :ms, 10_000},
-    {:sdk_entity_snapshot_ms, nil, :ms, 25_000},
+    {:sdk_cell_apply_ms, nil, :ms, 4_000},
+    {:sdk_cell_restore_ms, nil, :ms, 10_000},
+    {:sdk_cell_snapshot_ms, nil, :ms, 25_000},
     {:sdk_idle_probe_ms, nil, :ms, 50},
     {:sdk_max_reap_interval_ms, nil, :ms, 30_000},
     # How long a rehydrated per-input workflow loop waits for the inbox tail its
     # bind still owes before it may park: a park there would drop the tail.
     {:sdk_owed_inbox_wait_ms, nil, :ms, 60_000},
     {:sdk_serialize_wait_ms, nil, :ms, 5_000},
-    # The task yield outlasts the read it awaits, so a wedged Entity answers the
+    # The task yield outlasts the read it awaits, so a wedged Cell answers the
     # read's own bound rather than the yield's.
     {:sdk_serialize_yield_ms, nil, :ms, 6_000},
     {:sdk_shutdown_ack_ms, nil, :ms, 2_000},
-    # How long a procedure's spawn request waits for the controller's answer.
+    # How long a tasklet's spawn request waits for the controller's answer.
     {:sdk_spawn_reply_ms, nil, :ms, 30_000},
     # Unset, the socket directory is the first rung of the ladder every runtime
     # walks, which `flz_transport` resolves.
@@ -90,7 +90,7 @@ defmodule Flezha.SDK.Knob do
     sdk_reconnect: %{base: 100, cap: 30_000, exponent_cap: 8, jitter: true},
     sdk_retry: %{base: 50, cap: 5_000, exponent_cap: 16, jitter: true},
     park_resend: %{base: 2_000, cap: 2_000, exponent_cap: nil, jitter: false},
-    entity_wake_retry: %{base: 5, cap: 5, exponent_cap: nil, jitter: false}
+    cell_wake_retry: %{base: 5, cap: 5, exponent_cap: nil, jitter: false}
   }
 
   @wait_event [:flezha, :backoff, :wait]
@@ -110,7 +110,7 @@ defmodule Flezha.SDK.Knob do
 
   @doc """
   What this runner reads for `name`, with the caller's own fallback for a
-  quantity the row cannot state — a sweep cadence derived from an entity's TTL.
+  quantity the row cannot state — a sweep cadence derived from a cell's TTL.
   """
   @spec get(name(), term()) :: term()
   def get(name, fallback) do

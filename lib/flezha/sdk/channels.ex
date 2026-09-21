@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Channels do
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
   to the chain its handle carries — a transform, a key, a plugin sink, an edge
-  into a procedure, a merge source closing on one — and the record is kept in
+  into a tasklet, a merge source closing on one — and the record is kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
   builder's `pending`).
   `Flezha.SDK.Topology.build/2` then judges the finished record in the three
@@ -190,7 +190,7 @@ defmodule Flezha.SDK.Channels do
   # --- consumers ---
 
   @doc """
-  Route into a procedure node, or close a merge on one. Unnamed mentions of one
+  Route into a tasklet node, or close a merge on one. Unnamed mentions of one
   module unify (fan-in).
   """
   @spec into(Stream.t() | Merge.t(), module()) :: Stream.t()
@@ -199,7 +199,7 @@ defmodule Flezha.SDK.Channels do
   def into(%Merge{} = m, module), do: close_merge(m, module, nil)
 
   @doc """
-  Route into a named procedure node, or close a merge on one. Identity
+  Route into a named tasklet node, or close a merge on one. Identity
   collisions refuse.
   """
   @spec into_named(Stream.t() | Merge.t(), module(), String.t()) :: Stream.t()
@@ -212,7 +212,7 @@ defmodule Flezha.SDK.Channels do
     do: close_merge(m, module, name)
 
   @doc """
-  Open a merge: one procedure fed by several source streams, each under its own
+  Open a merge: one tasklet fed by several source streams, each under its own
   mapping, closed with `into/2`.
 
       c
@@ -303,7 +303,7 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   Declare output identity on the plugin wire this handle reaches — the
-  reference's `keyed()`: its frames carry `flz.entity`, `flz.seq` and
+  reference's `keyed()`: its frames carry `flz.cell`, `flz.seq` and
   `flz.key`. Refused on an entry handle, which has no output of its own to
   stamp; a chain declared keyed that reaches no `sink` is refused by the check
   as `KeyedChannelWithoutPluginWire`.
@@ -312,7 +312,7 @@ defmodule Flezha.SDK.Channels do
 
   def keyed(%Stream{} = s), do: link(s, :keyed)
 
-  @doc "Name the source procedure node, and with it the channel it produces."
+  @doc "Name the source tasklet node, and with it the channel it produces."
   def named(%Stream{source: {:entry, name}} = s, _name),
     do: refuse(s, {:NamedOnEntry, name})
 
@@ -351,7 +351,7 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The channel a source is named by on the wire: an entry's own name, a node's
-  `named/2` name, the name its `sink` declared, else its procedure's. One rule,
+  `named/2` name, the name its `sink` declared, else its tasklet's. One rule,
   read by the check's refusals and by the compiled routes, so the override is
   applied once for every terminator the channel carries.
   """
@@ -371,13 +371,13 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The same rule off a node record: its first naming declaration, else the
-  procedure's own name.
+  tasklet's own name.
   """
   def node_channel_name(%{module: module} = node),
     do: List.first(naming_declarations(node)) || module.name()
 
   # Whether a node's channel took its name from the node's own `sink`, rather
-  # than from `named/2` or from its procedure.
+  # than from `named/2` or from its tasklet.
   @doc false
   def named_by_sink?(%{name: name, sink_names: sinks}), do: is_nil(name) and sinks != []
 

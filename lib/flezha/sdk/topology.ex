@@ -32,12 +32,12 @@ defmodule Flezha.SDK.Topology do
 
   Routing model (v1, keyless channels deferred): an input on an entry channel,
   or a value a node emits, fans out along the source's routes; each route fuses
-  one transform closure and at most one key. Entity mode per node is derived
-  from the wiring exactly as in the Rust SDK: non-empty `entity_keys/0` →
-  Static; a keyed incoming route into a keyless procedure → Dynamic; else Single.
+  one transform closure and at most one key. Cell mode per node is derived
+  from the wiring exactly as in the Rust SDK: non-empty `cell_keys/0` →
+  Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Graph, Procedure, StreamOperative}
+  alias Flezha.SDK.{Channels, Graph, Tasklet, StreamOperative}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -71,7 +71,7 @@ defmodule Flezha.SDK.Topology do
 
   @doc """
   Compile `module`'s declaration into a topology. `declare` names the callback
-  that authors it: `:channels` for a stream class, `:procedures` for a workflow
+  that authors it: `:channels` for a stream class, `:tasklets` for a workflow
   one — the two surfaces author on the same builder, so they compile through
   the same function, and the kind is what decides which class facts apply.
   """
@@ -201,7 +201,7 @@ defmodule Flezha.SDK.Topology do
 
   # Output identity stamps only exist on plugin-bound frames, so a chain that
   # declares `keyed()` and reaches no `sink(...)` asked for a stamp nothing can
-  # carry — whether it closed on a procedure or closed on nothing at all.
+  # carry — whether it closed on a tasklet or closed on nothing at all.
   defp unwired_identity(state, %{keyed?: true, wired?: false}),
     do: issue(state, {:KeyedChannelWithoutPluginWire, state.name})
 
@@ -285,7 +285,7 @@ defmodule Flezha.SDK.Topology do
     end
   end
 
-  # One consumer edge per (channel, procedure). Re-declaring one where either
+  # One consumer edge per (channel, tasklet). Re-declaring one where either
   # side carries a transform or a key is refused: the edge keeps a single fused
   # closure, so the second declaration would otherwise be dropped and every
   # value delivered under the first one's transform and key. Carrying neither
@@ -375,7 +375,7 @@ defmodule Flezha.SDK.Topology do
 
   defp derive_modes(acc, incoming) do
     Map.new(acc.nodes, fn {ref, %{module: module}} ->
-      keys = Procedure.entity_keys(module)
+      keys = Tasklet.cell_keys(module)
       keyed_in? = Enum.any?(Map.get(incoming, ref, []), &(&1.key_by != nil))
 
       mode =
@@ -399,7 +399,7 @@ defmodule Flezha.SDK.Topology do
 
   defp facts(module, declare, acc, shape) do
     names(acc, shape.channels) ++
-      Enum.flat_map(nodes_in_order(acc), &procedure_facts(&1, shape)) ++
+      Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
       class_facts(module, declare, acc) ++
       cycles(acc, shape.routes) ++
@@ -461,9 +461,9 @@ defmodule Flezha.SDK.Topology do
     end)
   end
 
-  # What one procedure's declaration may claim about its Entities, its clock
+  # What one tasklet's declaration may claim about its Cells, its clock
   # and its mailbox, and what the edges reaching it may claim about its mode.
-  defp procedure_facts({ref, node}, shape) do
+  defp tasklet_facts({ref, node}, shape) do
     module = node.module
     mode = Map.fetch!(shape.node_mode, ref)
     in_edges = Map.get(shape.incoming, ref, [])
@@ -472,7 +472,7 @@ defmodule Flezha.SDK.Topology do
     |> check_unreachable(node, in_edges)
     |> check_static_keying(module, mode, in_edges)
     |> check_dynamic_keying(module, mode, in_edges)
-    |> check_entities_for(module)
+    |> check_cells_for(module)
     |> check_mailbox(module)
     |> check_clock(module)
     |> Enum.reverse()
@@ -481,7 +481,7 @@ defmodule Flezha.SDK.Topology do
   defp check_unreachable(is, _node, in_edges) when in_edges != [], do: is
 
   defp check_unreachable(is, node, _in_edges),
-    do: [{:UnreachableProcedure, node.name || mod_name(node.module)} | is]
+    do: [{:UnreachableTasklet, node.name || mod_name(node.module)} | is]
 
   defp check_static_keying(is, module, :static, in_edges) do
     if Enum.any?(in_edges, &(&1.key_by != nil)),
@@ -493,21 +493,21 @@ defmodule Flezha.SDK.Topology do
 
   defp check_dynamic_keying(is, module, :dynamic, in_edges) do
     if Enum.any?(in_edges, &(&1.key_by == nil)),
-      do: [{:UnkeyedEdgeIntoDynamicProcedure, mod_name(module)} | is],
+      do: [{:UnkeyedEdgeIntoDynamicTasklet, mod_name(module)} | is],
       else: is
   end
 
   defp check_dynamic_keying(is, _module, _mode, _in), do: is
 
-  defp check_entities_for(is, module) do
-    if Procedure.exports?(module, :entities_for, 1) and Procedure.entity_keys(module) == [],
-      do: [{:EntitiesForMissing, mod_name(module)} | is],
+  defp check_cells_for(is, module) do
+    if Tasklet.exports?(module, :cells_for, 1) and Tasklet.cell_keys(module) == [],
+      do: [{:CellsForMissing, mod_name(module)} | is],
       else: is
   end
 
   defp check_mailbox(is, module) do
-    if Procedure.exports?(module, :mailbox_capacity, 0) do
-      case Procedure.validate_capacity(module.mailbox_capacity(), module) do
+    if Tasklet.exports?(module, :mailbox_capacity, 0) do
+      case Tasklet.validate_capacity(module.mailbox_capacity(), module) do
         :ok -> is
         {found, _} -> [{found, mod_name(module)} | is]
       end
@@ -517,20 +517,20 @@ defmodule Flezha.SDK.Topology do
   end
 
   # A clock the runtime cannot serve: the reference's `UnservableClock` (a
-  # logical clock reads a change seq no changeless procedure has), and the
+  # logical clock reads a change seq no changeless tasklet has), and the
   # two a dynamic declaration can get wrong.
   defp check_clock(is, module) do
-    case Procedure.clock(module) do
+    case Tasklet.clock(module) do
       :wall ->
         is
 
       :logical ->
-        if Procedure.changeful?(module),
+        if Tasklet.changeful?(module),
           do: is,
           else: [{:UnservableClock, mod_name(module)} | is]
 
       :event_time ->
-        if Procedure.exports?(module, :event_time_of, 1),
+        if Tasklet.exports?(module, :event_time_of, 1),
           do: is,
           else: [{:EventTimeClockWithoutExtractor, mod_name(module)} | is]
 
@@ -593,10 +593,10 @@ defmodule Flezha.SDK.Topology do
   # rates, where a remote round trip per acknowledgement is not a guarantee it
   # can keep, and this SDK's stream behaviour has no such callback — declaring
   # one is an authoring error, not a knob nothing reads.
-  defp kind_facts(_module, :procedures, _name), do: []
+  defp kind_facts(_module, :tasklets, _name), do: []
 
   defp kind_facts(module, _stream, name) do
-    if Procedure.exports?(module, :sync_durability, 0) and module.sync_durability(),
+    if Tasklet.exports?(module, :sync_durability, 0) and module.sync_durability(),
       do: [{:SyncDurabilityOnStream, name}],
       else: []
   end
@@ -629,12 +629,12 @@ defmodule Flezha.SDK.Topology do
     without_tier ++ zero ++ event_time_clock(acc)
   end
 
-  # Sorted by procedure name so the refusal names the same procedure on every
+  # Sorted by tasklet name so the refusal names the same tasklet on every
   # run: node refs are `make_ref/0` and their map order is not declaration order.
   defp event_time_clock(acc) do
     clocks =
       acc.nodes
-      |> Enum.map(fn {_ref, %{module: m}} -> {m.name(), Procedure.clock(m)} end)
+      |> Enum.map(fn {_ref, %{module: m}} -> {m.name(), Tasklet.clock(m)} end)
       |> Enum.sort()
 
     if Enum.any?(clocks, fn {_name, clock} -> clock == :event_time end) do
@@ -647,37 +647,37 @@ defmodule Flezha.SDK.Topology do
     end
   end
 
-  # A cycle among procedure nodes (entry sources are roots).
+  # A cycle among tasklet nodes (entry sources are roots).
   defp cycles(acc, routes) do
     if Graph.walk(node_seqs(acc), node_edges(routes)).on_cycle,
-      do: [{:Cycle, "procedure graph"}],
+      do: [{:Cycle, "tasklet graph"}],
       else: []
   end
 
-  # A changeful procedure's records are keyed by its `name/0`, so two nodes of
+  # A changeful tasklet's records are keyed by its `name/0`, so two nodes of
   # one changeful module in a class would share a WAL. The reference gives a
   # named node its own identity; here `named/2` also names the channel and the
-  # scenarios pin the procedure name, so the shape is refused instead.
+  # scenarios pin the tasklet name, so the shape is refused instead.
   defp changeful_identity(acc) do
     acc.nodes
     |> Enum.map(fn {_ref, %{module: m}} -> m end)
-    |> Enum.filter(&Procedure.changeful?/1)
+    |> Enum.filter(&Tasklet.changeful?/1)
     |> Enum.frequencies()
     |> Enum.sort_by(fn {module, _n} -> module end)
     |> Enum.flat_map(fn
-      {module, n} when n > 1 -> [{:DuplicatePersistentProcedure, module.name()}]
+      {module, n} when n > 1 -> [{:DuplicatePersistentTasklet, module.name()}]
       _once -> []
     end)
   end
 
   # --- projections ---
 
-  @doc "The node running the procedure `name/0` answers, or why there is none."
-  @spec node_of(t(), String.t()) :: {:ok, reference()} | {:error, :procedure_not_found}
-  def node_of(%__MODULE__{node_modules: modules}, procedure) do
-    case Enum.find(modules, fn {_ref, m} -> m.name() == procedure end) do
+  @doc "The node running the tasklet `name/0` answers, or why there is none."
+  @spec node_of(t(), String.t()) :: {:ok, reference()} | {:error, :tasklet_not_found}
+  def node_of(%__MODULE__{node_modules: modules}, tasklet) do
+    case Enum.find(modules, fn {_ref, m} -> m.name() == tasklet end) do
       {ref, _module} -> {:ok, ref}
-      nil -> {:error, :procedure_not_found}
+      nil -> {:error, :tasklet_not_found}
     end
   end
 
@@ -687,13 +687,13 @@ defmodule Flezha.SDK.Topology do
     for {{:node, from}, rs} <- routes, %{to: {:node, to}} <- rs, do: {from, to}
   end
 
-  # The smallest threshold across the class's changeful procedures — what the
+  # The smallest threshold across the class's changeful tasklets — what the
   # class declares when it differs from the default; nil when nothing journals.
   defp compact_after_bytes(acc) do
     acc.nodes
     |> Enum.map(fn {_ref, %{module: m}} -> m end)
-    |> Enum.filter(&Procedure.changeful?/1)
-    |> Enum.map(&Procedure.compact_after_bytes/1)
+    |> Enum.filter(&Tasklet.changeful?/1)
+    |> Enum.map(&Tasklet.compact_after_bytes/1)
     |> Enum.min(fn -> nil end)
   end
 
@@ -718,7 +718,7 @@ defmodule Flezha.SDK.Topology do
 
   defp mod_name(module), do: inspect(module)
 
-  # A topology with no procedure that would create a keyed Entity is "keyless"
+  # A topology with no tasklet that would create a keyed Cell is "keyless"
   # for the controller's partitioned-start preflight.
   defp keyless?(acc, node_mode) do
     acc.nodes != %{} and

@@ -27,7 +27,7 @@ defmodule Flezha.SDK.RunnerServer do
     Counters,
     Credit,
     DataStream,
-    Entity,
+    Cell,
     Hold,
     Jitter,
     Knob,
@@ -47,12 +47,12 @@ defmodule Flezha.SDK.RunnerServer do
   @park_warn_every 5
   @persistence_commands [
     :restore_init_state,
-    :compact_entity,
-    :entity_state,
-    :entity_apply_state,
+    :compact_cell,
+    :cell_state,
+    :cell_apply_state,
     :migration_serialization,
     :migration_deserialization,
-    :entity_mailbox_status,
+    :cell_mailbox_status,
     :credit_window_init,
     :credit_grant
   ]
@@ -362,7 +362,7 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  # A procedure's spawn request owns its deadline, because nothing but a settle
+  # A tasklet's spawn request owns its deadline, because nothing but a settle
   # removes a waiter. With no control handle `ship_request/3` answers `:ok`
   # although nothing will ever reply, so that case is answered as a refused
   # write is.
@@ -387,7 +387,7 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  def handle_cast({:park, entity_pid, identity, body}, %State{} = s) do
+  def handle_cast({:park, cell_pid, identity, body}, %State{} = s) do
     s = send_park_frame(s, identity, body)
 
     ref =
@@ -397,7 +397,7 @@ defmodule Flezha.SDK.RunnerServer do
         Knob.arm(:park_resend, 1, body.park_id)
       )
 
-    park = %{entity: entity_pid, identity: identity, body: body, resends: 0, timer: ref}
+    park = %{cell: cell_pid, identity: identity, body: body, resends: 0, timer: ref}
     {:noreply, %{s | parks: Map.put(s.parks, body.park_id, park)}}
   end
 
@@ -422,10 +422,10 @@ defmodule Flezha.SDK.RunnerServer do
   """
   @spec heartbeat_metadata(Counters.t()) :: %{String.t() => String.t()}
   def heartbeat_metadata(counters) do
-    # Handout liveness, in lockstep with the other SDKs: one wedged Entity is
+    # Handout liveness, in lockstep with the other SDKs: one wedged Cell is
     # invisible to `dispatches` while the rest of the runner keeps completing.
     # Backpressure that withholds work rather than shedding it comes from the
-    # second block — an Entity holding a push it has not queued yet holds no
+    # second block — a Cell holding a push it has not queued yet holds no
     # handout either, so `inflight` cannot see it. Both are scans rather than
     # slots, which is why they are named here and the rest are not.
     {inflight, inflight_oldest_ms} = Counters.handout_liveness(counters)
@@ -502,7 +502,7 @@ defmodule Flezha.SDK.RunnerServer do
   # of the request, which is what names the process waiting on it. Nothing is
   # replied to: the reply is itself an answer. One clause for every such reply,
   # because they differ only in what rides back.
-  defp dispatch({:proc_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
+  defp dispatch({:task_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
   defp dispatch({:iter_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
 
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
@@ -532,7 +532,7 @@ defmodule Flezha.SDK.RunnerServer do
       {:stop, :normal, %{s | disconnecting?: true}}
     else
       # `System.stop/1` runs the application shutdown — this server, its
-      # Operatives and their Entities — and then ends the VM with the status.
+      # Operatives and their Cells — and then ends the VM with the status.
       # The server stays up until then: a stopped one is restarted by its
       # supervisor and re-registers the process the controller just ended.
       System.stop(@terminal_exit_status)
@@ -642,9 +642,9 @@ defmodule Flezha.SDK.RunnerServer do
       {nil, _} ->
         s
 
-      {%{entity: entity, timer: timer}, parks} ->
+      {%{cell: cell, timer: timer}, parks} ->
         if timer, do: Process.cancel_timer(timer)
-        if Process.alive?(entity), do: Entity.release_park(entity, park_id)
+        if Process.alive?(cell), do: Cell.release_park(cell, park_id)
         %{s | parks: parks}
     end
   end

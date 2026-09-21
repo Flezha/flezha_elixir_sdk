@@ -24,8 +24,8 @@
     "quic"
   ],
   "dispatch": {
-    "model": "process-per-entity",
-    "detail": "One BEAM process per Entity, scheduled by the VM; there is no worker pool to size.",
+    "model": "process-per-cell",
+    "detail": "One BEAM process per Cell, scheduled by the VM; there is no worker pool to size.",
     "env": {}
   },
   "toolchain": "elixir --version",
@@ -46,13 +46,13 @@
       "do_nothing"
     ],
     "graph_builder": [
-      "sugar_static_entity",
-      "static_entity",
+      "sugar_static_cell",
+      "static_cell",
       "mixed_operative",
       "hybrid_channel",
       "merged_input",
       "transform_chain",
-      "entity_stress",
+      "cell_stress",
       "bench_keyed_nopersist"
     ],
     "shorthand": [
@@ -73,7 +73,7 @@
     ],
     "partitioned": [
       "partition_relay",
-      "dynamic_entity"
+      "dynamic_cell"
     ],
     "pool_wedge": [
       "wedge_probe"
@@ -89,14 +89,14 @@
     "keyed_channels": [
       "partition_relay"
     ],
-    "dynamic_entity": [
-      "dynamic_entity"
+    "dynamic_cell": [
+      "dynamic_cell"
     ],
     "schema_evolution": [
       "schema_evolution_v1",
       "schema_evolution_v2"
     ],
-    "entity_timers": [
+    "cell_timers": [
       "session_timeout"
     ],
     "effectively_once": [

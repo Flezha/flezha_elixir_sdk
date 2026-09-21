@@ -14,6 +14,6 @@ defmodule Echo.Operative do
 
   @impl true
   def channels(c) do
-    c |> input("in") |> into(Echo.Procedure) |> sink("out")
+    c |> input("in") |> into(Echo.Tasklet) |> sink("out")
   end
 end

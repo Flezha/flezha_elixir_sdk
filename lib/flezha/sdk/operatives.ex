@@ -48,8 +48,7 @@ defmodule Flezha.SDK.Operatives do
         {:error, "factory #{add.factory_id} is a workflow class; kind was #{inspect(kind)}", s}
 
       KeyGroup.partitioned?(range) and topo.keyless? ->
-        {:error, "PartitionsWithoutKeyedProcedure: a partition_count >= 2 class needs a key_by",
-         s}
+        {:error, "PartitionsWithoutKeyedTasklet: a partition_count >= 2 class needs a key_by", s}
 
       true ->
         start_stream(s, add, topo, range)
@@ -95,9 +94,9 @@ defmodule Flezha.SDK.Operatives do
         operative_id: add.operative_id,
         spec: spec,
         args: add.init_values || "",
-        journal: Codec.journal_facts(add.proc_journal),
+        journal: Codec.journal_facts(add.task_journal),
         owed_inbox: add.inbox_tail_count || 0,
-        resume_entity_count: add.resume_entity_count || 0,
+        resume_cell_count: add.resume_cell_count || 0,
         counters: s.counters,
         runner: self(),
         secondaries: s.secondaries,

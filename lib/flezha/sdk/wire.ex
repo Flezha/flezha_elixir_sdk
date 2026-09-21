@@ -1,24 +1,24 @@
 defmodule Flezha.SDK.Wire do
   @moduledoc """
-  Wire-protocol codec for the per-Entity persistence path.
+  Wire-protocol codec for the per-Cell persistence path.
 
   Two payload-id strings are reserved on the data stream, both SDK ->
-  controller: `"entity_state_change"`, carrying one Change record destined for
-  the per-Entity WAL, and `"entity_state_snapshot"`, carrying a serialized
-  `Self::State` produced by a controller-initiated `CompactEntity`. Both share
+  controller: `"cell_state_change"`, carrying one Change record destined for
+  the per-Cell WAL, and `"cell_state_snapshot"`, carrying a serialized
+  `Self::State` produced by a controller-initiated `CompactCell`. Both share
   one frame structure — the difference is only what the body means — and that
   structure is the protocol's.
 
-  `entity_id_bytes` is structured rather than opaque so the controller can route
-  a frame to the right per-Entity `WalWriter` without a side table. The
+  `cell_id_bytes` is structured rather than opaque so the controller can route
+  a frame to the right per-Cell `WalWriter` without a side table. The
   controller's `runner_id` is implicit: the controller knows which runner sent
   the frame from the connection it arrived on.
   """
 
-  @payload_id_entity_state_change "entity_state_change"
-  @payload_id_entity_state_snapshot "entity_state_snapshot"
-  @payload_id_entity_effect_record "entity_effect_record"
-  @payload_id_delete_entity_state "delete_entity_state"
+  @payload_id_cell_state_change "cell_state_change"
+  @payload_id_cell_state_snapshot "cell_state_snapshot"
+  @payload_id_cell_effect_record "cell_effect_record"
+  @payload_id_delete_cell_state "delete_cell_state"
   @payload_id_compensation_intent "compensation_intent"
   @payload_id_compensation_done "compensation_done"
   @payload_id_park_payload "park_payload"
@@ -28,44 +28,44 @@ defmodule Flezha.SDK.Wire do
   @header_size RecordFrame.header_size()
   @format_id_effect_record RecordFrame.format_id(:effect_record)
 
-  @spec payload_id_entity_state_change() :: binary()
-  def payload_id_entity_state_change(), do: @payload_id_entity_state_change
+  @spec payload_id_cell_state_change() :: binary()
+  def payload_id_cell_state_change(), do: @payload_id_cell_state_change
 
   @doc """
   Payload-id for an atomic effect record (effectively-once tier,
   SDK → controller): one invocation's state change(s), plugin outputs, and
   consumed input-log offset, persisted as ONE WAL record under ONE fsync.
-  Same frame layout as `entity_state_change` with a `format_id = 2` header;
+  Same frame layout as `cell_state_change` with a `format_id = 2` header;
   the body is the postcard `EffectRecordBody` decoded by
   `decode_effect_body/1`.
   """
-  @spec payload_id_entity_effect_record() :: binary()
-  def payload_id_entity_effect_record(), do: @payload_id_entity_effect_record
+  @spec payload_id_cell_effect_record() :: binary()
+  def payload_id_cell_effect_record(), do: @payload_id_cell_effect_record
 
-  @spec payload_id_entity_state_snapshot() :: binary()
-  def payload_id_entity_state_snapshot(), do: @payload_id_entity_state_snapshot
+  @spec payload_id_cell_state_snapshot() :: binary()
+  def payload_id_cell_state_snapshot(), do: @payload_id_cell_state_snapshot
 
   @doc """
   Payload-id for the dynamic-mode hard-delete RPC (SDK → controller). The
-  frame body is the bare structured `entity_id` (`decode_entity_id/1`);
+  frame body is the bare structured `cell_id` (`decode_cell_id/1`);
   there is no seq / header / crc. The SDK ships it under the durable
-  guarantee class when it evicts a persistence-enabled dynamic Entity, so a
+  guarantee class when it evicts a persistence-enabled dynamic Cell, so a
   stream that is down holds the frame for the rebind rather than losing it,
   and the controller drops the WAL/snapshot/outbox files so a later recreate
   cold-starts fresh.
 
-  The response (`{entity_id, status}`) is returned synchronously to the
+  The response (`{cell_id, status}`) is returned synchronously to the
   CLI delete path (`flz state delete`); the reaper path does not read a
   reply (fire-and-forget), so no response frame is written back on the
   data stream.
   """
-  @spec payload_id_delete_entity_state() :: binary()
-  def payload_id_delete_entity_state(), do: @payload_id_delete_entity_state
+  @spec payload_id_delete_cell_state() :: binary()
+  def payload_id_delete_cell_state(), do: @payload_id_delete_cell_state
 
   @doc """
   Payload-ids reserved on the data stream for the workflow-operative saga
-  change-log (SDK → controller), same frame layout as `entity_state_change`:
-  `compensation_intent` records a procedure's completion (so a crash
+  change-log (SDK → controller), same frame layout as `cell_state_change`:
+  `compensation_intent` records a tasklet's completion (so a crash
   mid-compensation knows what to undo) and `compensation_done` records a
   compensation hook's completion (so a respawn skips already-undone steps).
   """
@@ -79,7 +79,7 @@ defmodule Flezha.SDK.Wire do
   Payload-id for a dead-letter park (SDK → controller, tier-off sessions):
   a poison payload whose retry budget is exhausted, shipped with its error
   context for the durable DLQ store. Same frame layout as
-  `entity_state_change` (zero header); the body is the postcard `ParkBody`
+  `cell_state_change` (zero header); the body is the postcard `ParkBody`
   decoded by `decode_park_body/1`. The controller answers with a
   `ParkPayloadAck` control command once the entry is fsynced.
   """
@@ -87,43 +87,43 @@ defmodule Flezha.SDK.Wire do
   def payload_id_park_payload(), do: @payload_id_park_payload
 
   @doc """
-  Encode an `entity_id` triple into its on-wire byte form.
+  Encode a `cell_id` triple into its on-wire byte form.
   """
-  @spec encode_entity_id(binary(), binary(), binary()) :: binary()
-  def encode_entity_id(operative_class, procedure_id, entity_key)
-      when is_binary(operative_class) and is_binary(procedure_id) and is_binary(entity_key) do
+  @spec encode_cell_id(binary(), binary(), binary()) :: binary()
+  def encode_cell_id(operative_class, tasklet_id, cell_key)
+      when is_binary(operative_class) and is_binary(tasklet_id) and is_binary(cell_key) do
     rc_len = byte_size(operative_class)
-    sh_len = byte_size(procedure_id)
-    pk_len = byte_size(entity_key)
+    sh_len = byte_size(tasklet_id)
+    pk_len = byte_size(cell_key)
 
     if rc_len > 255 or sh_len > 255 do
-      raise ArgumentError, "operative_class / procedure_id must be ≤ 255 bytes"
+      raise ArgumentError, "operative_class / tasklet_id must be ≤ 255 bytes"
     end
 
     if pk_len > 0xFFFF do
-      raise ArgumentError, "entity_key must be ≤ 65535 bytes"
+      raise ArgumentError, "cell_key must be ≤ 65535 bytes"
     end
 
-    <<rc_len::8, operative_class::binary, sh_len::8, procedure_id::binary, pk_len::16-big,
-      entity_key::binary>>
+    <<rc_len::8, operative_class::binary, sh_len::8, tasklet_id::binary, pk_len::16-big,
+      cell_key::binary>>
   end
 
   @doc """
-  Decode the on-wire `entity_id_bytes` into `{operative_class, procedure_id, entity_key}`.
+  Decode the on-wire `cell_id_bytes` into `{operative_class, tasklet_id, cell_key}`.
   """
-  @spec decode_entity_id(binary()) :: {:ok, {binary(), binary(), binary()}} | {:error, term()}
-  def decode_entity_id(
+  @spec decode_cell_id(binary()) :: {:ok, {binary(), binary(), binary()}} | {:error, term()}
+  def decode_cell_id(
         <<rc_len::8, operative_class::binary-size(rc_len), sh_len::8,
-          procedure_id::binary-size(sh_len), pk_len::16-big, entity_key::binary-size(pk_len)>>
+          tasklet_id::binary-size(sh_len), pk_len::16-big, cell_key::binary-size(pk_len)>>
       ) do
-    {:ok, {operative_class, procedure_id, entity_key}}
+    {:ok, {operative_class, tasklet_id, cell_key}}
   end
 
-  def decode_entity_id(_), do: {:error, :bad_entity_id}
+  def decode_cell_id(_), do: {:error, :bad_cell_id}
 
   @doc """
   The reply-frame metadata key carrying the `change_seq` a single selected
-  Entity was serialized at.
+  Cell was serialized at.
 
   One Elixir owner beside `flz_core`'s `CHANGE_SEQ_META_KEY`.
   """
@@ -131,44 +131,43 @@ defmodule Flezha.SDK.Wire do
   def change_seq_key, do: "flz.change_seq"
 
   @doc """
-  Assemble a durable frame: the Entity identity, its seq, the 16-byte record
+  Assemble a durable frame: the Cell identity, its seq, the 16-byte record
   header and the body under its CRC. The inverse of `decode_frame/1` and the
-  byte-for-byte twin of the runner core's `build_entity_frame`, so one
+  byte-for-byte twin of the runner core's `build_cell_frame`, so one
   controller handler serves every SDK.
   """
   @spec encode_frame(binary(), non_neg_integer(), binary(), binary()) :: binary()
-  def encode_frame(entity_id, seq, header, body)
+  def encode_frame(cell_id, seq, header, body)
       when byte_size(header) == @header_size do
-    <<byte_size(entity_id)::16-big, entity_id::binary, seq::64-big, header::binary,
+    <<byte_size(cell_id)::16-big, cell_id::binary, seq::64-big, header::binary,
       byte_size(body)::32-big, body::binary, :erlang.crc32(body)::32-big>>
   end
 
   @doc """
-  Decode an inbound `entity_state_change` / `entity_state_snapshot`
+  Decode an inbound `cell_state_change` / `cell_state_snapshot`
   frame.
 
-  Returns `{:ok, %{entity_id: {operative_class, procedure_id, entity_key},
+  Returns `{:ok, %{cell_id: {operative_class, tasklet_id, cell_key},
                    seq: u64, header: <<_::128>>, body: bytes}}` or an error.
   Verifies the trailing crc32 over the body.
   """
   @spec decode_frame(binary()) ::
           {:ok,
            %{
-             entity_id: {binary(), binary(), binary()},
+             cell_id: {binary(), binary(), binary()},
              seq: non_neg_integer(),
              header: <<_::128>>,
              body: binary()
            }}
           | {:error, term()}
-  def decode_frame(<<entity_id_len::16-big, rest::binary>>) do
+  def decode_frame(<<cell_id_len::16-big, rest::binary>>) do
     case rest do
-      <<entity_id_bytes::binary-size(^entity_id_len), seq::64-big,
-        header::binary-size(@header_size), body_len::32-big, body::binary-size(body_len),
-        crc::32-big>> ->
+      <<cell_id_bytes::binary-size(^cell_id_len), seq::64-big, header::binary-size(@header_size),
+        body_len::32-big, body::binary-size(body_len), crc::32-big>> ->
         if :erlang.crc32(body) == crc do
-          case decode_entity_id(entity_id_bytes) do
+          case decode_cell_id(cell_id_bytes) do
             {:ok, identity} ->
-              {:ok, %{entity_id: identity, seq: seq, header: header, body: body}}
+              {:ok, %{cell_id: identity, seq: seq, header: header, body: body}}
 
             err ->
               err
@@ -196,7 +195,7 @@ defmodule Flezha.SDK.Wire do
 
   @doc """
   Decode a postcard `EffectRecordBody` (the body of a
-  `entity_effect_record` frame / format-2 WAL record):
+  `cell_effect_record` frame / format-2 WAL record):
 
   ```
   changes:         Vec<Vec<u8>>            — postcard S::Change bytes each
@@ -210,7 +209,7 @@ defmodule Flezha.SDK.Wire do
   `event_time` is the extracted event time under an `EventTimeFrom` clock —
   the column a late-input correction resolves its baseline seq against.
 
-  `timers` carries the SDK's mutations of the Entity's pending-timer set. The
+  `timers` carries the SDK's mutations of the Cell's pending-timer set. The
   controller stores them and hands them back on restore without interpreting
   them — the same property that makes `changes` SDK-owned bytes — but decoding
   the field is what keeps the body's trailing-byte check honest.
@@ -294,7 +293,7 @@ defmodule Flezha.SDK.Wire do
     ])
   end
 
-  @typedoc "One mutation of an Entity's pending-timer set, as the postcard `TimerOp` carries it."
+  @typedoc "One mutation of a Cell's pending-timer set, as the postcard `TimerOp` carries it."
   @type timer_op :: %{
           kind: :event_time | :processing_time,
           scheduled_at: non_neg_integer(),
@@ -417,7 +416,7 @@ defmodule Flezha.SDK.Wire do
 
   @doc """
   Decode a postcard `CorrectionRequestBody` (the body of a `correction_request`
-  frame): a single `target_event_time: u64`. The Entity identity rides the
+  frame): a single `target_event_time: u64`. The Cell identity rides the
   frame envelope, so the body carries nothing else — the controller re-reads the
   input-log range itself, because the late input is already in it.
   """

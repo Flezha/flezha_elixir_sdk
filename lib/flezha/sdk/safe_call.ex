@@ -156,7 +156,7 @@ defmodule Flezha.SDK.SafeCall do
         %{target_pid: pid, target_status: :remote, target_node: node(pid)}
 
       _ ->
-        %{target_status: :no_proc}
+        %{target_status: :no_task}
     end
   end
 

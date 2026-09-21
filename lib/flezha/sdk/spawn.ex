@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Spawn do
   @moduledoc """
-  Procedure-requested spawn of a workflow instance: the request a procedure
+  Tasklet-requested spawn of a workflow instance: the request a tasklet
   makes with `Flezha.SDK.Ctx.spawn_workflow/4`, the handle it gets back at
   once, and what the controller's answer resolves to.
 
@@ -8,11 +8,11 @@ defmodule Flezha.SDK.Spawn do
   keeps the caller as a waiter until `SpawnWorkflowResponse` arrives or the
   request's deadline passes. The answer reaches the caller as a message, so a
   handle is read once, and only inside the invocation that made it: after
-  `run/3` returns the Entity drops what arrives. A failure nobody read is
+  `run/3` returns the Cell drops what arrives. A failure nobody read is
   logged once, as a warning, by the process that answered it.
 
   Nothing here faults the invocation: every refusal resolves the handle. The
-  contract is `docs/sdk/procedure_requested_spawn.md`.
+  contract is `docs/sdk/tasklet_requested_spawn.md`.
   """
 
   require Logger

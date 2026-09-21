@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Entity.Interval do
+defmodule Flezha.SDK.Cell.Interval do
   @moduledoc """
   One open checkpoint interval's accumulation — the twin of the shared core's
   `StagedInterval`, and the one place the ack granularity's rules live. Nothing
@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Entity.Interval do
           max_delay_ms: non_neg_integer() | nil
         }
 
-  @typedoc "One invocation's durable effects, as the Entity hands them over."
+  @typedoc "One invocation's durable effects, as the Cell hands them over."
   @type effects :: %{
           changes: [term()],
           timers: [map()],
@@ -132,7 +132,7 @@ defmodule Flezha.SDK.Entity.Interval do
     if open?(staged), do: close(staged), else: {nil, staged}
   end
 
-  @doc "Drop the interval: a restore re-seats the Entity on a past in which none of it was applied."
+  @doc "Drop the interval: a restore re-seats the Cell on a past in which none of it was applied."
   @spec clear(t()) :: t()
   def clear(%__MODULE__{event_time: event_time}), do: %__MODULE__{event_time: event_time}
 

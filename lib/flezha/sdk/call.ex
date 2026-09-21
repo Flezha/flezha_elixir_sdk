@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Call do
   @moduledoc """
   One call into one of the runner's own processes.
 
-  A runner runs inside a host application, so a wedged Entity, Operative,
+  A runner runs inside a host application, so a wedged Cell, Operative,
   RunnerServer or local run must refuse its caller rather than exit it. Every
   such call goes through `Flezha.SDK.SafeCall`, through this module, with a
   bound one of the declared rows names and the caller's refusal declared as data.
@@ -22,9 +22,9 @@ defmodule Flezha.SDK.Call do
   alias Flezha.SDK.SafeCall
   alias Flezha.SDK.Knob
 
-  # What an Entity that will not answer tells its caller: the token the
+  # What a Cell that will not answer tells its caller: the token the
   # Controller matches as a prefix.
-  @silent {:error, "entity_busy: the Entity did not answer"}
+  @silent {:error, "cell_busy: the Cell did not answer"}
 
   @doc """
   Call one of the runner's own control processes, answering `refusal` when it
@@ -36,16 +36,16 @@ defmodule Flezha.SDK.Call do
     do: SafeCall.bounded(target, request, Knob.get(:sdk_control_call_ms), on_error: refusal)
 
   @doc """
-  Call an Entity, which may be mid-dispatch.
+  Call a Cell, which may be mid-dispatch.
 
   `:timeout` names the bound for a call whose duration grows with the state
   rather than with the queue in front of it; every other option is
-  `Flezha.SDK.SafeCall.bounded/4`'s, and the refusal defaults to the `entity_busy`
+  `Flezha.SDK.SafeCall.bounded/4`'s, and the refusal defaults to the `cell_busy`
   token.
   """
-  @spec entity(pid(), term(), keyword()) :: term()
-  def entity(pid, request, opts \\ []) do
-    {ms, opts} = Keyword.pop_lazy(opts, :timeout, fn -> Knob.get(:sdk_entity_call_ms) end)
+  @spec cell(pid(), term(), keyword()) :: term()
+  def cell(pid, request, opts \\ []) do
+    {ms, opts} = Keyword.pop_lazy(opts, :timeout, fn -> Knob.get(:sdk_cell_call_ms) end)
     SafeCall.bounded(pid, request, ms, Keyword.put_new(opts, :on_error, @silent))
   end
 end

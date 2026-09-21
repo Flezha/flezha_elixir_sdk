@@ -13,8 +13,8 @@ Three files, one for each part the guides describe:
 
 | File | Part | What it does |
 |---|---|---|
-| `lib/echo/procedure.ex` | the procedure | the processing stage: prefixes each message |
-| `lib/echo/operative.ex` | the operative | the graph: `in` feeds the procedure, output lands on `out` |
+| `lib/echo/tasklet.ex` | the tasklet | the processing stage: prefixes each message |
+| `lib/echo/operative.ex` | the operative | the graph: `in` feeds the tasklet, output lands on `out` |
 | `lib/echo/application.ex` | the runner | this node: offers the operative and waits |
 
 ## Run it

@@ -1,18 +1,18 @@
-defmodule Flezha.SDK.Entity do
+defmodule Flezha.SDK.Cell do
   @moduledoc """
-  One process per Entity: a bounded input queue, the retry-then-park dispatch
-  ladder, and per-Entity ordering (arrival order out of the queue). Inputs under
-  `:drop_nothing` arrive as a `GenServer.call` the Entity answers only when
+  One process per Cell: a bounded input queue, the retry-then-park dispatch
+  ladder, and per-Cell ordering (arrival order out of the queue). Inputs under
+  `:drop_nothing` arrive as a `GenServer.call` the Cell answers only when
   there is room — never dropped, never refused (the caller, the Operative
   router, waits, which is the documented co-tenancy cost);
   `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
-  the input and HOLDS the Entity until the controller's `ParkPayloadAck`.
+  the input and HOLDS the Cell until the controller's `ParkPayloadAck`.
 
-  An Entity that writes a record stream — a changeful one, whose procedure
+  A Cell that writes a record stream — a changeful one, whose tasklet
   exports `apply_change/2`, and under the effectively-once tier a changeless
   one too, because there the record carries the outputs and the consumed
   offset rather than only changes — is the writer of it: after a successful dispatch it ships one
-  `entity_state_change` frame per recorded change at the next seq on one
+  `cell_state_change` frame per recorded change at the next seq on one
   secondary stream, before the dispatch's outputs leave, then writes its
   `{state, seq}` into the Operative's slot table so a replacement started
   after an untrappable kill continues on the same seq line. A frame no stream
@@ -39,8 +39,8 @@ defmodule Flezha.SDK.Entity do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Procedure, Timers}
-  alias Flezha.SDK.Entity.{Clock, Records, State, Tier}
+  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Tasklet, Timers}
+  alias Flezha.SDK.Cell.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operative.Inbox
 
   # The live read's two verdicts. Every other refusal is `Flezha.SDK.Call`'s.
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Entity do
   end
 
   # A saga undo, on the queue like a firing is: `compensate/3` in place of
-  # `run/3`, over the outputs that Entity released. Best-effort — a hook that
+  # `run/3`, over the outputs that Cell released. Best-effort — a hook that
   # fails is logged and the plan moves on, so it never parks.
   defmodule Undo do
     @moduledoc false
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Entity do
 
   # --- API (used by the Operative router) ---
 
-  @doc "Start an Entity, unlinked: its Operative monitors it, and it monitors its Operative."
+  @doc "Start a Cell, unlinked: its Operative monitors it, and it monitors its Operative."
   def start(opts), do: GenServer.start(__MODULE__, opts)
 
   @doc """
@@ -100,12 +100,12 @@ defmodule Flezha.SDK.Entity do
   """
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
 
-  @doc "Run this Entity's `compensate/3` over the outputs it released."
+  @doc "Run this Cell's `compensate/3` over the outputs it released."
   def compensate(pid, outputs), do: enqueue_block(pid, %Undo{outputs: outputs})
 
   @doc """
-  Enqueue a barrier behind whatever this Entity already holds: `{:stage_done,
-  ref, entity_pid}` reaches `reply_to` once the queue has drained past it.
+  Enqueue a barrier behind whatever this Cell already holds: `{:stage_done,
+  ref, cell_pid}` reaches `reply_to` once the queue has drained past it.
   """
   def barrier(pid, ref, reply_to),
     do: enqueue_block(pid, %Barrier{ref: ref, reply_to: reply_to})
@@ -113,7 +113,7 @@ defmodule Flezha.SDK.Entity do
   @doc "Enqueue under a drop policy — non-blocking."
   def enqueue_drop(pid, value, policy), do: GenServer.cast(pid, {:enqueue_drop, value, policy})
 
-  @doc "Release a held (parked) Entity after its `ParkPayloadAck`."
+  @doc "Release a held (parked) Cell after its `ParkPayloadAck`."
   def release_park(pid, park_id), do: send(pid, {:park_released, park_id})
 
   @doc """
@@ -124,90 +124,90 @@ defmodule Flezha.SDK.Entity do
           {:ok, non_neg_integer(), boolean()} | {:error, String.t()}
   def restore(pid, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint) do
     request = {:restore, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint}
-    Call.entity(pid, request, timeout: Knob.get(:sdk_entity_restore_ms))
+    Call.cell(pid, request, timeout: Knob.get(:sdk_cell_restore_ms))
   end
 
   @doc """
-  Ship the state as an `entity_state_snapshot`; `{:ok, snapshot_seq, body_size}`.
+  Ship the state as a `cell_state_snapshot`; `{:ok, snapshot_seq, body_size}`.
   Serialising grows with the state, so it waits inside the Controller's own
   compaction bound.
   """
   @spec snapshot(pid()) :: {:ok, non_neg_integer(), non_neg_integer()} | {:error, String.t()}
-  def snapshot(pid), do: Call.entity(pid, :snapshot, timeout: Knob.get(:sdk_entity_snapshot_ms))
+  def snapshot(pid), do: Call.cell(pid, :snapshot, timeout: Knob.get(:sdk_cell_snapshot_ms))
 
   @doc """
   The state and the seq it was read at; `{:error, :busy}` when a dispatch holds
-  the Entity past `timeout` — the reference's serialize gate.
+  the Cell past `timeout` — the reference's serialize gate.
   """
   @spec read(pid(), timeout()) :: {:ok, term(), non_neg_integer()} | {:error, :busy | :gone}
-  # `log: false`: the walk names the Procedure and the key in a line of its own.
+  # `log: false`: the walk names the Tasklet and the key in a line of its own.
   def read(pid, timeout),
-    do: Call.entity(pid, :read, timeout: timeout, log: false, on_error: @read_verdict)
+    do: Call.cell(pid, :read, timeout: timeout, log: false, on_error: @read_verdict)
 
   @doc """
-  Replace the state with a JSON object through the procedure's
+  Replace the state with a JSON object through the tasklet's
   `state_from_json/1`, inside the Controller's own await for the reply.
   """
   @spec apply_state(pid(), map()) :: :ok | {:error, String.t()}
   def apply_state(pid, json),
-    do: Call.entity(pid, {:apply_state, json}, timeout: Knob.get(:sdk_entity_apply_ms))
+    do: Call.cell(pid, {:apply_state, json}, timeout: Knob.get(:sdk_cell_apply_ms))
 
   @doc """
-  Whether the Entity has been idle past `ttl_ms` holding no work at all — an
+  Whether the Cell has been idle past `ttl_ms` holding no work at all — an
   empty queue, no dispatch in flight, no park held, no deferred push. A probe
   that times out (a dispatch in flight) is `false`, and its late reply is
   inert to the caller.
   """
   @spec idle_for?(pid(), pos_integer(), timeout()) :: boolean()
-  # `log: false`: the reaper probes every Entity on every sweep, so a probe that
+  # `log: false`: the reaper probes every Cell on every sweep, so a probe that
   # does not answer is routine.
   def idle_for?(pid, ttl_ms, timeout),
-    do: Call.entity(pid, {:idle?, ttl_ms}, timeout: timeout, log: false, on_error: false)
+    do: Call.cell(pid, {:idle?, ttl_ms}, timeout: timeout, log: false, on_error: false)
 
   @doc """
-  Evict an Entity the caller proved idle: it ships `delete_entity_state` when
+  Evict a Cell the caller proved idle: it ships `delete_cell_state` when
   it persists, drops its slot so a successor is a cold start, and stops. What
   no stream would take goes to the Operative before the reply, so the caller
   knows the handoff is queued there by the time it sees `:evicted`.
   """
   @spec evict(pid()) :: :evicted | :busy | :gone
-  def evict(pid), do: Call.entity(pid, :evict, on_error: %{timeout: :busy, other: :gone})
+  def evict(pid), do: Call.cell(pid, :evict, on_error: %{timeout: :busy, other: :gone})
 
   @doc """
-  An Entity's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
-  same value to release the slot of an Entity that died mid-dispatch — the one
-  unwind an `after` inside the Entity cannot reach.
+  A Cell's slot identity in `Flezha.SDK.Counters`. Its Operative computes the
+  same value to release the slot of a Cell that died mid-dispatch — the one
+  unwind an `after` inside the Cell cannot reach.
   """
   @spec identity(binary(), term(), term()) :: term()
-  def identity(operative_id, node_ref, entity_key),
-    do: {operative_id, node_ref, entity_key}
+  def identity(operative_id, node_ref, cell_key),
+    do: {operative_id, node_ref, cell_key}
 
   @doc """
-  Bind the Entity onto fresh secondaries and replay the records it held while
-  there was none. Synchronous on purpose: the caller replays this Entity's
+  Bind the Cell onto fresh secondaries and replay the records it held while
+  there was none. Synchronous on purpose: the caller replays this Cell's
   OUTPUTS after it returns, and a dispatch's records have to reach the wire
-  first. A gone Entity has nothing to rebind and answers for itself.
+  first. A gone Cell has nothing to rebind and answers for itself.
 
   Not bounded, and not by omission: giving up would let the caller replay this
-  Entity's outputs ahead of its own records, and both callers discard the answer
+  Cell's outputs ahead of its own records, and both callers discard the answer
   so there is no refusal for either to act on.
   """
   @spec rebind(pid(), [term()]) :: :ok
   def rebind(pid, secondaries),
-    do: Call.entity(pid, {:rebind, secondaries}, timeout: :infinity, log: false, on_error: :ok)
+    do: Call.cell(pid, {:rebind, secondaries}, timeout: :infinity, log: false, on_error: :ok)
 
   # --- server ---
 
   @impl true
   def init(opts) do
     module = Keyword.fetch!(opts, :module)
-    entity_key = Keyword.get(opts, :entity_key)
+    cell_key = Keyword.get(opts, :cell_key)
     operative_id = Keyword.fetch!(opts, :operative_id)
-    identity = Park.identity(operative_id, module.name(), entity_key || "")
-    changeful? = Procedure.changeful?(module)
+    identity = Park.identity(operative_id, module.name(), cell_key || "")
+    changeful? = Tasklet.changeful?(module)
     tier = Map.merge(%State{}.tier, Keyword.get(opts, :tier, %{}))
     slots = Keyword.get(opts, :slots)
-    slot = Records.seed(slots, identity, module, entity_key)
+    slot = Records.seed(slots, identity, module, cell_key)
     operative = Keyword.fetch!(opts, :operative)
     counters = Keyword.fetch!(opts, :counters)
     credit = Keyword.get(opts, :credit)
@@ -220,7 +220,7 @@ defmodule Flezha.SDK.Entity do
       node_name: Keyword.get(opts, :node_name),
       input_channel: Keyword.get(opts, :input_channel),
       module: module,
-      entity_key: entity_key,
+      cell_key: cell_key,
       capacity: Keyword.fetch!(opts, :capacity),
       policy: Keyword.fetch!(opts, :policy),
       retry_max: Keyword.fetch!(opts, :retry_max),
@@ -231,15 +231,14 @@ defmodule Flezha.SDK.Entity do
       slots: slots,
       credit: credit,
       # The static ctx facts: the node's, from the Operative, and the timer
-      # policy this procedure declares.
-      ctx_opts:
-        [timer_policy: Procedure.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
+      # policy this tasklet declares.
+      ctx_opts: [timer_policy: Tasklet.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
       timers: Clock.seed(module, slot),
       changeful?: changeful?,
       tier: tier,
       persistent?: persists?(changeful?, tier, opts),
-      schema_version: Procedure.schema_version(module),
-      proc_state: slot.state,
+      schema_version: Tasklet.schema_version(module),
+      task_state: slot.state,
       change_seq: slot.seq,
       last_input_ms: now_ms(),
       stream: Hold.new(cap: Keyword.get(opts, :hold_cap), counters: counters, credit: credit)
@@ -250,7 +249,7 @@ defmodule Flezha.SDK.Entity do
   end
 
   # Off the tier a record stream exists only to carry changes, so a changeless
-  # procedure writes none. Under the tier the record carries the OUTPUTS and
+  # tasklet writes none. Under the tier the record carries the OUTPUTS and
   # the consumed offset as well — and the router delivers no sink for a tier
   # class — so a changeless one writes them too. The class's own opt-out
   # silences both: the seq advances and the frames are discarded.
@@ -273,7 +272,7 @@ defmodule Flezha.SDK.Entity do
       # An accepted-but-unqueued push is invisible to `dispatches` and to the
       # handout report, so it carries its own: the age reported is the oldest
       # one's, which is why marking is idempotent while any is held.
-      Counters.deferred_started(s.counters, identity(s.operative_id, s.node_ref, s.entity_key))
+      Counters.deferred_started(s.counters, identity(s.operative_id, s.node_ref, s.cell_key))
       {:noreply, %{s | waiters: :queue.in({from, value}, s.waiters)}}
     end
   end
@@ -281,7 +280,7 @@ defmodule Flezha.SDK.Entity do
   def handle_call({:restore, header, snapshot, log, hint}, _from, %State{} = s) do
     case Records.restore(s, header, snapshot, log, hint) do
       {:ok, s, terminal, migrated} ->
-        # A workflow driver holds its first procedure until every Entity the
+        # A workflow driver holds its first tasklet until every Cell the
         # bind owes has been rebuilt, so a resumed run reads persisted state
         # instead of cold-starting. A stream Operative has nothing to hold and
         # ignores this.
@@ -303,7 +302,7 @@ defmodule Flezha.SDK.Entity do
   end
 
   def handle_call(:read, _from, %State{} = s),
-    do: {:reply, {:ok, s.proc_state, s.change_seq}, s}
+    do: {:reply, {:ok, s.task_state, s.change_seq}, s}
 
   def handle_call({:idle?, ttl_ms}, _from, %State{} = s) do
     idle? =
@@ -322,8 +321,7 @@ defmodule Flezha.SDK.Entity do
     do: {:reply, :ok, Records.rebind(s, secondaries)}
 
   def handle_call({:apply_state, json}, _from, %State{} = s) do
-    {:reply, :ok,
-     Records.write_slot(%{s | proc_state: Procedure.state_from_json(s.module, json)})}
+    {:reply, :ok, Records.write_slot(%{s | task_state: Tasklet.state_from_json(s.module, json)})}
   rescue
     e -> {:reply, {:error, "apply_state: #{Exception.message(e)}"}, s}
   end
@@ -364,7 +362,7 @@ defmodule Flezha.SDK.Entity do
     Process.send_after(
       self(),
       {:timer_due, at},
-      Knob.arm(:entity_wake_retry, 1, s.operative_id)
+      Knob.arm(:cell_wake_retry, 1, s.operative_id)
     )
 
     {:noreply, s}
@@ -381,9 +379,9 @@ defmodule Flezha.SDK.Entity do
     {:noreply, kick(s)}
   end
 
-  # The Operative is gone — stopped or crashed — so this Entity ends with it,
+  # The Operative is gone — stopped or crashed — so this Cell ends with it,
   # quietly, through `terminate/2`. Not a link: a link discards a `:normal`
-  # exit signal, which is exactly how a removed operative's Entities outlived it.
+  # exit signal, which is exactly how a removed operative's Cells outlived it.
   def handle_info({:DOWN, _ref, :process, operative, _reason}, %State{operative: operative} = s),
     do: {:stop, :normal, s}
 
@@ -399,7 +397,7 @@ defmodule Flezha.SDK.Entity do
   def handle_info(:end_replay_slice, %State{} = s),
     do: {:noreply, kick(enqueue(s, %Tier.SliceEnd{}))}
 
-  # Every inter-procedure push of one invocation has been admitted: its record
+  # Every inter-tasklet push of one invocation has been admitted: its record
   # may become durable now.
   def handle_info({:edges_delivered, ref}, %State{} = s),
     do: {:noreply, Records.release(s, ref)}
@@ -461,10 +459,10 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
-  # Release this Entity's deferred-push slot: nothing is held any more.
+  # Release this Cell's deferred-push slot: nothing is held any more.
   # Idempotent, so the drain need not know whether one was ever taken.
   defp note_no_deferral(%State{} = s) do
-    Counters.deferred_finished(s.counters, identity(s.operative_id, s.node_ref, s.entity_key))
+    Counters.deferred_finished(s.counters, identity(s.operative_id, s.node_ref, s.cell_key))
     s
   end
 
@@ -547,17 +545,17 @@ defmodule Flezha.SDK.Entity do
   end
 
   # `after` is the contract, not politeness: the in-flight report is what makes
-  # ONE wedged Entity visible to the controller, so a dispatch that unwinds
+  # ONE wedged Cell visible to the controller, so a dispatch that unwinds
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
   defp dispatch(%State{} = s, item, offset, replay \\ nil) do
-    identity = identity(s.operative_id, s.node_ref, s.entity_key)
+    identity = identity(s.operative_id, s.node_ref, s.cell_key)
     Counters.dispatch_started(s.counters, identity)
 
     try do
       case run_ladder(s, item, ctx_opts(s, item, replay), 1) do
-        {:ok, new_proc_state, facts} ->
-          s |> complete(new_proc_state, facts, offset) |> request_completion(facts.completion)
+        {:ok, new_task_state, facts} ->
+          s |> complete(new_task_state, facts, offset) |> request_completion(facts.completion)
 
         {:park, error, attempts} ->
           s |> park_firing(item) |> exhausted(item, error, attempts, offset)
@@ -567,41 +565,41 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
-  defp complete(%State{tier: %{on?: true}} = s, new_proc_state, facts, offset),
-    do: settle_tier(s, new_proc_state, facts, offset)
+  defp complete(%State{tier: %{on?: true}} = s, new_task_state, facts, offset),
+    do: settle_tier(s, new_task_state, facts, offset)
 
   # The records leave first (flush-before-emit, and the outputs are stamped
   # with the seq the dispatch started at), then the timers are armed, then the
   # outputs leave: an output on the wire means its dispatch's timers are armed
   # and counted, for every reader.
-  defp complete(%State{} = s, new_proc_state, facts, _offset) do
+  defp complete(%State{} = s, new_task_state, facts, _offset) do
     {pending, ops, tally} = facts.timers
     Counters.inc_dispatches(s.counters)
     handout_seq = s.change_seq
-    s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
+    s = %{s | task_state: new_task_state, timers: %{s.timers | pending: pending}}
     s = s |> Records.ship(facts.changes, ops) |> Clock.reflect(ops, tally)
     flush_emits(s, facts.emits, handout_seq, nil)
     s
   end
 
   # After the outputs, so the driver has them all when this stage settles. A
-  # stream's Entity never gets here with one: `succeeded/4` refused it.
+  # stream's Cell never gets here with one: `succeeded/4` refused it.
   defp request_completion(%State{} = s, nil), do: s
 
   defp request_completion(%State{} = s, result) do
-    Inbox.completed(s.operative, s.node_ref, s.entity_key, result)
+    Inbox.completed(s.operative, s.node_ref, s.cell_key, result)
     s
   end
 
   # Under the tier the invocation's whole effect is ONE record: its changes,
   # the outputs it captured itself, the offset it consumed and its timer ops,
-  # so state, outputs and the offset can never tear. Only an inter-procedure
+  # so state, outputs and the offset can never tear. Only an inter-tasklet
   # emit still leaves through the router.
-  defp settle_tier(%State{} = s, new_proc_state, facts, offset) do
+  defp settle_tier(%State{} = s, new_task_state, facts, offset) do
     {pending, ops, tally} = facts.timers
     Counters.inc_dispatches(s.counters)
     handout_seq = s.change_seq
-    s = %{s | proc_state: new_proc_state, timers: %{s.timers | pending: pending}}
+    s = %{s | task_state: new_task_state, timers: %{s.timers | pending: pending}}
 
     {s, report} = Tier.settle(s, facts, ops, offset)
     s = Clock.reflect(s, ops, tally)
@@ -639,7 +637,7 @@ defmodule Flezha.SDK.Entity do
   defp run_ladder(%State{} = s, item, opts, attempt) do
     outcome =
       with {:ok, ctx} <-
-             guarded(fn -> Ctx.new(s.module, s.entity_key, clock_now(s, item), opts) end),
+             guarded(fn -> Ctx.new(s.module, s.cell_key, clock_now(s, item), opts) end),
            {:ok, result} <- guarded(fn -> call(s, item, ctx) end, ctx) do
         {:result, ctx, result}
       end
@@ -678,13 +676,13 @@ defmodule Flezha.SDK.Entity do
     end
   end
 
-  # A stream never completes, so a stream procedure asking to fails its input,
-  # and a retry would only ask again. A workflow stage's Entity is the one that
+  # A stream never completes, so a stream tasklet asking to fails its input,
+  # and a retry would only ask again. A workflow stage's Cell is the one that
   # does not park, and its request goes on to the driver.
   defp succeeded(%State{park: %{enabled?: true}} = s, _new_state, %{completion: result}, attempt)
        when is_binary(result) do
     error =
-      "CompleteOutsideWorkflow: procedure `#{s.module.name()}` called complete/2, " <>
+      "CompleteOutsideWorkflow: tasklet `#{s.module.name()}` called complete/2, " <>
         "but a stream operative never completes"
 
     {:park, error, attempt}
@@ -703,21 +701,21 @@ defmodule Flezha.SDK.Entity do
     kind, reason -> {:raised, ctx, "#{kind}: #{inspect(reason)}"}
   end
 
-  # `on_timer/4` on a firing, `run/3` on an input; a firing on a procedure that
+  # `on_timer/4` on a firing, `run/3` on an input; a firing on a tasklet that
   # exports no handler parks by name, without the retries a raise would climb.
   defp call(%State{} = s, %Undo{outputs: outputs}, ctx),
-    do: s.module.compensate(outputs, s.proc_state, ctx)
+    do: s.module.compensate(outputs, s.task_state, ctx)
 
   defp call(%State{timers: %{on_timer?: true}} = s, %Fire{kind: kind, at: at}, ctx),
-    do: s.module.on_timer(at, kind, s.proc_state, ctx)
+    do: s.module.on_timer(at, kind, s.task_state, ctx)
 
   defp call(%State{module: module}, %Fire{}, _ctx) do
     {:error,
      {:non_retryable,
-      "procedure `#{module.name()}` registered a timer but does not export on_timer/4"}}
+      "tasklet `#{module.name()}` registered a timer but does not export on_timer/4"}}
   end
 
-  defp call(%State{} = s, value, ctx), do: s.module.run(value, s.proc_state, ctx)
+  defp call(%State{} = s, value, ctx), do: s.module.run(value, s.task_state, ctx)
 
   # The declared clock, evaluated once per attempt: the epoch millisecond, the
   # durable seq this dispatch starts at, or the input's own event time — and,
@@ -752,8 +750,8 @@ defmodule Flezha.SDK.Entity do
   # Under the tier a park IS a record: the entry, the offset it consumed and a
   # parked firing's removal ride one frame, and nothing is held — the record is
   # the durability, so there is no ack to wait for.
-  # A workflow stage's Entity does not park: its exhausted ladder fails the
-  # procedure, and the driver unwinds the run. A stream's Entity parks to the
+  # A workflow stage's Cell does not park: its exhausted ladder fails the
+  # tasklet, and the driver unwinds the run. A stream's Cell parks to the
   # DLQ, which is the only behaviour that existed before workflows.
   defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, _attempts, _offset) do
     GenServer.cast(s.operative, {:stage_failed, s.node_ref, format_error(error)})
@@ -779,7 +777,7 @@ defmodule Flezha.SDK.Entity do
     Park.ship(
       s.operative,
       self(),
-      Park.identity(s.operative_id, s.module.name(), s.entity_key),
+      Park.identity(s.operative_id, s.module.name(), s.cell_key),
       body
     )
 
@@ -797,7 +795,7 @@ defmodule Flezha.SDK.Entity do
   defp flush_emits(_s, [], _handout_seq, _offset, _report), do: :ok
 
   defp flush_emits(%State{} = s, emits, handout_seq, offset, report),
-    do: Inbox.emitted(s.operative, s.node_ref, s.entity_key, emits, handout_seq, offset, report)
+    do: Inbox.emitted(s.operative, s.node_ref, s.cell_key, emits, handout_seq, offset, report)
 
   # Two readers, one event: telemetry is the in-node handle, the counter is what
   # leaves the runner on the heartbeat — a drop nobody can see from outside the

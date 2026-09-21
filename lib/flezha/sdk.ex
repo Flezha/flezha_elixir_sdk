@@ -43,7 +43,7 @@ defmodule Flezha.SDK do
   Declare an operative of either kind. Legal before and after `start/1`.
 
   The kind is read from the callbacks the module exports, never named by the
-  call: `channels/1` makes a stream, `procedures/1` a workflow. A module
+  call: `channels/1` makes a stream, `tasklets/1` a workflow. A module
   exporting both is refused `{:AmbiguousOperativeKind, module}` and one
   exporting neither `{:UnknownOperativeKind, module}`.
 

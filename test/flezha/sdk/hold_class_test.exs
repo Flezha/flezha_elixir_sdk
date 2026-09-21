@@ -19,10 +19,10 @@ defmodule Flezha.SDK.HoldClassTest do
 
   describe "the class a frame declares" do
     rows = [
-      {Wire.payload_id_entity_state_change(), :durable},
-      {Wire.payload_id_entity_effect_record(), :durable},
-      {Wire.payload_id_entity_state_snapshot(), :durable},
-      {Wire.payload_id_delete_entity_state(), :durable},
+      {Wire.payload_id_cell_state_change(), :durable},
+      {Wire.payload_id_cell_effect_record(), :durable},
+      {Wire.payload_id_cell_state_snapshot(), :durable},
+      {Wire.payload_id_delete_cell_state(), :durable},
       {Wire.payload_id_compensation_intent(), :durable},
       {Wire.payload_id_compensation_done(), :durable},
       {Wire.payload_id_park_payload(), :durable},
@@ -30,7 +30,7 @@ defmodule Flezha.SDK.HoldClassTest do
       {{"control_command", :update_factories}, :control},
       {{"control_command", :admin_request}, :control},
       {{"control_command", :spawn_workflow_request}, :control},
-      {{"control_command", :proc_commit}, :control},
+      {{"control_command", :task_commit}, :control},
       {{"control_command", :iter_commit}, :control},
       {{"control_command", :iter_park}, :control},
       {{"control_command", :workflow_completed}, :control},

@@ -6,25 +6,25 @@ defmodule Flezha.SDK.Workflow.Resume do
   forward pass applied, and a join whose producers have not all committed
   banks what it has and waits for the rest.
 
-  A committed procedure is skipped rather than re-run, and its stage record is
+  A committed tasklet is skipped rather than re-run, and its stage record is
   reconstructed so the compensation planner can undo it — with EMPTY outputs,
-  because a procedure's collected batch was never durable. That is the
-  contract `Flezha.SDK.Procedure`'s `compensate/3` documentation states.
+  because a tasklet's collected batch was never durable. That is the
+  contract `Flezha.SDK.Tasklet`'s `compensate/3` documentation states.
 
   The journal codec is `:erlang.term_to_binary/1`, read back with `:safe`.
   It has to round-trip faithfully — a resumed batch that came back as a
-  different term would hand the next procedure something the live run never
+  different term would hand the next tasklet something the live run never
   produced — and the class's own sink encoders, not this, decide the bytes
   that reach a plugin.
   """
 
   alias Flezha.SDK.Workflow.Instance
 
-  @doc "Serialize one inter-procedure value for the journal."
+  @doc "Serialize one inter-tasklet value for the journal."
   @spec encode(term()) :: binary()
   def encode(value), do: :erlang.term_to_binary(value)
 
-  @doc "Read one journaled inter-procedure value back."
+  @doc "Read one journaled inter-tasklet value back."
   @spec decode(binary()) :: term()
   def decode(payload), do: :erlang.binary_to_term(payload, [:safe])
 
@@ -38,7 +38,7 @@ defmodule Flezha.SDK.Workflow.Resume do
 
   def start(%{instance: %Instance{journal: journal}} = state, through_edge) do
     dag = state.spec.dag
-    committed = MapSet.new(journal.committed_proc_idxs)
+    committed = MapSet.new(journal.committed_task_idxs)
 
     if MapSet.size(committed) == 0 do
       nil
@@ -71,7 +71,7 @@ defmodule Flezha.SDK.Workflow.Resume do
   # edge — the same application the live pass made.
   defp banked(journal, dag, done, node, through_edge) do
     Enum.flat_map(done, fn parent ->
-      journal.proc_handoffs
+      journal.task_handoffs
       |> Map.get(Map.fetch!(dag.pos, parent), [])
       |> Enum.map(fn {_id, payload} -> decode(payload) end)
       |> then(&through_edge.(parent, node, &1))
@@ -87,32 +87,32 @@ defmodule Flezha.SDK.Workflow.Resume do
         waiting: Map.put(acc.waiting, node, length(owed))
     }
 
-  # The committed procedures as stage records, in DAG order so an unwind runs
+  # The committed tasklets as stage records, in DAG order so an unwind runs
   # them back to front. The outputs are empty by construction.
   defp completed_stages(state, committed) do
     dag = state.spec.dag
 
     for node <- dag.order,
-        proc_idx = Map.fetch!(dag.pos, node),
-        MapSet.member?(committed, proc_idx),
-        do: %{node_ref: node, proc_idx: proc_idx, entities: entities_ran(state, proc_idx)}
+        task_idx = Map.fetch!(dag.pos, node),
+        MapSet.member?(committed, task_idx),
+        do: %{node_ref: node, task_idx: task_idx, cells: cells_ran(state, task_idx)}
   end
 
-  # What the skipped committed procedures of the resumed iteration asked for:
+  # What the skipped committed tasklets of the resumed iteration asked for:
   # they never run again to ask twice. Keyed as the driver keeps a live one.
   defp journaled_completions(journal, committed) do
-    for %{proc_idx: proc_idx, iter: iter} = proc <- journal.committed_procs,
+    for %{task_idx: task_idx, iter: iter} = task <- journal.committed_tasks,
         iter == journal.iter,
-        MapSet.member?(committed, proc_idx),
-        result = Map.get(proc, :completion),
+        MapSet.member?(committed, task_idx),
+        result = Map.get(task, :completion),
         result != nil,
         into: %{},
-        do: {proc_idx, {nil, result}}
+        do: {task_idx, {nil, result}}
   end
 
-  defp entities_ran(%{instance: %Instance{journal: journal}}, proc_idx) do
-    journal.committed_procs
-    |> Enum.find(%{}, &(Map.get(&1, :proc_idx) == proc_idx))
-    |> Map.get(:entities_ran, [])
+  defp cells_ran(%{instance: %Instance{journal: journal}}, task_idx) do
+    journal.committed_tasks
+    |> Enum.find(%{}, &(Map.get(&1, :task_idx) == task_idx))
+    |> Map.get(:cells_ran, [])
   end
 end

@@ -1,39 +1,39 @@
 defmodule Flezha.SDK.Ctx do
   @moduledoc """
-  The invocation context handed to `Procedure.run/3`. `use Flezha.SDK.Procedure`
-  imports the functions below, so a procedure writes `emit(ctx, value)`; `apply/3`
+  The invocation context handed to `Tasklet.run/3`. `use Flezha.SDK.Tasklet`
+  imports the functions below, so a tasklet writes `emit(ctx, value)`; `apply/3`
   and `complete/2` are not imported and are called by their full names.
 
   `emit/2`, `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4`
   accumulate outputs for this invocation; `apply/3` folds a change into the
-  state through the procedure's `apply_change/2` and records it for the Entity's record
+  state through the tasklet's `apply_change/2` and records it for the Cell's record
   stream — one fold, one push, the only recorded mutation path; `now/1` is a
   wall-clock millisecond stamp captured once at invocation entry;
-  `entity_key/1` is the owning Entity's key (or nil for a Single Entity).
+  `cell_key/1` is the owning Cell's key (or nil for a Single Cell).
   Emits and changes are held in the running process's dictionary under a
   per-invocation ref (so `emit/2` can side-effect through an immutable struct)
-  and are taken by the Entity only when `run/3` returns `{:ok, _}` — a failing
+  and are taken by the Cell only when `run/3` returns `{:ok, _}` — a failing
   invocation discards both. Reserved `flz.`-prefixed metadata keys are refused.
 
   A key rides an emit only where the node's sink is declared `keyed/1`, and a
-  keyless emit from an Entity with no key of its own on such a sink is refused
+  keyless emit from a Cell with no key of its own on such a sink is refused
   here, at the call — the reference's `KeyRequiredOnKeyedChannel` — from two
-  topology facts the Entity hands `new/4`.
+  topology facts the Cell hands `new/4`.
 
   Timers ride the same dictionary: `timer_after/2` and `timer_at_event_time/2`
-  register on a `Flezha.SDK.Timers` session over a copy of the Entity's pending
+  register on a `Flezha.SDK.Timers` session over a copy of the Cell's pending
   set — opened on the first timer call, so an invocation that registers
   nothing pays nothing — answering the absolute timestamp, the handle the two
-  cancels take; the Entity commits the session's ops with the changes when
+  cancels take; the Cell commits the session's ops with the changes when
   `run/3` (or `on_timer/4`) answers `{:ok, _}`, and a firing commits its own
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
   once per invocation — and, inside a firing, the scheduled timestamp.
 
   Under the effectively-once tier two more slots ride the same dictionary:
-  `checkpoint/1` raises the flag the Entity reads at the invocation's end to
+  `checkpoint/1` raises the flag the Cell reads at the invocation's end to
   close its staged interval, and `stable_id/1` answers a replay-stable id
-  derived from the Entity's wire identity, the change seq the invocation
+  derived from the Cell's wire identity, the change seq the invocation
   started at and a per-invocation ordinal.
 
   `spawn_workflow/4` asks the runner for a workflow instance and answers a
@@ -41,12 +41,12 @@ defmodule Flezha.SDK.Ctx do
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
 
-  alias Flezha.SDK.{Procedure, Spawn, Timers}
+  alias Flezha.SDK.{Tasklet, Spawn, Timers}
 
-  @enforce_keys [:module, :entity_key, :now_ms, :ref]
+  @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
     :module,
-    :entity_key,
+    :cell_key,
     :now_ms,
     :ref,
     :channel,
@@ -78,26 +78,25 @@ defmodule Flezha.SDK.Ctx do
   A fresh ctx for one invocation of `module`. `now_ms` is captured once here;
   `opts` carries the node's channel name, whether its sink is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
-  (`key_required?`), the Entity's pending timers (`timers`, empty by default),
-  the procedure's timer policy (`timer_policy`, resolved from `module` by
+  (`key_required?`), the Cell's pending timers (`timers`, empty by default),
+  the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
   runner a spawn request goes to (`runner`, nil for none) and whether the input
   is a replay (`replay`), which issues no spawn.
   """
-  def new(module, entity_key, now_ms, opts \\ []) do
+  def new(module, cell_key, now_ms, opts \\ []) do
     # Nothing is written here: every reader of a slot defaults to empty, so an
     # invocation that emits nothing, applies nothing and registers no timer
     # touches the dictionary not at all — and one that never returns from here
     # leaves nothing behind to delete.
     %__MODULE__{
       module: module,
-      entity_key: entity_key,
+      cell_key: cell_key,
       now_ms: now_ms,
       ref: make_ref(),
       channel: Keyword.get(opts, :channel),
       timers: Keyword.get(opts, :timers, Timers.new()),
-      timer_policy:
-        Keyword.get_lazy(opts, :timer_policy, fn -> Procedure.timer_policy(module) end),
+      timer_policy: Keyword.get_lazy(opts, :timer_policy, fn -> Tasklet.timer_policy(module) end),
       firing: Keyword.get(opts, :firing),
       runner: Keyword.get(opts, :runner),
       identity: Keyword.get(opts, :identity, <<>>),
@@ -109,8 +108,8 @@ defmodule Flezha.SDK.Ctx do
   end
 
   @doc """
-  Fold `change` into `state` with the procedure's `apply_change/2` and record
-  it, so the Entity ships it after the invocation succeeds. The returned state
+  Fold `change` into `state` with the tasklet's `apply_change/2` and record
+  it, so the Cell ships it after the invocation succeeds. The returned state
   is what `run/3` returns in its `{:ok, _}`.
   """
   @spec apply(t(), term(), term()) :: term()
@@ -119,7 +118,7 @@ defmodule Flezha.SDK.Ctx do
     module.apply_change(state, change)
   end
 
-  @doc "Emit a value on the procedure's outgoing channels."
+  @doc "Emit a value on the tasklet's outgoing channels."
   @spec emit(t(), term()) :: :ok | {:error, term()}
   def emit(%__MODULE__{} = ctx, value), do: emit_with_meta(ctx, value, %{})
 
@@ -172,8 +171,8 @@ defmodule Flezha.SDK.Ctx do
   @spec cancel_event_time_timer(t(), non_neg_integer()) :: boolean()
   def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
 
-  @doc "The owning Entity's key, or nil for a Single Entity."
-  def entity_key(%__MODULE__{entity_key: k}), do: k
+  @doc "The owning Cell's key, or nil for a Single Cell."
+  def cell_key(%__MODULE__{cell_key: k}), do: k
 
   @doc """
   Request spawn-or-deliver of a workflow instance of `factory_id` in this
@@ -198,18 +197,18 @@ defmodule Flezha.SDK.Ctx do
     do: Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts)
 
   @doc """
-  End the workflow instance this procedure runs in, with `result` as the
+  End the workflow instance this tasklet runs in, with `result` as the
   result its completion reports. The rest of the iteration still runs and
   commits; once that commit is durable the instance ends instead of waiting
   for its next input, re-seeding a chained loop or parking. In a `:once`
   workflow it only sets the result the pass ends with.
 
   Called more than once in one iteration, the instance ends once, with the
-  result of the procedure latest in the chain's order and, within it, of the
-  Entity whose key sorts last. A failing invocation discards its call as it
+  result of the tasklet latest in the chain's order and, within it, of the
+  Cell whose key sorts last. A failing invocation discards its call as it
   discards its emits, and an iteration that fails discards the call with it.
 
-  A stream never completes: a stream procedure calling this fails its input,
+  A stream never completes: a stream tasklet calling this fails its input,
   without a retry, with an error beginning `CompleteOutsideWorkflow`.
   """
   @spec complete(t(), binary()) :: :ok
@@ -224,7 +223,7 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   Close the staged checkpoint interval at the end of this invocation. A no-op
-  on a class that did not declare checkpoint granularity — the Entity reads the
+  on a class that did not declare checkpoint granularity — the Cell reads the
   flag only when it has an interval to close.
   """
   @spec checkpoint(t()) :: :ok
@@ -239,7 +238,7 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   A replay-stable 128-bit id, 32 lowercase hex digits: FNV-1a-128 over the
-  Entity's wire identity, the change seq this invocation started at and a
+  Cell's wire identity, the change seq this invocation started at and a
   per-invocation ordinal. The same invocation on a replay derives the same
   ids in the same order, which is what makes an effect idempotent.
   """

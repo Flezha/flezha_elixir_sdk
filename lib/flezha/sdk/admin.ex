@@ -3,7 +3,7 @@ defmodule Flezha.SDK.Admin do
   Administering the namespace this runner's connection proved, from ordinary
   application code.
 
-  No procedure has to be running and the application holds no credential of its
+  No tasklet has to be running and the application holds no credential of its
   own: the controller judges every call as the identity the connection already
   established, so nothing an unattended process holds expires. An operator
   grants a namespace's applications the authority once and revokes it the same
@@ -77,10 +77,10 @@ defmodule Flezha.SDK.Admin do
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
   def list_plugins(runner), do: call(runner, "PluginManager.list", [])
 
-  @doc "One entity's live state, and the change sequence it was read at."
-  @spec entity_state(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def entity_state(runner, operative_id, entity_key),
-    do: call(runner, "Operative.entity_state", [operative_id, entity_key])
+  @doc "One cell's live state, and the change sequence it was read at."
+  @spec cell_state(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
+  def cell_state(runner, operative_id, cell_key),
+    do: call(runner, "Operative.cell_state", [operative_id, cell_key])
 
   @doc """
   Any published function, by name.

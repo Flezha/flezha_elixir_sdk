@@ -2,23 +2,23 @@ defmodule Flezha.SDK.Record do
   @moduledoc """
   The durable record this SDK writes and reads back, re-expressed in its own
   core: the 16-byte header the shared contract fixes (`sdk_lang` 3, the SDK's
-  version, the Procedure's schema version, the Erlang External Term Format id,
+  version, the Tasklet's schema version, the Erlang External Term Format id,
   a CRC over the body), the frame the controller's
   `Flezha.SDK.Wire.decode_frame/1` reads for changes and snapshots alike, and
-  the fold that rebuilds an Entity from a `RestoreInitState` — the snapshot
+  the fold that rebuilds a Cell from a `RestoreInitState` — the snapshot
   first, then the change log in the controller's on-disk framing, each record
   checked and its header resolved language first, then format, then schema,
   with the refusal wordings the shared core uses so a controller reads one
-  vocabulary whichever SDK refused. A record between the Procedure's readable
+  vocabulary whichever SDK refused. A record between the Tasklet's readable
   floor and its version is decoded and handed to its migration. A timer-ops
   record — `format_id` 3 over the postcard body every SDK writes — folds into
-  the Entity's pending-timer set, never into its state. An effect record —
+  the Cell's pending-timer set, never into its state. An effect record —
   `format_id` 2, the effectively-once tier's one record per invocation — folds
   its enclosed changes into the state, its timer ops into the set, and its
   consumed offset and event time into the cursors a crash-replay resumes from.
   """
 
-  alias Flezha.SDK.{Codec, Procedure, Timers}
+  alias Flezha.SDK.{Codec, Tasklet, Timers}
   alias Flezha.SDK.RecordFrame
   alias Flezha.SDK.Wire
   # Allocated in `flz_core::header` and mirrored once, in the frame seam.
@@ -43,7 +43,7 @@ defmodule Flezha.SDK.Record do
           high_water: non_neg_integer() | nil
         }
 
-  @typedoc "The restored Entity, the highest seq folded (never below the hint), whether a record migrated."
+  @typedoc "The restored Cell, the highest seq folded (never below the hint), whether a record migrated."
   @type fold :: {:ok, restored(), non_neg_integer(), boolean()} | {:error, String.t()}
   @typep decision :: :decode | {:migrate, pos_integer()}
 
@@ -131,7 +131,7 @@ defmodule Flezha.SDK.Record do
   end
 
   @doc """
-  Rebuild an Entity of `module` from a `RestoreInitState`: `init_state/1`,
+  Rebuild a Cell of `module` from a `RestoreInitState`: `init_state/1`,
   the snapshot over it when there is one, then every whole record of the
   change log folded in seq order — a change into the state, a timer-ops record
   into the pending set, an effect record into all four. The terminal is the
@@ -141,14 +141,14 @@ defmodule Flezha.SDK.Record do
   """
   @spec fold(module(), String.t() | nil, binary(), binary(), binary(), non_neg_integer()) ::
           fold()
-  def fold(module, entity_key, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint) do
-    versions = {Procedure.schema_version(module), Procedure.min_readable_schema_version(module)}
+  def fold(module, cell_key, snapshot_header, snapshot_bytes, change_log_bytes, terminal_hint) do
+    versions = {Tasklet.schema_version(module), Tasklet.min_readable_schema_version(module)}
 
     with {:ok, state, migrated} <-
-           restore_snapshot(module, entity_key, snapshot_header, snapshot_bytes, versions),
-         entity = %{state: state, timers: Timers.new(), floor: -1, high_water: nil},
+           restore_snapshot(module, cell_key, snapshot_header, snapshot_bytes, versions),
+         cell = %{state: state, timers: Timers.new(), floor: -1, high_water: nil},
          {:ok, restored, terminal, migrated} <-
-           walk(change_log_bytes, module, entity, migrated, versions) do
+           walk(change_log_bytes, module, cell, migrated, versions) do
       {:ok, restored, max(terminal, terminal_hint), migrated}
     end
   rescue
@@ -159,14 +159,14 @@ defmodule Flezha.SDK.Record do
   The wire frame of a saga compensation marker. Presence is the whole signal,
   so the body is empty and the identity rides the envelope — the same
   headerless shape a correction takes. The payload id says which marker it is:
-  `compensation_intent` that a procedure completed forward and may need undo,
+  `compensation_intent` that a tasklet completed forward and may need undo,
   `compensation_done` that its hook already ran.
   """
   @spec compensation_frame(binary()) :: binary()
   def compensation_frame(identity), do: Wire.encode_frame(identity, 0, <<0::128>>, <<>>)
 
   @doc """
-  Resolve a record header against the running procedure's `{schema, floor}`:
+  Resolve a record header against the running tasklet's `{schema, floor}`:
   the language before anything else, then the format, then the schema —
   `:decode` at the running version, `{:migrate, from}` between the floor and
   it, a refusal above it or below the floor; a timer-ops header answers
@@ -215,14 +215,14 @@ defmodule Flezha.SDK.Record do
 
       schema > running ->
         {:error,
-         "record stamped schema_version #{schema} is above the running procedure's #{running}: " <>
+         "record stamped schema_version #{schema} is above the running tasklet's #{running}: " <>
            "older code cannot read newer state"}
 
       # After the two arms above, so a floor above `running` reads `running` only.
       schema < floor ->
         {:error,
          "record stamped schema_version #{schema} is below the readable floor #{floor} " <>
-           "the running procedure declares"}
+           "the running tasklet declares"}
 
       true ->
         {:ok, {:migrate, schema}}
@@ -231,12 +231,12 @@ defmodule Flezha.SDK.Record do
 
   # --- the fold ---
 
-  defp restore_snapshot(module, entity_key, _header, <<>>, _versions),
-    do: {:ok, module.init_state(entity_key), false}
+  defp restore_snapshot(module, cell_key, _header, <<>>, _versions),
+    do: {:ok, module.init_state(cell_key), false}
 
   # A snapshot in a format other than the state's is malformed, as the core's
   # `resolve_state` says.
-  defp restore_snapshot(module, _entity_key, header, bytes, versions) do
+  defp restore_snapshot(module, _cell_key, header, bytes, versions) do
     case resolve(header, versions) do
       {:ok, {kind, _decision}} when kind in [:timer_ops, :effect_record] ->
         {:error, "malformed restoration header (truncated or invalid)"}
@@ -254,11 +254,11 @@ defmodule Flezha.SDK.Record do
   # seam's, so a record decoded here and the same record decoded from the WAL
   # are the same record. A refusal ends the fold; a torn tail ends it quietly,
   # as the controller's own reader ends it.
-  defp walk(bytes, module, entity, migrated, versions) do
-    acc = %{entity: entity, terminal: 0, migrated: migrated, error: nil}
+  defp walk(bytes, module, cell, migrated, versions) do
+    acc = %{cell: cell, terminal: 0, migrated: migrated, error: nil}
 
     case RecordFrame.fold_bytes(bytes, @change_log, acc, &fold_one(&1, &2, module, versions)) do
-      {:ok, %{error: nil} = acc} -> {:ok, acc.entity, acc.terminal, acc.migrated}
+      {:ok, %{error: nil} = acc} -> {:ok, acc.cell, acc.terminal, acc.migrated}
       {:ok, %{error: error}} -> error
       {:error, refusal} -> {:error, RecordFrame.refusal_message(@change_log_name, refusal)}
     end
@@ -266,11 +266,11 @@ defmodule Flezha.SDK.Record do
 
   defp fold_one({seq, header, body, _raw}, acc, module, versions) do
     with {:ok, resolved} <- resolve(header, versions),
-         {:ok, folded, decision} <- fold_record(body, resolved, module, acc.entity) do
+         {:ok, folded, decision} <- fold_record(body, resolved, module, acc.cell) do
       {:cont,
        %{
          acc
-         | entity: folded,
+         | cell: folded,
            terminal: max(acc.terminal, seq),
            migrated: acc.migrated or decision != :decode
        }}
@@ -338,7 +338,7 @@ defmodule Flezha.SDK.Record do
 
         :undeclared ->
           {:error,
-           "no migration from schema_version #{from}: the procedure declares none (#{what})"}
+           "no migration from schema_version #{from}: the tasklet declares none (#{what})"}
 
         {:error, reason} ->
           {:error, "migration from schema_version #{from} failed (#{what}): #{describe(reason)}"}
@@ -346,8 +346,8 @@ defmodule Flezha.SDK.Record do
     end
   end
 
-  defp migrate(module, :snapshot, from, old), do: Procedure.migrate_state(module, from, old)
-  defp migrate(module, :change, from, old), do: Procedure.migrate_change(module, from, old)
+  defp migrate(module, :snapshot, from, old), do: Tasklet.migrate_state(module, from, old)
+  defp migrate(module, :change, from, old), do: Tasklet.migrate_change(module, from, old)
 
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason), do: inspect(reason)

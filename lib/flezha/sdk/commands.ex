@@ -4,29 +4,29 @@ defmodule Flezha.SDK.Commands do
   notifications it ships — its zero-mutation half: every function reads the
   server's state (the operatives, the control handle, the credit window) and
   answers through the reply seam it is handed; none writes the state. A
-  command that needs an Entity's answer runs off the server's loop, so a fold
+  command that needs a Cell's answer runs off the server's loop, so a fold
   or a serialisation never stalls the control channel; the credit commands
   answer on it and never block.
 
-  The live read is the Decision-10 shape: `%{procedure => state}` for a
-  Single node, `%{procedure => %{key => state}}` for a Static or Dynamic one,
+  The live read is the Decision-10 shape: `%{tasklet => state}` for a
+  Single node, `%{tasklet => %{key => state}}` for a Static or Dynamic one,
   narrowed by the selector, with the reply frame carrying `flz.change_seq`
-  when exactly one Entity was read. Refusals carry the tokens the controller
-  matches as prefixes: `entity_key_without_procedure`, `procedure_not_found`,
-  `entity_not_found`, `entity_busy`.
+  when exactly one Cell was read. Refusals carry the tokens the controller
+  matches as prefixes: `cell_key_without_tasklet`, `tasklet_not_found`,
+  `cell_not_found`, `cell_busy`.
   """
 
   require Logger
 
-  alias Flezha.SDK.{Call, Codec, Credit, Entity, Hold, Knob, Operative}
+  alias Flezha.SDK.{Call, Codec, Credit, Cell, Hold, Knob, Operative}
   alias Flezha.SDK.Wire
-  # A serialise's wait for a mid-dispatch Entity, and the serialise bound of a
+  # A serialise's wait for a mid-dispatch Cell, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
   @change_seq_key Wire.change_seq_key()
-  @whole %{procedure: nil, entity_key: nil}
+  @whole %{tasklet: nil, cell_key: nil}
   # One refusal, and each surface adds the prefix its siblings carry.
-  @router_silent "entity_busy: the operative did not answer"
-  @marker_silent "entity_busy: the operative did not take the compensation markers"
+  @router_silent "cell_busy: the operative did not answer"
+  @marker_silent "cell_busy: the operative did not take the compensation markers"
 
   @typedoc "How a command answers: status, errors, raw_data, the reply frame's metadata."
   @type respond :: (String.t(), [String.t()], binary(), map() -> any())
@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Commands do
   @spec dispatch(atom(), map(), respond(), map()) :: :ok
   def dispatch(:restore_init_state, cmd, respond, s) do
     off_loop(respond, fn ->
-      case entity(s, cmd.entity_id, materialise: true) do
+      case cell(s, cmd.cell_id, materialise: true) do
         {:ok, pid} ->
           case note_compensation(s, cmd) do
             :ok ->
@@ -45,15 +45,15 @@ defmodule Flezha.SDK.Commands do
               respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
           end
 
-        {:error, :bad_entity_id} ->
-          respond.("error", ["restore_init_state: malformed entity_id"], response(cmd, 0), %{})
+        {:error, :bad_cell_id} ->
+          respond.("error", ["restore_init_state: malformed cell_id"], response(cmd, 0), %{})
 
-        # A router that did not answer is not an Entity that is not there: the
+        # A router that did not answer is not a Cell that is not there: the
         # ack below would tell the Controller its state was covered.
         {:error, :operative_busy} ->
           respond.("error", ["restore_init_state: " <> @router_silent], response(cmd, 0), %{})
 
-        # No live Entity to rebuild: the controller's terminal covers what it
+        # No live Cell to rebuild: the controller's terminal covers what it
         # shipped, and the ack is what lets the bind proceed.
         {:error, _absent} ->
           respond.("success", [], response(cmd, cmd.terminal_seq), %{})
@@ -61,29 +61,29 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  def dispatch(:compact_entity, cmd, respond, s) do
+  def dispatch(:compact_cell, cmd, respond, s) do
     off_loop(respond, fn ->
-      with {:ok, pid} <- entity(s, cmd.entity_id, []),
-           {:ok, seq, size} <- Entity.snapshot(pid) do
+      with {:ok, pid} <- cell(s, cmd.cell_id, []),
+           {:ok, seq, size} <- Cell.snapshot(pid) do
         respond.(
           "success",
           [],
-          Codec.encode_compact_response(cmd.entity_id, seq, size),
+          Codec.encode_compact_response(cmd.cell_id, seq, size),
           %{}
         )
       else
         {:error, reason} ->
           respond.(
             "error",
-            ["compact_entity: #{describe(reason)}"],
-            Codec.encode_compact_response(cmd.entity_id, 0, 0),
+            ["compact_cell: #{describe(reason)}"],
+            Codec.encode_compact_response(cmd.cell_id, 0, 0),
             %{}
           )
       end
     end)
   end
 
-  def dispatch(:entity_state, cmd, respond, s) do
+  def dispatch(:cell_state, cmd, respond, s) do
     off_loop(respond, fn ->
       case state_json(s, cmd.operative_id, selector(cmd)) do
         {:ok, json, seq} -> respond.("success", [], json, seq_metadata(seq))
@@ -101,7 +101,7 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  def dispatch(:entity_apply_state, cmd, respond, s),
+  def dispatch(:cell_apply_state, cmd, respond, s),
     do: apply_off_loop(s, cmd.operative_id, cmd.state_binary, respond)
 
   def dispatch(:migration_deserialization, cmd, respond, s),
@@ -119,19 +119,19 @@ defmodule Flezha.SDK.Commands do
 
   # A pre-credit controller's back-pressure flag; this SDK's send path is
   # bounded by its mailboxes and the window.
-  def dispatch(:entity_mailbox_status, cmd, respond, _s) do
+  def dispatch(:cell_mailbox_status, cmd, respond, _s) do
     Logger.debug(
-      "[Flezha.SDK] legacy entity mailbox status from a pre-credit controller: #{cmd.status}"
+      "[Flezha.SDK] legacy cell mailbox status from a pre-credit controller: #{cmd.status}"
     )
 
     respond.("success", [], <<>>, %{})
   end
 
   @doc """
-  The Decision-10 JSON of `operative_id`'s Entities narrowed by `selector`
-  (`%{procedure: name | nil, entity_key: key | nil}`), and the seq when
-  exactly one Entity was read. A walk omits an Entity that does not answer; a
-  read that names one Entity answers its failure.
+  The Decision-10 JSON of `operative_id`'s Cells narrowed by `selector`
+  (`%{tasklet: name | nil, cell_key: key | nil}`), and the seq when
+  exactly one Cell was read. A walk omits a Cell that does not answer; a
+  read that names one Cell answers its failure.
   """
   @spec state_json(map(), String.t(), map()) ::
           {:ok, binary(), non_neg_integer() | nil} | {:error, String.t()}
@@ -139,8 +139,8 @@ defmodule Flezha.SDK.Commands do
     with {:ok, op} <- operative(s, operative_id),
          :ok <- check_selector(selector),
          {:ok, all} <- nodes(op),
-         {:ok, nodes} <- select_nodes(all, operative_id, selector.procedure),
-         {:ok, top, seqs} <- collect(op, nodes, selector.entity_key),
+         {:ok, nodes} <- select_nodes(all, operative_id, selector.tasklet),
+         {:ok, top, seqs} <- collect(op, nodes, selector.cell_key),
          {:ok, json} <- to_json(top) do
       {:ok, json, single(seqs)}
     end
@@ -148,9 +148,9 @@ defmodule Flezha.SDK.Commands do
 
   @doc """
   Apply a Decision-10 JSON object — `AddOperative.init_values`, a migration's
-  state — to `op`'s Entities through each Procedure's `state_from_json/1`: a
+  state — to `op`'s Cells through each Tasklet's `state_from_json/1`: a
   Single node takes its value, a Static node its declared keys' values; a key
-  that names no Procedure or no declared Entity is logged and ignored.
+  that names no Tasklet or no declared Cell is logged and ignored.
   """
   @spec apply_json(pid(), String.t(), binary() | nil) :: :ok | {:error, String.t()}
   def apply_json(_op, _operative_id, json) when json in [nil, ""], do: :ok
@@ -192,7 +192,7 @@ defmodule Flezha.SDK.Commands do
   # --- restore, compaction ---
 
   defp restore(pid, cmd, respond) do
-    case Entity.restore(
+    case Cell.restore(
            pid,
            cmd.snapshot_header,
            cmd.snapshot_bytes,
@@ -203,7 +203,7 @@ defmodule Flezha.SDK.Commands do
         respond.(
           "success",
           [],
-          Codec.encode_restore_response(cmd.entity_id, terminal, migrated),
+          Codec.encode_restore_response(cmd.cell_id, terminal, migrated),
           %{}
         )
 
@@ -212,10 +212,10 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  # The saga markers the controller persisted for this Entity ride the restore
-  # frame: `intent` that its procedure completed forward and may need undo,
+  # The saga markers the controller persisted for this Cell ride the restore
+  # frame: `intent` that its tasklet completed forward and may need undo,
   # `done` that its compensation already ran. They are instance-scoped, so
-  # they go to the operative rather than to the Entity — a workflow driver
+  # they go to the operative rather than to the Cell — a workflow driver
   # reads them to finish an unwind the crash interrupted, and a stream
   # operative ignores the cast.
   defp note_compensation(s, cmd) do
@@ -225,7 +225,7 @@ defmodule Flezha.SDK.Commands do
   end
 
   defp ship_markers(s, cmd, intent, done) do
-    with {:ok, {operative_id, _procedure, _key}} <- Wire.decode_entity_id(cmd.entity_id),
+    with {:ok, {operative_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
          {:ok, op} <- operative(s, operative_id) do
       # A call, not a cast: the driver decides whether to resume an unwind when
       # the last restore lands, and a marker racing that decision would let a
@@ -235,7 +235,7 @@ defmodule Flezha.SDK.Commands do
       # retries rather than resuming an unwind from a record that never landed.
       Call.control(
         op,
-        {:compensation_markers, cmd.entity_id, intent, done},
+        {:compensation_markers, cmd.cell_id, intent, done},
         {:error, @marker_silent}
       )
     else
@@ -244,12 +244,12 @@ defmodule Flezha.SDK.Commands do
   end
 
   defp response(cmd, terminal),
-    do: Codec.encode_restore_response(cmd.entity_id, terminal, false)
+    do: Codec.encode_restore_response(cmd.cell_id, terminal, false)
 
-  defp entity(s, entity_id, opts) do
-    with {:ok, {operative_id, procedure, key}} <- Wire.decode_entity_id(entity_id),
+  defp cell(s, cell_id, opts) do
+    with {:ok, {operative_id, tasklet, key}} <- Wire.decode_cell_id(cell_id),
          {:ok, op} <- operative(s, operative_id) do
-      Operative.lookup(op, procedure, blank_to_nil(key), opts)
+      Operative.lookup(op, tasklet, blank_to_nil(key), opts)
     end
   end
 
@@ -266,30 +266,30 @@ defmodule Flezha.SDK.Commands do
   # prefix. `[]` would be a lie: a walk that read it would report a live
   # operative as empty.
   defp nodes(op) do
-    case Operative.entities(op) do
+    case Operative.cells(op) do
       {:error, :operative_busy} -> {:error, @router_silent}
       nodes -> {:ok, nodes}
     end
   end
 
   defp selector(cmd),
-    do: %{procedure: blank_to_nil(cmd.procedure), entity_key: blank_to_nil(cmd.entity_key)}
+    do: %{tasklet: blank_to_nil(cmd.tasklet), cell_key: blank_to_nil(cmd.cell_key)}
 
-  defp check_selector(%{procedure: nil, entity_key: key}) when key != nil,
+  defp check_selector(%{tasklet: nil, cell_key: key}) when key != nil,
     do:
       {:error,
-       "entity_key_without_procedure: an Entity key is unique only within its Procedure — " <>
-         "name the Procedure as well"}
+       "cell_key_without_tasklet: a Cell key is unique only within its Tasklet — " <>
+         "name the Tasklet as well"}
 
   defp check_selector(_selector), do: :ok
 
   defp select_nodes(nodes, _operative_id, nil), do: {:ok, nodes}
 
-  defp select_nodes(nodes, operative_id, procedure) do
-    case Enum.filter(nodes, fn {name, _mode, _entities} -> name == procedure end) do
+  defp select_nodes(nodes, operative_id, tasklet) do
+    case Enum.filter(nodes, fn {name, _mode, _cells} -> name == tasklet end) do
       [] ->
         {:error,
-         "procedure_not_found: operative `#{operative_id}` has no Procedure named `#{procedure}`"}
+         "tasklet_not_found: operative `#{operative_id}` has no Tasklet named `#{tasklet}`"}
 
       some ->
         {:ok, some}
@@ -297,8 +297,8 @@ defmodule Flezha.SDK.Commands do
   end
 
   defp collect(op, nodes, key) do
-    Enum.reduce_while(nodes, {:ok, %{}, []}, fn {name, mode, entities}, {:ok, top, seqs} ->
-      case read_node(op, name, mode, entities, key) do
+    Enum.reduce_while(nodes, {:ok, %{}, []}, fn {name, mode, cells}, {:ok, top, seqs} ->
+      case read_node(op, name, mode, cells, key) do
         {:ok, :absent, _} -> {:cont, {:ok, top, seqs}}
         {:ok, value, node_seqs} -> {:cont, {:ok, Map.put(top, name, value), node_seqs ++ seqs}}
         {:error, _} = error -> {:halt, error}
@@ -306,9 +306,9 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  # A Single node's one Entity, or a keyed node's live Entities by key; a key
+  # A Single node's one Cell, or a keyed node's live Cells by key; a key
   # named against a Single node, or absent from a keyed one, is a refusal.
-  defp read_node(op, name, :single, _entities, key) when key != nil,
+  defp read_node(op, name, :single, _cells, key) when key != nil,
     do: {:error, missing(op, name, key)}
 
   defp read_node(_op, _name, :single, [], nil), do: {:ok, :absent, []}
@@ -320,8 +320,8 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  defp read_node(_op, name, _keyed, entities, nil) do
-    Enum.reduce(entities, {:ok, %{}, []}, fn {key, pid}, {:ok, inner, seqs} ->
+  defp read_node(_op, name, _keyed, cells, nil) do
+    Enum.reduce(cells, {:ok, %{}, []}, fn {key, pid}, {:ok, inner, seqs} ->
       case read(pid, name, key) do
         {:ok, state, seq} -> {:ok, Map.put(inner, key, state), [seq | seqs]}
         :omit -> {:ok, inner, seqs}
@@ -329,18 +329,18 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  defp read_node(op, name, _keyed, entities, key) do
-    case List.keyfind(entities, key, 0) do
+  defp read_node(op, name, _keyed, cells, key) do
+    case List.keyfind(cells, key, 0) do
       nil ->
         {:error, missing(op, name, key)}
 
       {^key, pid} ->
-        case Entity.read(pid, Knob.get(:sdk_serialize_wait_ms)) do
+        case Cell.read(pid, Knob.get(:sdk_serialize_wait_ms)) do
           {:ok, state, seq} ->
             {:ok, %{key => state}, [seq]}
 
           {:error, :busy} ->
-            {:error, "entity_busy: Procedure `#{name}` Entity `#{key}` is mid-dispatch"}
+            {:error, "cell_busy: Tasklet `#{name}` Cell `#{key}` is mid-dispatch"}
 
           {:error, :gone} ->
             {:error, missing(op, name, key)}
@@ -348,15 +348,15 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  # In a walk a failing Entity is logged and omitted.
+  # In a walk a failing Cell is logged and omitted.
   defp read(pid, name, key) do
-    case Entity.read(pid, Knob.get(:sdk_serialize_wait_ms)) do
+    case Cell.read(pid, Knob.get(:sdk_serialize_wait_ms)) do
       {:ok, state, seq} ->
         {:ok, state, seq}
 
       {:error, reason} ->
         Logger.warning(
-          "[Flezha.SDK] serialize: procedure `#{name}` key `#{key}` did not answer (#{reason})"
+          "[Flezha.SDK] serialize: tasklet `#{name}` key `#{key}` did not answer (#{reason})"
         )
 
         :omit
@@ -367,12 +367,12 @@ defmodule Flezha.SDK.Commands do
   # and the Operative's trace is what tells them apart.
   defp missing(op, name, key) do
     case Operative.lookup(op, name, key) do
-      {:error, :entity_evicted} ->
-        "entity_evicted: Entity `#{key}` of procedure `#{name}` was idle-evicted; eviction is " <>
+      {:error, :cell_evicted} ->
+        "cell_evicted: Cell `#{key}` of tasklet `#{name}` was idle-evicted; eviction is " <>
           "destructive, so there is no durable value to serve"
 
       _ ->
-        "entity_not_found: Procedure `#{name}` has no live Entity `#{key}`"
+        "cell_not_found: Tasklet `#{name}` has no live Cell `#{key}`"
     end
   end
 
@@ -415,7 +415,7 @@ defmodule Flezha.SDK.Commands do
 
   defp apply_node(nil, operative_id, name, _value) do
     Logger.info(
-      "[Flezha.SDK] init_values for #{operative_id} names no Procedure `#{name}`; ignored"
+      "[Flezha.SDK] init_values for #{operative_id} names no Tasklet `#{name}`; ignored"
     )
 
     []
@@ -424,15 +424,15 @@ defmodule Flezha.SDK.Commands do
   defp apply_node({_name, :single, [{nil, pid} | _]}, _operative_id, name, value),
     do: apply_one(pid, name, "", value)
 
-  defp apply_node({_name, :static, entities}, operative_id, name, %{} = by_key) do
+  defp apply_node({_name, :static, cells}, operative_id, name, %{} = by_key) do
     Enum.flat_map(by_key, fn {key, value} ->
-      case List.keyfind(entities, key, 0) do
+      case List.keyfind(cells, key, 0) do
         {^key, pid} ->
           apply_one(pid, name, key, value)
 
         nil ->
           Logger.info(
-            "[Flezha.SDK] init_values for #{operative_id}: `#{name}` declares no Entity `#{key}`; ignored"
+            "[Flezha.SDK] init_values for #{operative_id}: `#{name}` declares no Cell `#{key}`; ignored"
           )
 
           []
@@ -440,7 +440,7 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  defp apply_node({_name, mode, _entities}, operative_id, name, _value) do
+  defp apply_node({_name, mode, _cells}, operative_id, name, _value) do
     Logger.info(
       "[Flezha.SDK] init_values for #{operative_id}: `#{name}` (#{mode}) takes no seeded state; ignored"
     )
@@ -449,7 +449,7 @@ defmodule Flezha.SDK.Commands do
   end
 
   defp apply_one(pid, name, key, value) do
-    case Entity.apply_state(pid, value) do
+    case Cell.apply_state(pid, value) do
       :ok -> []
       {:error, reason} -> ["#{name}/#{key}: #{reason}"]
     end
@@ -503,7 +503,7 @@ defmodule Flezha.SDK.Commands do
 
   # --- helpers ---
 
-  # A command that needs an Entity's answer never runs on the RunnerServer's
+  # A command that needs a Cell's answer never runs on the RunnerServer's
   # loop; a failure on the way is the command's error, never a silent timeout.
   defp off_loop(respond, fun) do
     Task.start(fn ->

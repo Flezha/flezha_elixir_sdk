@@ -6,11 +6,11 @@ defmodule Flezha.SDK.StreamOperative do
   `channels/1` the author writes, which authors the topology on the builder
   token, an optional human `description/0`, and an optional
   `persistence_enabled/0` (default `true`, the Rust `PERSISTENCE_ENABLED`):
-  `false` advances every changeful Entity's record seq and ships nothing, so a
+  `false` advances every changeful Cell's record seq and ships nothing, so a
   class toggled back on later never hands the controller a seq it already saw.
   """
 
-  alias Flezha.SDK.Procedure
+  alias Flezha.SDK.Tasklet
 
   # The scalar settings `use` takes, each named after the callback it defines.
   @use_options [:description, :persistence_enabled]
@@ -36,8 +36,8 @@ defmodule Flezha.SDK.StreamOperative do
 
   ## The §5 short form
 
-  A module that writes its one procedure's `run/3` instead of `channels/1` is
-  a whole single-procedure operative:
+  A module that writes its one tasklet's `run/3` instead of `channels/1` is
+  a whole single-tasklet operative:
 
       use Flezha.SDK.StreamOperative, factory_id: "upcase", sink: "out", input: "words"
 
@@ -46,20 +46,20 @@ defmodule Flezha.SDK.StreamOperative do
         {:ok, state}
       end
 
-  It generates the procedure module `Upcase.Procedure`, whose `name/0` is the
-  factory id and which delegates to this module's procedure callbacks, and a
+  It generates the tasklet module `Upcase.Tasklet`, whose `name/0` is the
+  factory id and which delegates to this module's tasklet callbacks, and a
   `channels/1` wiring the entry channel (`input:`, `"input"` when absent) into
   it and, with `sink:`, it to that plugin channel. With no `sink:` nothing
-  leaves the procedure but its state. `run/3` is written as in a procedure,
+  leaves the tasklet but its state. `run/3` is written as in a tasklet,
   with the ctx functions and a `state do ... end` block available, and the
-  options `use Flezha.SDK.Procedure` takes (`max_entities:`, `clock:`, ...)
-  apply to the generated procedure. The short form takes no class setting,
+  options `use Flezha.SDK.Tasklet` takes (`max_cells:`, `clock:`, ...)
+  apply to the generated tasklet. The short form takes no class setting,
   which is the full form's. Writing `run/3`
   and `channels/1` both is a `CompileError` beginning `ShortFormWithTopology`,
   and writing neither is one naming both.
   """
   defmacro __using__(opts) do
-    Procedure.__operative_using__(opts, @use_options, __MODULE__)
+    Tasklet.__operative_using__(opts, @use_options, __MODULE__)
   end
 
   @callback factory_id() :: String.t()
@@ -69,10 +69,10 @@ defmodule Flezha.SDK.StreamOperative do
 
   @optional_callbacks description: 0, persistence_enabled: 0
 
-  @doc "Whether the class ships its changeful Procedures' records."
+  @doc "Whether the class ships its changeful Tasklets' records."
   @spec persistence_enabled?(module()) :: boolean()
   def persistence_enabled?(module) do
-    if Procedure.exports?(module, :persistence_enabled, 0),
+    if Tasklet.exports?(module, :persistence_enabled, 0),
       do: module.persistence_enabled(),
       else: true
   end

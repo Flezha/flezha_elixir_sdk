@@ -1,35 +1,35 @@
-defmodule Flezha.SDK.Entity.Clock do
+defmodule Flezha.SDK.Cell.Clock do
   @moduledoc """
-  Everything an Entity does with its `timers` map: the clock its Procedure
+  Everything a Cell does with its `timers` map: the clock its Tasklet
   declared and the value that clock serves, the event-time high-water, and the
   BEAM timer refs a processing-time registration arms.
 
   Everything here writes `timers.clock`, `timers.refs` or `timers.high_water`;
   the process half keeps its mailbox, its queue and its ladder. This module
-  aliases `Counters`, `Procedure`, `Timers` and `State`, and **never names
-  `Entity`**, so it forms no cycle. Its functions run in the Entity's own process,
-  which is what makes `self()` in `arm/2` the Entity.
+  aliases `Counters`, `Tasklet`, `Timers` and `State`, and **never names
+  `Cell`**, so it forms no cycle. Its functions run in the Cell's own process,
+  which is what makes `self()` in `arm/2` the Cell.
   """
 
-  alias Flezha.SDK.{Counters, Procedure, Timers}
-  alias Flezha.SDK.Entity.State
+  alias Flezha.SDK.{Counters, Tasklet, Timers}
+  alias Flezha.SDK.Cell.State
 
-  @doc "The `timers` map a fresh Entity starts from, over what its slot held."
+  @doc "The `timers` map a fresh Cell starts from, over what its slot held."
   @spec seed(module(), map()) :: map()
   def seed(module, held) do
     %{
       pending: held.timers,
       clock: of(module),
-      on_timer?: Procedure.on_timer?(module),
+      on_timer?: Tasklet.on_timer?(module),
       refs: %{},
       high_water: nil
     }
   end
 
-  @doc "The declared clock, with an event-time procedure's extractor captured."
+  @doc "The declared clock, with an event-time tasklet's extractor captured."
   @spec of(module()) :: :wall | :logical | {:event_time, (term() -> non_neg_integer())}
   def of(module) do
-    case Procedure.clock(module) do
+    case Tasklet.clock(module) do
       :event_time -> {:event_time, &module.event_time_of/1}
       clock -> clock
     end
@@ -45,7 +45,7 @@ defmodule Flezha.SDK.Entity.Clock do
   def now(%State{timers: %{clock: :logical}, change_seq: seq}, _value), do: seq
   def now(%State{timers: %{clock: {:event_time, extract}}}, value), do: extract.(value)
 
-  @doc "An event time, or `:error` when the procedure's extractor raises, throws or exits."
+  @doc "An event time, or `:error` when the tasklet's extractor raises, throws or exits."
   @spec extract((term() -> non_neg_integer()), term()) :: {:ok, non_neg_integer()} | :error
   def extract(extractor, value) do
     {:ok, extractor.(value)}
@@ -116,7 +116,7 @@ defmodule Flezha.SDK.Entity.Clock do
   defp event(%State{} = s, event, count) do
     :telemetry.execute([:flezha, :sdk, :timers], %{count: count}, %{
       operative_id: s.operative_id,
-      procedure: s.module.name(),
+      tasklet: s.module.name(),
       event: event
     })
   end

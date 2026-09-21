@@ -1,29 +1,29 @@
-# Fixtures whose subject is persisted Entity state — twins of
-# test/apps/rust_runner/src/state.rs and entity.rs under the same factory ids,
-# procedure names, channel names and output bytes: the durable-state reference,
+# Fixtures whose subject is persisted Cell state — twins of
+# test/apps/rust_runner/src/state.rs and cell.rs under the same factory ids,
+# tasklet names, channel names and output bytes: the durable-state reference,
 # the counter and the coalescing counter, the persistence-off class under the
-# reference's own procedure names, and the resume probe. `bench_keyed`, the
+# reference's own tasklet names, and the resume probe. `bench_keyed`, the
 # round-trip bench's durable twin, lives beside `bench_keyed_nopersist` in
 # lib/mix/tasks/bench/elixir_factories.ex. `coalescing_counter` ships
 # uncoalesced, as every veneer does: the fold is idempotent per `(interval, ts)`.
 # `schema_evolution_v1` / `_v2` are the same class either side of a deploy that
-# edits its own state type: both declare the procedure `evolving_cart`, so an
+# edits its own state type: both declare the tasklet `evolving_cart`, so an
 # operative started under v1 and restarted under v2 restores from the very WAL
 # v1 wrote. `session_timeout` is the worked timer shape: durable, so the e2e's
 # re-seat half folds its pending timer back out of the change log.
 # `checkpoint_store` / `checkpoint_batched_store` are the tier's two
-# checkpoint postures over one procedure; `tier_store` and `bench_checkpoint`
+# checkpoint postures over one tasklet; `tier_store` and `bench_checkpoint`
 # come from the bench factories the application registers beside these.
 
 # -- store_input ------------------------------------------------------------
 
-defmodule ElixirRunner.StoreInputProc do
+defmodule ElixirRunner.StoreInputTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "store_input_procedure"
+  def name, do: "store_input_tasklet"
   def init_state(_), do: %{binary_inputs: [], text_inputs: []}
   def apply_change(s, {:push_text, text}), do: %{s | text_inputs: s.text_inputs ++ [text]}
 
@@ -47,20 +47,20 @@ defmodule ElixirRunner.StoreInputOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.StoreInputProc)
+    |> into(ElixirRunner.StoreInputTask)
     |> sink("sink")
   end
 end
 
 # -- stateful_counter / persistence_off_counter -----------------------------
 
-defmodule ElixirRunner.CounterEntryProc do
+defmodule ElixirRunner.CounterEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "counter_entry_procedure"
+  def name, do: "counter_entry_tasklet"
   def init_state(_), do: nil
 
   def run(input, s, ctx) do
@@ -69,13 +69,13 @@ defmodule ElixirRunner.CounterEntryProc do
   end
 end
 
-defmodule ElixirRunner.CounterProc do
+defmodule ElixirRunner.CounterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "counter_procedure"
+  def name, do: "counter_tasklet"
   def init_state(_), do: %{value: 0}
   def apply_change(s, {:delta, delta}), do: %{s | value: s.value + delta}
   def state_from_json(%{"value" => value}), do: %{value: value}
@@ -92,30 +92,30 @@ defmodule ElixirRunner.StatefulCounterOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.CounterEntryProc)
+    |> into(ElixirRunner.CounterEntryTask)
     |> named("ticks")
-    |> into(ElixirRunner.CounterProc)
+    |> into(ElixirRunner.CounterTask)
   end
 end
 
-# The reference names the persistence-off class's procedures after the class;
+# The reference names the persistence-off class's tasklets after the class;
 # the code is the counter's.
-defmodule ElixirRunner.PersistenceOffEntryProc do
+defmodule ElixirRunner.PersistenceOffEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "persistence_off_entry_procedure"
-  defdelegate init_state(key), to: ElixirRunner.CounterEntryProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.CounterEntryProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "persistence_off_entry_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.CounterEntryTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.CounterEntryTask
 end
 
-defmodule ElixirRunner.PersistenceOffCounterProc do
+defmodule ElixirRunner.PersistenceOffCounterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
-  def name, do: "persistence_off_counter_procedure"
-  defdelegate init_state(key), to: ElixirRunner.CounterProc
-  defdelegate apply_change(state, change), to: ElixirRunner.CounterProc
-  defdelegate state_from_json(json), to: ElixirRunner.CounterProc
-  defdelegate run(input, state, ctx), to: ElixirRunner.CounterProc
+  @behaviour Flezha.SDK.Tasklet
+  def name, do: "persistence_off_counter_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.CounterTask
+  defdelegate apply_change(state, change), to: ElixirRunner.CounterTask
+  defdelegate state_from_json(json), to: ElixirRunner.CounterTask
+  defdelegate run(input, state, ctx), to: ElixirRunner.CounterTask
 end
 
 defmodule ElixirRunner.PersistenceOffCounterOp do
@@ -129,21 +129,21 @@ defmodule ElixirRunner.PersistenceOffCounterOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.PersistenceOffEntryProc)
+    |> into(ElixirRunner.PersistenceOffEntryTask)
     |> named("ticks")
-    |> into(ElixirRunner.PersistenceOffCounterProc)
+    |> into(ElixirRunner.PersistenceOffCounterTask)
   end
 end
 
 # -- coalescing_counter -----------------------------------------------------
 
-defmodule ElixirRunner.TickEntryProc do
+defmodule ElixirRunner.TickEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "tick_entry_procedure"
+  def name, do: "tick_entry_tasklet"
   def init_state(_), do: nil
 
   # Wire format: `<interval>:<ts>:<delta>`.
@@ -161,13 +161,13 @@ defmodule ElixirRunner.TickEntryProc do
   end
 end
 
-defmodule ElixirRunner.TickProc do
+defmodule ElixirRunner.TickTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "tick_procedure"
+  def name, do: "tick_tasklet"
   def init_state(_), do: %{last: 0}
   def apply_change(s, %{delta: delta}), do: %{s | last: delta}
   def state_from_json(%{"last" => last}), do: %{last: last}
@@ -184,21 +184,21 @@ defmodule ElixirRunner.CoalescingCounterOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.TickEntryProc)
+    |> into(ElixirRunner.TickEntryTask)
     |> named("ticks")
-    |> into(ElixirRunner.TickProc)
+    |> into(ElixirRunner.TickTask)
   end
 end
 
 # -- resume_probe -----------------------------------------------------------
 
-defmodule ElixirRunner.ResumeProbeProc do
+defmodule ElixirRunner.ResumeProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "resume_probe_procedure"
+  def name, do: "resume_probe_tasklet"
   def init_state(_), do: %{total: 0}
   def apply_change(s, {:add, delta}), do: %{s | total: s.total + delta}
   def state_from_json(%{"total" => total}), do: %{total: total}
@@ -221,16 +221,16 @@ defmodule ElixirRunner.ResumeProbeOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.ResumeProbeProc)
+    |> into(ElixirRunner.ResumeProbeTask)
     |> sink("total")
   end
 end
 
 # -- schema_evolution_v1 / schema_evolution_v2 -------------------------------
 
-defmodule ElixirRunner.EvolvingCartV1Proc do
+defmodule ElixirRunner.EvolvingCartV1Task do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -249,9 +249,9 @@ end
 # v2: `currency` joined the state and a note joined the change, at schema
 # version 2 reading down to 1 through the migrations; the output carries the
 # migrated field so the e2e reads it off the wire.
-defmodule ElixirRunner.EvolvingCartV2Proc do
+defmodule ElixirRunner.EvolvingCartV2Task do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
@@ -287,7 +287,7 @@ defmodule ElixirRunner.SchemaEvolutionV1Op do
 
     c
     |> input("input")
-    |> into(ElixirRunner.EvolvingCartV1Proc)
+    |> into(ElixirRunner.EvolvingCartV1Task)
     |> sink("total")
   end
 end
@@ -302,24 +302,24 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
 
     c
     |> input("input")
-    |> into(ElixirRunner.EvolvingCartV2Proc)
+    |> into(ElixirRunner.EvolvingCartV2Task)
     |> sink("total")
   end
 end
 
 # -- session_timeout ----------------------------------------------------------
 
-# The worked session-timeout shape (`entity_timers`): each input pushes the
-# idle deadline out, and the firing closes the session. Single-entity so the
-# e2e's crash-resume half exercises a durable Entity. The timeout is read from
+# The worked session-timeout shape (`cell_timers`): each input pushes the
+# idle deadline out, and the firing closes the session. Single-cell so the
+# e2e's crash-resume half exercises a durable Cell. The timeout is read from
 # `TIMER_TEST_TIMEOUT_MS` (the e2e sets it short).
-defmodule ElixirRunner.SessionTimeoutProc do
+defmodule ElixirRunner.SessionTimeoutTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "session_timeout_procedure"
+  def name, do: "session_timeout_tasklet"
   def init_state(_), do: %{touched: [], closed_at: []}
   def apply_change(s, {:touched, input}), do: %{s | touched: s.touched ++ [input]}
   def apply_change(s, {:closed, at}), do: %{s | closed_at: s.closed_at ++ [at]}
@@ -359,7 +359,7 @@ defmodule ElixirRunner.SessionTimeoutOp do
 
     c
     |> input("input")
-    |> into(ElixirRunner.SessionTimeoutProc)
+    |> into(ElixirRunner.SessionTimeoutTask)
     |> sink("kafka")
   end
 end
@@ -372,26 +372,26 @@ end
 # `outputs_at_checkpoint`, so the interval's outputs are held with its changes
 # and ship inside its closing record; `checkpoint_every` is deliberately absent
 # from both, so the e2e drives every close itself.
-defmodule ElixirRunner.CheckpointStoreProc do
+defmodule ElixirRunner.CheckpointStoreTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
-  alias Flezha.Bench.TierStoreProc
+  alias Flezha.Bench.TierStoreTask
   alias Flezha.SDK.Ctx
 
-  def name, do: "checkpoint_store_procedure"
-  defdelegate init_state(key), to: TierStoreProc
-  defdelegate apply_change(state, change), to: TierStoreProc
+  def name, do: "checkpoint_store_tasklet"
+  defdelegate init_state(key), to: TierStoreTask
+  defdelegate apply_change(state, change), to: TierStoreTask
   def state_from_json(json), do: json
 
   def run(input, s, ctx) do
-    case TierStoreProc.split(input) do
+    case TierStoreTask.split(input) do
       {"commit", _} ->
         Ctx.checkpoint(ctx)
         {:ok, s}
 
       {key, value} ->
-        TierStoreProc.upsert(key, value, s, ctx)
+        TierStoreTask.upsert(key, value, s, ctx)
     end
   end
 end
@@ -408,7 +408,7 @@ defmodule ElixirRunner.CheckpointStoreOp do
     |> effectively_once()
     |> checkpoint_ack()
     |> input("input")
-    |> into(ElixirRunner.CheckpointStoreProc)
+    |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
     |> sink("sink")
   end
@@ -427,7 +427,7 @@ defmodule ElixirRunner.CheckpointBatchedOp do
     |> checkpoint_ack()
     |> outputs_at_checkpoint(1_500)
     |> input("input")
-    |> into(ElixirRunner.CheckpointStoreProc)
+    |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
     |> sink("sink")
   end
@@ -457,13 +457,13 @@ end
 # [100, 300, 200] and the candle is permanently wrong. With it, the engine
 # rewinds behind 200, replays the retained input log sorted by event time, and
 # the fold order becomes [100, 200, 300].
-defmodule ElixirRunner.CandleProc do
+defmodule ElixirRunner.CandleTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Procedure
+  @behaviour Flezha.SDK.Tasklet
 
   alias Flezha.SDK.Ctx
 
-  def name, do: "candle_procedure"
+  def name, do: "candle_tasklet"
   def clock, do: :event_time
 
   # : Event times in fold order. The assertion surface.
@@ -498,7 +498,7 @@ defmodule ElixirRunner.CandleOp do
     |> effectively_once()
     |> correction_window(600_000)
     |> input("input")
-    |> into(ElixirRunner.CandleProc)
+    |> into(ElixirRunner.CandleTask)
     |> keyed()
     |> sink("sink")
   end

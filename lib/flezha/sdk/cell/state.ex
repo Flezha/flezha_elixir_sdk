@@ -1,7 +1,7 @@
-defmodule Flezha.SDK.Entity.State do
+defmodule Flezha.SDK.Cell.State do
   @moduledoc """
-  One Entity's state, shared by its process (`Flezha.SDK.Entity`: the mailbox,
-  the ladder, the park) and its durable half (`Flezha.SDK.Entity.Records`: the
+  One Cell's state, shared by its process (`Flezha.SDK.Cell`: the mailbox,
+  the ladder, the park) and its durable half (`Flezha.SDK.Cell.Records`: the
   records, the slot, the restore and the snapshot).
 
   Four map fields keep the struct flat. A struct's keys are its fields plus
@@ -20,7 +20,7 @@ defmodule Flezha.SDK.Entity.State do
     :node_name,
     :input_channel,
     :module,
-    :entity_key,
+    :cell_key,
     :capacity,
     :policy,
     :retry_max,
@@ -36,7 +36,7 @@ defmodule Flezha.SDK.Entity.State do
     timers: %{pending: %Flezha.SDK.Timers{}, clock: :wall, refs: %{}, high_water: nil},
     # One field again, for the same reason: whether the class declares the
     # effectively-once tier, its checkpoint policy, the node's sink routes the
-    # Entity captures its outputs through, whether it has an inter-procedure
+    # Cell captures its outputs through, whether it has an inter-tasklet
     # edge, the open interval, the consumed floor, the armed deadline, the
     # records owed to an edge report, the declared correction policy and the
     # replay slice buffered until its end marker.
@@ -45,7 +45,7 @@ defmodule Flezha.SDK.Entity.State do
       checkpoint: nil,
       sink_routes: [],
       edges?: false,
-      staged: %Flezha.SDK.Entity.Interval{},
+      staged: %Flezha.SDK.Cell.Interval{},
       floor: -1,
       deadline: nil,
       owed: :queue.new(),
@@ -57,25 +57,25 @@ defmodule Flezha.SDK.Entity.State do
     schema_version: 1,
     change_seq: 0,
     last_input_ms: 0,
-    # This Entity's write seam: the secondary it writes its records to, chosen
+    # This Cell's write seam: the secondary it writes its records to, chosen
     # by identity, the records no stream would take, and the credit window they
-    # are debited against. Seeded in `Flezha.SDK.Entity.init/1`, because its
+    # are debited against. Seeded in `Flezha.SDK.Cell.init/1`, because its
     # cap is read from the environment.
     stream: nil,
-    proc_state: nil,
+    task_state: nil,
     queue: :queue.new(),
     size: 0,
     processing?: false,
     # One field, so the struct stays flat: whether a park holds the queue, the
     # ack-correlation id of the park that holds it and the next park's ordinal.
-    # `enabled?` is false for a workflow stage's Entity: an exhausted ladder
-    # there fails the procedure rather than parking the input to the DLQ.
+    # `enabled?` is false for a workflow stage's Cell: an exhausted ladder
+    # there fails the tasklet rather than parking the input to the DLQ.
     park: %{held?: false, id: nil, seq: 0, enabled?: true},
     waiters: :queue.new()
   ]
 
-  @doc "`<operative>/<node>/<key>` — the Entity's name in logs and park ids."
-  def label(%__MODULE__{operative_id: oid, node_name: name, entity_key: key}) do
+  @doc "`<operative>/<node>/<key>` — the Cell's name in logs and park ids."
+  def label(%__MODULE__{operative_id: oid, node_name: name, cell_key: key}) do
     "#{oid}/#{name || "node"}/#{key || "single"}"
   end
 end

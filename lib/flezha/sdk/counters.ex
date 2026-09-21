@@ -1,21 +1,21 @@
 defmodule Flezha.SDK.Counters do
   @moduledoc """
-  Runner-wide liveness counters backed by `:atomics`, shared with every Entity so
+  Runner-wide liveness counters backed by `:atomics`, shared with every Cell so
   the heartbeat can report them without a message round trip. `dispatches` is
   bumped only on a COMPLETED dispatch — the key the controller's
   `runner_pool_wedged` verdict requires (a frozen value with the runner alive is
-  what makes a wedged Entity population visible). `blocked_parks` counts blocked
+  what makes a wedged Cell population visible). `blocked_parks` counts blocked
   enqueues, and `drops_newest`/`drops_oldest` count what a shedding policy threw
   away — the same three keys every other SDK's heartbeat carries, so an operator
   reads one vocabulary whichever runtime the operative runs on.
 
   Handout liveness — how many dispatches are underway and how long the oldest has
   been — is the same self-report every other SDK carries, and it is what makes ONE
-  wedged Entity visible while the runner as a whole keeps completing work. It
+  wedged Cell visible while the runner as a whole keeps completing work. It
   rides a fixed table of start timestamps rather than an in-flight counter,
-  because a counter cannot be un-leaked: an Entity killed untrappably would hold
-  its increment for the life of the runner. A slot belongs to an Entity's
-  identity instead, so the Operative clears it when that Entity dies. Two
+  because a counter cannot be un-leaked: a Cell killed untrappably would hold
+  its increment for the life of the runner. A slot belongs to a Cell's
+  identity instead, so the Operative clears it when that Cell dies. Two
   identities hashing to one slot means one of them runs unrecorded — the report
   under-states, which is the safe direction for a signal a rebind hangs off.
 
@@ -29,16 +29,16 @@ defmodule Flezha.SDK.Counters do
   for the controller's grant — so a runner parked on an exhausted window reads
   as parked beside a frozen `dispatches`, not wedged.
 
-  `restore_discarded_inputs` counts the input a restore threw away: an Entity
+  `restore_discarded_inputs` counts the input a restore threw away: a Cell
   re-seats on a past in which nothing staged for the open checkpoint interval
   was seen, so the interval's inputs and the buffered slice go with it. The
   controller re-forwards them from the rewound watermark, which is why the
   discard is a report and not a loss — and why a key that is silently absent
   and a key reported as zero are different answers to an operator.
 
-  `timers_armed` is the processing-time timers the runner's Entities hold on
+  `timers_armed` is the processing-time timers the runner's Cells hold on
   the BEAM's timer service — one per armed deadline, released on its firing,
-  its disarm and the Entity's own end; an Entity killed untrappably releases
+  its disarm and the Cell's own end; a Cell killed untrappably releases
   nothing, so the gauge over-states by its count until the runner restarts —
   and `timers_fired` the firings completed, the two timer keys every other
   SDK's heartbeat carries.
@@ -50,7 +50,7 @@ defmodule Flezha.SDK.Counters do
     table: :counter,
     backend: :atomics,
     new_opts: [signed: false],
-    # Two blocks of start timestamps, addressed by an Entity's identity hash
+    # Two blocks of start timestamps, addressed by a Cell's identity hash
     # rather than by name. Their bases follow the counters, so adding a counter
     # moves them rather than letting a new slot land inside one.
     blocks: [dispatch: 64, deferred: 64],
@@ -69,7 +69,7 @@ defmodule Flezha.SDK.Counters do
   @slots 64
 
   @type t :: :atomics.atomics_ref()
-  @typedoc "An Entity's identity, as the slot table hashes it."
+  @typedoc "A Cell's identity, as the slot table hashes it."
   @type identity :: term()
 
   @spec new() :: t()
@@ -139,17 +139,17 @@ defmodule Flezha.SDK.Counters do
   @spec timers_armed(t()) :: non_neg_integer()
   def timers_armed(ref), do: counter_get(ref, :timers_armed)
 
-  @typedoc "Which block of start-time slots — one Entity may hold one of each."
+  @typedoc "Which block of start-time slots — one Cell may hold one of each."
   @type block :: :dispatch | :deferred
 
   @doc """
-  Record that `identity` started a dispatch. A slot already held (by this Entity
+  Record that `identity` started a dispatch. A slot already held (by this Cell
   re-entering, or by a colliding identity) leaves the dispatch unrecorded.
   """
   @spec dispatch_started(t(), identity()) :: :ok
   def dispatch_started(ref, identity), do: mark_started(ref, :dispatch, identity)
 
-  @doc "Release `identity`'s slot — its dispatch ended, or the Entity died."
+  @doc "Release `identity`'s slot — its dispatch ended, or the Cell died."
   @spec dispatch_finished(t(), identity()) :: :ok
   def dispatch_finished(ref, identity), do: mark_finished(ref, :dispatch, identity)
 
@@ -174,7 +174,7 @@ defmodule Flezha.SDK.Counters do
   def handout_liveness(ref), do: liveness(ref, :dispatch)
 
   @doc """
-  Deferred-push liveness: `{Entities holding an unqueued push, age in ms of the
+  Deferred-push liveness: `{Cells holding an unqueued push, age in ms of the
   oldest}`. The same shape as `handout_liveness/1` because it answers the same
   question about the other half of the picture.
   """

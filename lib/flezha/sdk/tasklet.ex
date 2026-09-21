@@ -1,10 +1,10 @@
-defmodule Flezha.SDK.Procedure do
+defmodule Flezha.SDK.Tasklet do
   @moduledoc """
-  A procedure: one processing stage of an operative's graph, run once per
+  A tasklet: one processing stage of an operative's graph, run once per
   input and declared with `use`.
 
       defmodule Echo do
-        use Flezha.SDK.Procedure, name: "echo"
+        use Flezha.SDK.Tasklet, name: "echo"
 
         @impl true
         def run(input, state, ctx) do
@@ -19,26 +19,26 @@ defmodule Flezha.SDK.Procedure do
   and `defchange` (`Flezha.SDK.State`); see `__using__/1`. The author writes
   `run/3` and any other callback that takes arguments, each under `@impl true`.
 
-  Callbacks. Mandatory: `name/0`, `init_state/1` (the entity key or nil; `use`
+  Callbacks. Mandatory: `name/0`, `init_state/1` (the cell key or nil; `use`
   answers `nil` for a module that declares no state), `run/3` (input, state,
   ctx) returning
   `{:ok, new_state} | {:error, reason} | {:error, {:non_retryable, reason}}`.
-  Optional, with defaults: `entity_keys/0` (static keyset, `[]`), `entities_for/1`,
+  Optional, with defaults: `cell_keys/0` (static keyset, `[]`), `cells_for/1`,
   `mailbox_capacity/0` (1024, env `FLEZHA_MAILBOX_CAPACITY`, range 1..=1_048_576),
-  `max_entities/0` (100_000 — the cap on a dynamic node's live Entities; at it
-  a new key's input is dropped and counted), `entity_idle_ttl_ms/0` (nil — a
-  dynamic Entity idle past it is evicted destructively by its Operative's
+  `max_cells/0` (100_000 — the cap on a dynamic node's live Cells; at it
+  a new key's input is dropped and counted), `cell_idle_ttl_ms/0` (nil — a
+  dynamic Cell idle past it is evicted destructively by its Operative's
   sweep; nil never evicts). Dynamic typing collapses the Rust type tokens —
   Input/Output/State are plain terms.
 
-  Persistence: a procedure that exports `apply_change/2` is changeful — its
+  Persistence: a tasklet that exports `apply_change/2` is changeful — its
   state is rebuilt by folding recorded changes, and `Flezha.SDK.Ctx.apply/3` is
   the one path that records one (the twin of the Rust `StateHandle::apply`).
-  Without it the procedure is the reference's `NoChange`: its state is a plain
-  term nothing persists. `compact_after_bytes/0` (8 MiB) is the per-Entity WAL
+  Without it the tasklet is the reference's `NoChange`: its state is a plain
+  term nothing persists. `compact_after_bytes/0` (8 MiB) is the per-Cell WAL
   size at which the controller solicits a snapshot; `state_from_json/1` turns
   a JSON object read back from the controller (a migration, `init_values`)
-  into this procedure's state term, the object itself by default.
+  into this tasklet's state term, the object itself by default.
 
   Schema: `schema_version/0` (1) is stamped on every record and resolved per
   record on restore against `min_readable_schema_version/0` (the version
@@ -50,19 +50,19 @@ defmodule Flezha.SDK.Procedure do
   its migration fails at the first old record.
 
   Time: `clock/0` (`:wall`) names what `Flezha.SDK.Ctx.now/1` serves — the
-  epoch millisecond at dispatch entry, `:logical` (the Entity's durable change
+  epoch millisecond at dispatch entry, `:logical` (the Cell's durable change
   seq) or `:event_time` (what `event_time_of/1` extracts from the input; a
-  `:logical` clock on a procedure without `apply_change/2` and an `:event_time`
+  `:logical` clock on a tasklet without `apply_change/2` and an `:event_time`
   clock without its extractor are refused at registration). Timers:
   `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
-  into; `max_timers_per_entity/0` (10_000) bounds an Entity's pending set.
+  into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set.
 
-  Saga: `compensate/3` (the outputs the Entity released, the state, a ctx) is
+  Saga: `compensate/3` (the outputs the Cell released, the state, a ctx) is
   the undo a workflow operative runs, in reverse completion order, when it
-  unwinds after partial progress. A procedure declaring none has nothing to
+  unwinds after partial progress. A tasklet declaring none has nothing to
   undo. A crash-resumed unwind reconstructs completed stages with EMPTY
-  outputs — a procedure's collected output was never durable — so a hook that
+  outputs — a tasklet's collected output was never durable — so a hook that
   records an undo must do so unconditionally rather than from what it is
   handed.
   """
@@ -75,13 +75,13 @@ defmodule Flezha.SDK.Procedure do
           {:ok, state()} | {:error, term()} | {:error, {:non_retryable, term()}}
 
   @callback name() :: String.t()
-  @callback init_state(entity_key :: String.t() | nil) :: state()
+  @callback init_state(cell_key :: String.t() | nil) :: state()
   @callback run(input :: term(), state(), Ctx.t()) :: run_result()
-  @callback entity_keys() :: [String.t()]
-  @callback entities_for(input :: term()) :: [String.t()]
+  @callback cell_keys() :: [String.t()]
+  @callback cells_for(input :: term()) :: [String.t()]
   @callback mailbox_capacity() :: pos_integer()
-  @callback max_entities() :: pos_integer()
-  @callback entity_idle_ttl_ms() :: pos_integer() | nil
+  @callback max_cells() :: pos_integer()
+  @callback cell_idle_ttl_ms() :: pos_integer() | nil
   @callback apply_change(state(), change :: term()) :: state()
   @callback compact_after_bytes() :: pos_integer()
   @callback state_from_json(map()) :: state()
@@ -99,15 +99,15 @@ defmodule Flezha.SDK.Procedure do
               state(),
               Ctx.t()
             ) :: run_result()
-  @callback max_timers_per_entity() :: pos_integer()
+  @callback max_timers_per_cell() :: pos_integer()
   @callback compensate(outputs :: [term()], state(), Ctx.t()) :: run_result()
 
   @optional_callbacks compensate: 3,
-                      entity_keys: 0,
-                      entities_for: 1,
+                      cell_keys: 0,
+                      cells_for: 1,
                       mailbox_capacity: 0,
-                      max_entities: 0,
-                      entity_idle_ttl_ms: 0,
+                      max_cells: 0,
+                      cell_idle_ttl_ms: 0,
                       apply_change: 2,
                       compact_after_bytes: 0,
                       state_from_json: 1,
@@ -118,46 +118,46 @@ defmodule Flezha.SDK.Procedure do
                       clock: 0,
                       event_time_of: 1,
                       on_timer: 4,
-                      max_timers_per_entity: 0
+                      max_timers_per_cell: 0
 
   @default_mailbox_capacity 1024
   @max_mailbox_capacity 1_048_576
-  @default_max_entities 100_000
+  @default_max_cells 100_000
   # In lockstep with `flz_core::persistence::DEFAULT_COMPACT_AFTER_BYTES` and
   # the controller's `:default_compact_after_bytes`.
   @default_compact_after_bytes 8 * 1024 * 1024
   @default_schema_version 1
-  # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_ENTITY`.
-  @default_max_timers_per_entity 10_000
+  # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_CELL`.
+  @default_max_timers_per_cell 10_000
 
   # The scalar settings `use` takes, each named after the callback it defines.
   # An option not written defines nothing, so every default stays resolved by
   # `function_exported?` exactly as it is for a hand-written module — the
   # mailbox knob's included.
   @use_options [
-    :entity_keys,
+    :cell_keys,
     :mailbox_capacity,
-    :max_entities,
-    :entity_idle_ttl_ms,
+    :max_cells,
+    :cell_idle_ttl_ms,
     :compact_after_bytes,
     :schema_version,
     :min_readable_schema_version,
     :clock,
-    :max_timers_per_entity
+    :max_timers_per_cell
   ]
 
   # The §5 short form's options, taken by the operative macros beside the
-  # procedure's own. A procedure refuses them, and `kind`, which is the
+  # tasklet's own. A tasklet refuses them, and `kind`, which is the
   # operative macro's own name.
   @short_form_options [:sink, :input]
   @operative_keys [:kind | @short_form_options]
   # Everything a short form takes beyond `factory_id`: its own options and its
-  # procedure's.
+  # tasklet's.
   @short_form_only @short_form_options ++ @use_options
 
   # `Flezha.SDK.Ctx`'s authoring surface, imported by `use`. `apply/3` is
   # deliberately absent: importing it would shadow `Kernel.apply/3` in every
-  # procedure body. A `state` block's recorders call it by its full name.
+  # tasklet body. A `state` block's recorders call it by its full name.
   @ctx_imports [
     emit: 2,
     emit_with_meta: 3,
@@ -168,7 +168,7 @@ defmodule Flezha.SDK.Procedure do
     timer_at_event_time: 2,
     cancel_processing_time_timer: 2,
     cancel_event_time_timer: 2,
-    entity_key: 1,
+    cell_key: 1,
     spawn_workflow: 3,
     spawn_workflow: 4,
     checkpoint: 1,
@@ -176,9 +176,9 @@ defmodule Flezha.SDK.Procedure do
   ]
 
   @doc """
-  Write a procedure as a declaration rather than as nine one-line callbacks.
+  Write a tasklet as a declaration rather than as nine one-line callbacks.
 
-      use Flezha.SDK.Procedure, name: "position", max_entities: 50_000
+      use Flezha.SDK.Tasklet, name: "position", max_cells: 50_000
 
       @impl true
       def run(_input, state, _ctx), do: {:ok, state}
@@ -187,37 +187,37 @@ defmodule Flezha.SDK.Procedure do
   above, under its own name, and **only the options written define anything**:
   a module that does not write `mailbox_capacity` exports none, so
   `FLEZHA_MAILBOX_CAPACITY` still decides its mailbox. Callbacks that take
-  arguments — `run/3`, `entities_for/1`, `event_time_of/1`, `on_timer/4`,
+  arguments — `run/3`, `cells_for/1`, `event_time_of/1`, `on_timer/4`,
   `compensate/3`, `migrate_state/2`, `migrate_change/2` — stay `def`s the
   author writes. An unknown option is a `CompileError` naming it.
 
   `state do field … end` and `defchange` are available here too; see
   `Flezha.SDK.State`. A module with neither a `state` block nor its own
-  `init_state/1` gets `def init_state(_), do: nil`, so a stateless procedure
+  `init_state/1` gets `def init_state(_), do: nil`, so a stateless tasklet
   writes only `run/3`.
 
-  `kind`, `sink` and `input` describe an operative, not a procedure, and are a
+  `kind`, `sink` and `input` describe an operative, not a tasklet, and are a
   `CompileError` naming the operative macros: the §5 short form is written
   with `use Flezha.SDK.StreamOperative` or `use Flezha.SDK.WorkflowOperative`.
 
   ## Nesting
 
-  A procedure nested inside an operative module inherits that module's imports
+  A tasklet nested inside an operative module inherits that module's imports
   lexically, so `use` writes `import Flezha.SDK.Channels, only: []` to take
-  `input/2` and `sink/2` back — a nested procedure defining its own `input/0`
-  would otherwise clash. A nested procedure must be written **before** the
+  `input/2` and `sink/2` back — a nested tasklet defining its own `input/0`
+  would otherwise clash. A nested tasklet must be written **before** the
   `channels/1` that names it, which is how Elixir aliases resolve.
   """
   defmacro __using__(opts) do
     known = @use_options ++ @operative_keys ++ [:name]
 
     opts =
-      __validate__(opts, known, __MODULE__, {:name, "the procedure's node identity"})
+      __validate__(opts, known, __MODULE__, {:name, "the tasklet's node identity"})
 
     for {key, _value} <- opts, key in @operative_keys do
       raise CompileError,
         description:
-          "`use Flezha.SDK.Procedure` declares a procedure; `#{key}:` belongs to an operative: " <>
+          "`use Flezha.SDK.Tasklet` declares a tasklet; `#{key}:` belongs to an operative: " <>
             "write the short form as `use Flezha.SDK.StreamOperative` or " <>
             "`use Flezha.SDK.WorkflowOperative`"
     end
@@ -226,13 +226,13 @@ defmodule Flezha.SDK.Procedure do
     ctx_imports = @ctx_imports
 
     quote do
-      @behaviour Flezha.SDK.Procedure
+      @behaviour Flezha.SDK.Tasklet
       use Flezha.SDK.State
 
       import Flezha.SDK.Ctx, only: unquote(ctx_imports)
-      # A nested procedure inherits its operative module's imports; the builder
-      # is not part of a procedure's surface and `input/2` would clash with a
-      # procedure's own `input/0`.
+      # A nested tasklet inherits its operative module's imports; the builder
+      # is not part of a tasklet's surface and `input/2` would clash with a
+      # tasklet's own `input/0`.
       import Flezha.SDK.Channels, only: []
 
       @impl true
@@ -240,13 +240,13 @@ defmodule Flezha.SDK.Procedure do
 
       unquote_splicing(callbacks)
 
-      @before_compile Flezha.SDK.Procedure
+      @before_compile Flezha.SDK.Tasklet
     end
   end
 
   @doc false
   defmacro __before_compile__(env) do
-    # A stateless procedure writes only `run/3`: the block's `init_state/1` and
+    # A stateless tasklet writes only `run/3`: the block's `init_state/1` and
     # the author's own both win over this one. The block's is generated by
     # `Flezha.SDK.State`'s own `@before_compile`, which may not have run yet, so
     # the block is read from the attribute rather than from what is defined.
@@ -257,7 +257,7 @@ defmodule Flezha.SDK.Procedure do
     unless has_own? do
       quote do
         @impl true
-        def init_state(_entity_key), do: nil
+        def init_state(_cell_key), do: nil
       end
     end
   end
@@ -302,7 +302,7 @@ defmodule Flezha.SDK.Procedure do
   # Everything `use` on an operative module emits: the behaviour, the builder
   # import, the required `factory_id`, one callback per option written, and
   # what a short form's `run/3` body is written with (the ctx imports and the
-  # `state` block). A short form's own options, and its procedure's, are kept
+  # `state` block). A short form's own options, and its tasklet's, are kept
   # for `__before_compile_operative__/1`. The two kinds differ only in their
   # option list, so this is the one place that states what an operative
   # declaration expands to.
@@ -336,7 +336,7 @@ defmodule Flezha.SDK.Procedure do
       @flezha_operative {unquote(behaviour), unquote(factory_id), unquote(short_form),
                          unquote(settings)}
       # After `Flezha.SDK.State`'s hook, so a `state` block's callbacks exist.
-      @before_compile {Flezha.SDK.Procedure, :__before_compile_operative__}
+      @before_compile {Flezha.SDK.Tasklet, :__before_compile_operative__}
     end
   end
 
@@ -347,22 +347,22 @@ defmodule Flezha.SDK.Procedure do
     {behaviour, factory_id, short_form, settings} =
       Module.get_attribute(env.module, :flezha_operative)
 
-    body = if behaviour == Flezha.SDK.StreamOperative, do: :channels, else: :procedures
+    body = if behaviour == Flezha.SDK.StreamOperative, do: :channels, else: :tasklets
     run? = Module.defines?(env.module, {:run, 3})
-    topology = for fun <- [:channels, :procedures], Module.defines?(env.module, {fun, 1}), do: fun
+    topology = for fun <- [:channels, :tasklets], Module.defines?(env.module, {fun, 1}), do: fun
 
     cond do
       run? and topology != [] ->
         refuse(
           "ShortFormWithTopology: #{inspect(env.module)} defines `run/3`, the short form's " <>
-            "procedure body, and `#{hd(topology)}/1`; the short form generates its topology, " <>
+            "tasklet body, and `#{hd(topology)}/1`; the short form generates its topology, " <>
             "so write one or the other"
         )
 
       run? and settings != [] ->
         refuse(
           "#{inspect(env.module)} is a short form, whose class settings are the defaults; " <>
-            "`#{hd(settings)}:` is the full form's: write `#{body}/1` and a procedure module"
+            "`#{hd(settings)}:` is the full form's: write `#{body}/1` and a tasklet module"
         )
 
       run? ->
@@ -371,7 +371,7 @@ defmodule Flezha.SDK.Procedure do
       topology != [] and short_form != [] ->
         refuse(
           "#{inspect(env.module)} writes `#{body}/1`; `#{elem(hd(short_form), 0)}:` is a short " <>
-            "form's option, which a full form states in `#{body}/1` and its procedures instead"
+            "form's option, which a full form states in `#{body}/1` and its tasklets instead"
         )
 
       topology != [] ->
@@ -379,7 +379,7 @@ defmodule Flezha.SDK.Procedure do
 
       true ->
         refuse(
-          "#{inspect(env.module)} declares no body: write `run/3` for a single-procedure " <>
+          "#{inspect(env.module)} declares no body: write `run/3` for a single-tasklet " <>
             "operative, or `#{body}/1`"
         )
     end
@@ -387,16 +387,16 @@ defmodule Flezha.SDK.Procedure do
 
   defp refuse(description), do: raise(CompileError, description: description)
 
-  # The short form's expansion: a nested procedure module named after the
-  # factory id, taking the procedure options written and delegating every
-  # procedure callback the declaring module defines (a `state` block's
+  # The short form's expansion: a nested tasklet module named after the
+  # factory id, taking the tasklet options written and delegating every
+  # tasklet callback the declaring module defines (a `state` block's
   # `init_state/1` is overridable, which `Module.defines?/2` does not report),
   # and the topology body wiring the entry channel into it and, with a `sink`,
   # it to that plugin channel.
   defp short_form(module, behaviour, body, factory_id, options) do
-    procedure = Module.concat(module, Procedure)
+    tasklet = Module.concat(module, Tasklet)
     entry = Keyword.get(options, :input, "input")
-    procedure_options = Macro.escape([name: factory_id] ++ Keyword.take(options, @use_options))
+    tasklet_options = Macro.escape([name: factory_id] ++ Keyword.take(options, @use_options))
 
     delegated =
       for {fun, arity} <- __MODULE__.behaviour_info(:callbacks),
@@ -415,7 +415,7 @@ defmodule Flezha.SDK.Procedure do
       quote do
         c
         |> Flezha.SDK.Channels.input(unquote(entry))
-        |> Flezha.SDK.Channels.into(unquote(procedure))
+        |> Flezha.SDK.Channels.into(unquote(tasklet))
       end
 
     topology =
@@ -425,9 +425,9 @@ defmodule Flezha.SDK.Procedure do
       end
 
     quote do
-      defmodule unquote(procedure) do
+      defmodule unquote(tasklet) do
         @moduledoc false
-        use Flezha.SDK.Procedure, unquote(procedure_options)
+        use Flezha.SDK.Tasklet, unquote(tasklet_options)
 
         unquote_splicing(delegated)
       end
@@ -438,26 +438,26 @@ defmodule Flezha.SDK.Procedure do
   end
 
   @doc """
-  Whether this procedure declares a saga undo hook. A workflow that unwinds
-  runs `compensate/3` on every Entity whose procedure completed forward; a
-  procedure declaring none simply has nothing to undo.
+  Whether this tasklet declares a saga undo hook. A workflow that unwinds
+  runs `compensate/3` on every Cell whose tasklet completed forward; a
+  tasklet declaring none simply has nothing to undo.
   """
   @spec compensates?(module()) :: boolean()
   def compensates?(module), do: exports?(module, :compensate, 3)
 
-  @doc "Static entity keyset (`[]` unless the procedure overrides `entity_keys/0`)."
-  def entity_keys(module) do
-    if exports?(module, :entity_keys, 0), do: module.entity_keys(), else: []
+  @doc "Static cell keyset (`[]` unless the tasklet overrides `cell_keys/0`)."
+  def cell_keys(module) do
+    if exports?(module, :cell_keys, 0), do: module.cell_keys(), else: []
   end
 
-  @doc "Which static entities an input targets (defaults to the full keyset)."
-  def entities_for(module, input) do
-    if exports?(module, :entities_for, 1),
-      do: module.entities_for(input),
-      else: entity_keys(module)
+  @doc "Which static cells an input targets (defaults to the full keyset)."
+  def cells_for(module, input) do
+    if exports?(module, :cells_for, 1),
+      do: module.cells_for(input),
+      else: cell_keys(module)
   end
 
-  @doc "Per-Entity mailbox capacity. Overridden callback wins; else the env; else 1024."
+  @doc "Per-Cell mailbox capacity. Overridden callback wins; else the env; else 1024."
   def mailbox_capacity(module) do
     if exports?(module, :mailbox_capacity, 0) do
       validate_capacity!(module.mailbox_capacity(), module)
@@ -466,24 +466,24 @@ defmodule Flezha.SDK.Procedure do
     end
   end
 
-  @doc "Cap on live dynamic entities (default 100_000)."
-  def max_entities(module) do
-    if exports?(module, :max_entities, 0),
-      do: module.max_entities(),
-      else: @default_max_entities
+  @doc "Cap on live dynamic cells (default 100_000)."
+  def max_cells(module) do
+    if exports?(module, :max_cells, 0),
+      do: module.max_cells(),
+      else: @default_max_cells
   end
 
-  @doc "Idle window after which a dynamic Entity is evicted; nil (the default) never evicts."
-  @spec entity_idle_ttl_ms(module()) :: pos_integer() | nil
-  def entity_idle_ttl_ms(module) do
-    if exports?(module, :entity_idle_ttl_ms, 0), do: module.entity_idle_ttl_ms(), else: nil
+  @doc "Idle window after which a dynamic Cell is evicted; nil (the default) never evicts."
+  @spec cell_idle_ttl_ms(module()) :: pos_integer() | nil
+  def cell_idle_ttl_ms(module) do
+    if exports?(module, :cell_idle_ttl_ms, 0), do: module.cell_idle_ttl_ms(), else: nil
   end
 
-  @doc "Whether the procedure journals — it exports `apply_change/2`."
+  @doc "Whether the tasklet journals — it exports `apply_change/2`."
   @spec changeful?(module()) :: boolean()
   def changeful?(module), do: exports?(module, :apply_change, 2)
 
-  @doc "The schema version stamped on the procedure's records (1 unless declared)."
+  @doc "The schema version stamped on the tasklet's records (1 unless declared)."
   @spec schema_version(module()) :: pos_integer()
   def schema_version(module) do
     if exports?(module, :schema_version, 0),
@@ -491,7 +491,7 @@ defmodule Flezha.SDK.Procedure do
       else: @default_schema_version
   end
 
-  @doc "The oldest schema version the procedure reads (its own unless declared)."
+  @doc "The oldest schema version the tasklet reads (its own unless declared)."
   @spec min_readable_schema_version(module()) :: pos_integer()
   def min_readable_schema_version(module) do
     if exports?(module, :min_readable_schema_version, 0),
@@ -521,24 +521,24 @@ defmodule Flezha.SDK.Procedure do
     if exports?(module, :clock, 0), do: module.clock(), else: :wall
   end
 
-  @doc "Whether the procedure handles a firing — it exports `on_timer/4`."
+  @doc "Whether the tasklet handles a firing — it exports `on_timer/4`."
   @spec on_timer?(module()) :: boolean()
   def on_timer?(module), do: exports?(module, :on_timer, 4)
 
-  @doc "Cap on an Entity's pending timers (10_000 unless declared)."
-  @spec max_timers_per_entity(module()) :: pos_integer()
-  def max_timers_per_entity(module) do
-    if exports?(module, :max_timers_per_entity, 0),
-      do: module.max_timers_per_entity(),
-      else: @default_max_timers_per_entity
+  @doc "Cap on a Cell's pending timers (10_000 unless declared)."
+  @spec max_timers_per_cell(module()) :: pos_integer()
+  def max_timers_per_cell(module) do
+    if exports?(module, :max_timers_per_cell, 0),
+      do: module.max_timers_per_cell(),
+      else: @default_max_timers_per_cell
   end
 
-  @doc "What the procedure declares about its timers, resolved once: the name a refusal reports, the cap, the clock."
+  @doc "What the tasklet declares about its timers, resolved once: the name a refusal reports, the cap, the clock."
   @spec timer_policy(module()) :: Flezha.SDK.Timers.policy()
   def timer_policy(module),
-    do: %{procedure: module.name(), cap: max_timers_per_entity(module), clock: clock(module)}
+    do: %{tasklet: module.name(), cap: max_timers_per_cell(module), clock: clock(module)}
 
-  @doc "Per-Entity WAL size at which the controller solicits a snapshot (8 MiB unless overridden)."
+  @doc "Per-Cell WAL size at which the controller solicits a snapshot (8 MiB unless overridden)."
   @spec compact_after_bytes(module()) :: pos_integer()
   def compact_after_bytes(module) do
     if exports?(module, :compact_after_bytes, 0),
@@ -550,7 +550,7 @@ defmodule Flezha.SDK.Procedure do
   @spec default_compact_after_bytes() :: pos_integer()
   def default_compact_after_bytes, do: @default_compact_after_bytes
 
-  @doc "A JSON object read back from the controller as this procedure's state term."
+  @doc "A JSON object read back from the controller as this tasklet's state term."
   @spec state_from_json(module(), map()) :: state()
   def state_from_json(module, json) do
     if exports?(module, :state_from_json, 1), do: module.state_from_json(json), else: json
@@ -560,7 +560,7 @@ defmodule Flezha.SDK.Procedure do
   def exports?(module, fun, arity),
     do: Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
 
-  @doc "Range-check a mailbox capacity — returns `{issue, procedure}` on violation."
+  @doc "Range-check a mailbox capacity — returns `{issue, tasklet}` on violation."
   @spec validate_capacity(pos_integer(), module()) :: :ok | {atom(), module()}
   def validate_capacity(cap, module) when is_integer(cap) do
     cond do

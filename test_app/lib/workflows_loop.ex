@@ -18,7 +18,7 @@ defmodule ElixirRunner.WorkflowsLoop do
 
   defmodule ChatTurn do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
 
     alias ElixirRunner.Workflows.Gate
     alias Flezha.SDK.Ctx
@@ -47,7 +47,7 @@ defmodule ElixirRunner.WorkflowsLoop do
 
   defmodule ChatReply do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
 
     alias Flezha.SDK.Ctx
 
@@ -60,12 +60,12 @@ defmodule ElixirRunner.WorkflowsLoop do
     end
   end
 
-  # The rewindable reply: the undo handle lives in Entity state, because a
+  # The rewindable reply: the undo handle lives in Cell state, because a
   # rewind's compensation is rebuilt from the journal and is handed NO retained
   # outputs. So the hook reads the last thing it said, retracts it, and pops it.
   defmodule ChatReplyUndoable do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
 
     alias Flezha.SDK.Ctx
 
@@ -99,7 +99,7 @@ defmodule ElixirRunner.WorkflowsLoop do
   # iteration.
   defmodule BenchTurn do
     @moduledoc false
-    @behaviour Flezha.SDK.Procedure
+    @behaviour Flezha.SDK.Tasklet
 
     alias Flezha.SDK.Ctx
 
@@ -115,7 +115,7 @@ defmodule ElixirRunner.WorkflowsLoop do
   end
 
   # The sixteen chain positions the bench chains are built from. Each needs its
-  # own procedure — a chain position is a node — so they are generated from the
+  # own tasklet — a chain position is a node — so they are generated from the
   # same body `defstep` writes rather than written out sixteen times.
   for n <- 0..15 do
     Module.create(
@@ -139,7 +139,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     # a stray e2e instance from outliving the test run.
     def max_duration_ms, do: 600_000
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -151,9 +151,9 @@ defmodule ElixirRunner.WorkflowsLoop do
     end
   end
 
-  # The same durable per-input loop minus its stateful first procedure, so
-  # nothing writes an Entity record and the controller ships no restore on a
-  # rehydrating bind: the instance's proc-journal reaches the driver only if it
+  # The same durable per-input loop minus its stateful first tasklet, so
+  # nothing writes a Cell record and the controller ships no restore on a
+  # rehydrating bind: the instance's task-journal reaches the driver only if it
   # rides the bind itself.
   defmodule StatelessLoopWorkflow do
     @moduledoc false
@@ -163,7 +163,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -181,7 +181,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -209,7 +209,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       end
     end
 
-    def procedures(c) do
+    def tasklets(c) do
       import Flezha.SDK.Channels
 
       c
@@ -245,7 +245,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_1"
 
-    def procedures(c),
+    def tasklets(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(1))
   end
 
@@ -254,7 +254,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_4"
 
-    def procedures(c),
+    def tasklets(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
   end
 
@@ -263,7 +263,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_16"
 
-    def procedures(c),
+    def tasklets(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(16))
   end
 
@@ -273,7 +273,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def factory_id, do: "bench_chain_optout_4"
     def persistence_enabled, do: false
 
-    def procedures(c),
+    def tasklets(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
   end
 

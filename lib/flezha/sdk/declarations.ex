@@ -19,7 +19,7 @@ defmodule Flezha.SDK.Declarations do
   cadence, the outputs posture and the delay stay SDK-side.
   """
 
-  alias Flezha.SDK.{Procedure, Topology}
+  alias Flezha.SDK.{Tasklet, Topology}
   alias Flezha.SDK.Workflow.Spec
 
   @doc "The metadata `class` declares — a `Topology` or a workflow `Spec`."
@@ -29,7 +29,7 @@ defmodule Flezha.SDK.Declarations do
     threshold = topo.compact_after_bytes
 
     compacted =
-      if threshold && threshold != Procedure.default_compact_after_bytes(),
+      if threshold && threshold != Tasklet.default_compact_after_bytes(),
         do: Map.put(keyed, "compact_after_bytes", Integer.to_string(threshold)),
         else: keyed
 
@@ -47,8 +47,8 @@ defmodule Flezha.SDK.Declarations do
     %{}
     |> put_when(spec.knobs.sync_durability, "durability", "sync_remote")
     |> put_when(spec.topology && spec.topology.effectively_once?, "effectively_once", "true")
-    |> put_procs("compensable_procs", spec, &Procedure.compensates?/1)
-    |> put_procs("leaf_procs", spec, nil)
+    |> put_tasks("compensable_tasks", spec, &Tasklet.compensates?/1)
+    |> put_tasks("leaf_tasks", spec, nil)
   end
 
   defp corrected(declarations, nil), do: declarations
@@ -62,13 +62,13 @@ defmodule Flezha.SDK.Declarations do
   defp put_when(map, true, key, value), do: Map.put(map, key, value)
   defp put_when(map, _false_or_nil, _key, _value), do: map
 
-  # The positions of `spec.dag.order` satisfying `pred` on their procedure, or
+  # The positions of `spec.dag.order` satisfying `pred` on their tasklet, or
   # — with no predicate — the leaves. An empty result is still declared: "no
   # position qualifies" and "the class said nothing" are different answers.
-  defp put_procs(map, _key, %Spec{dag: %{order: []}}, _pred), do: map
+  defp put_tasks(map, _key, %Spec{dag: %{order: []}}, _pred), do: map
 
-  defp put_procs(map, key, %Spec{dag: dag} = spec, pred) do
-    procs =
+  defp put_tasks(map, key, %Spec{dag: dag} = spec, pred) do
+    tasks =
       dag.order
       |> Enum.with_index()
       |> Enum.filter(fn {node_ref, _idx} ->
@@ -78,6 +78,6 @@ defmodule Flezha.SDK.Declarations do
       end)
       |> Enum.map_join(",", fn {_ref, idx} -> Integer.to_string(idx) end)
 
-    Map.put(map, key, procs)
+    Map.put(map, key, tasks)
   end
 end

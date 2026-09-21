@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Merge do
   @moduledoc """
   A merged subscription under construction, built by `Flezha.SDK.Channels.merge/1`:
-  one procedure fed by two or more source streams, each with the mapping that
+  one tasklet fed by two or more source streams, each with the mapping that
   lifts its value into the merged input.
 
       c

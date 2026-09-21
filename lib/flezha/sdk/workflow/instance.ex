@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Workflow.Instance do
   @moduledoc """
   One workflow instance's runtime state, as the driver process holds it: the
   inbox a `:per_input` loop consumes, the compensation markers a saga reads,
-  and the committed proc-journal the bind carried for a crash-resume.
+  and the committed task-journal the bind carried for a crash-resume.
 
   It is a struct rather than a process. The reference carries a cancellation
   flag, a restore condition variable and a bounded channel here because its
@@ -22,29 +22,29 @@ defmodule Flezha.SDK.Workflow.Instance do
   end
 
   defmodule Committed do
-    @moduledoc "What one committed procedure of an iteration ran."
-    defstruct [:proc_idx, :iter, entities_ran: []]
+    @moduledoc "What one committed tasklet of an iteration ran."
+    defstruct [:task_idx, :iter, cells_ran: []]
 
     @type t :: %__MODULE__{
-            proc_idx: non_neg_integer(),
+            task_idx: non_neg_integer(),
             iter: non_neg_integer(),
-            entities_ran: [binary()]
+            cells_ran: [binary()]
           }
   end
 
   defmodule Resume do
     @moduledoc """
-    The committed proc-journal state one bind carried: the iteration to resume
-    at, the procedures committed inside it with what each released, the
+    The committed task-journal state one bind carried: the iteration to resume
+    at, the tasklets committed inside it with what each released, the
     previous terminal batch, every forward commit the compensation planner
     needs, and the result the last committed iteration ended the instance
     with (`nil` when it did not).
     """
-    defstruct committed_proc_idxs: [],
+    defstruct committed_task_idxs: [],
               iter: 0,
               handoff: [],
-              proc_handoffs: %{},
-              committed_procs: [],
+              task_handoffs: %{},
+              committed_tasks: [],
               consumed_offset: 0,
               rewind_undo: [],
               completion: nil
@@ -59,7 +59,7 @@ defmodule Flezha.SDK.Workflow.Instance do
             inbox: nil,
             owed_inbox: 0,
             park_idle_ms: nil,
-            stage_entities: %{},
+            stage_cells: %{},
             journal: nil,
             iter: 0,
             compensation_done: nil,
@@ -125,9 +125,9 @@ defmodule Flezha.SDK.Workflow.Instance do
   # --- compensation markers ---
 
   @doc """
-  Record what a restore said about one Entity. Only the `done` half is kept:
+  Record what a restore said about one Cell. Only the `done` half is kept:
   it is the one that proves an undo was in flight when the crash landed, and
-  what needs undoing comes from the journal's committed procedures. An intent
+  what needs undoing comes from the journal's committed tasklets. An intent
   marker accumulates during ordinary forward progress too, so on its own it
   would say nothing about a rollback.
   """
@@ -141,7 +141,7 @@ defmodule Flezha.SDK.Workflow.Instance do
   def compensation_done?(%__MODULE__{} = i, identity),
     do: MapSet.member?(i.compensation_done, identity)
 
-  @doc "Whether any Entity had already compensated before the crash."
+  @doc "Whether any Cell had already compensated before the crash."
   @spec any_compensation_done?(t()) :: boolean()
   def any_compensation_done?(%__MODULE__{} = i), do: MapSet.size(i.compensation_done) > 0
 

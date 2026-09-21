@@ -1,25 +1,25 @@
-defmodule Flezha.SDK.Entity.Tier do
+defmodule Flezha.SDK.Cell.Tier do
   @moduledoc """
-  What an Entity does under the effectively-once tier — every function that
+  What a Cell does under the effectively-once tier — every function that
   moves the staged interval, the armed deadline, the owed FIFO or the replay
   slice, and the lateness classification a declared correction window adds. The process
-  half (its mailbox, its ladder, its timers) is `Flezha.SDK.Entity`, which
+  half (its mailbox, its ladder, its timers) is `Flezha.SDK.Cell`, which
   enters here from `complete/4`, `park/5` and the close item only; the durable
-  half is `Flezha.SDK.Entity.Records`, which this module calls and never the
+  half is `Flezha.SDK.Cell.Records`, which this module calls and never the
   other way round.
 
   One invocation becomes ONE record: its changes, the plugin outputs it
   captures here rather than letting the router ship them, the offset it
   consumed and its timer ops. The record is held only when the invocation also
-  produced an inter-procedure output — never the Entity's queue, which the
+  produced an inter-tasklet output — never the Cell's queue, which the
   router may be waiting on at that moment.
   """
 
-  alias Flezha.SDK.Entity.{Interval, Records, State}
+  alias Flezha.SDK.Cell.{Interval, Records, State}
   alias Flezha.SDK.Hold
   alias Flezha.SDK.Operative.Routing
 
-  # The end of a replayed slice, taken from the Entity's own queue in mailbox
+  # The end of a replayed slice, taken from the Cell's own queue in mailbox
   # order behind the members it closes. Not the guarantee — that is
   # `Operative.push/6`'s synchronous `enqueue_block/2` — but the thing that
   # keeps the order right if that call ever becomes a cast, which would
@@ -119,7 +119,7 @@ defmodule Flezha.SDK.Entity.Tier do
   @doc """
   Fold one invocation's effects into the interval and ship what the fold
   produced. Answers the state and the report the router owes back — `{pid,
-  ref}` when a record waits on this invocation's inter-procedure pushes, nil
+  ref}` when a record waits on this invocation's inter-tasklet pushes, nil
   when it shipped at once.
   """
   @spec settle(State.t(), map(), [map()], non_neg_integer() | nil) ::
@@ -135,7 +135,7 @@ defmodule Flezha.SDK.Entity.Tier do
       parked: false
     }
 
-    # An invocation whose emits reach another procedure holds its record until
+    # An invocation whose emits reach another tasklet holds its record until
     # the router reports every push admitted; one that reaches only sinks has
     # its outputs IN the record and ships at once.
     hold_ref = if s.tier.edges? and facts.emits != [], do: make_ref()
@@ -186,7 +186,7 @@ defmodule Flezha.SDK.Entity.Tier do
   defp capture_outputs(%State{}, []), do: []
 
   defp capture_outputs(%State{tier: %{sink_routes: routes}} = s, emits) do
-    origin = %{entity_key: s.entity_key}
+    origin = %{cell_key: s.cell_key}
 
     for {value, meta, key} <- emits,
         route <- routes,
@@ -202,7 +202,7 @@ defmodule Flezha.SDK.Entity.Tier do
   end
 
   # One `Process.send_after/3` per open interval — the same BEAM timer service
-  # the Entity's own timers ride. A close that beats it leaves the message
+  # the Cell's own timers ride. A close that beats it leaves the message
   # armed, and it finds nothing open.
   defp arm_deadline(%State{tier: %{checkpoint: %{max_delay_ms: delay}} = tier} = s)
        when is_integer(delay) do

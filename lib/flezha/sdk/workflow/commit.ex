@@ -8,23 +8,23 @@ defmodule Flezha.SDK.Workflow.Commit do
   and not the runner, so the two do not name each other. The runner answers
   every one of these in `handle_cast/2`.
 
-  `proc/4` and `iter/4` are journal-then-ack: the runner ships the barrier and
+  `task/4` and `iter/4` are journal-then-ack: the runner ships the barrier and
   the controller replies only once the record is durable, so the driver starts
-  the next procedure on the reply and a crash between them re-runs the
+  the next tasklet on the reply and a crash between them re-runs the
   uncommitted one. A refused ack rides back in the reply's `error`.
   """
 
   alias Flezha.SDK.Codec
 
-  @doc "Ship `ProcCommit` for one completed stage; the ack reaches `driver` as `{:barrier_ack, ref, result, error}`."
-  @spec proc(pid(), pid(), reference(), keyword()) :: tuple()
-  def proc(runner, driver, ref, fields) do
+  @doc "Ship `TaskCommit` for one completed stage; the ack reaches `driver` as `{:barrier_ack, ref, result, error}`."
+  @spec task(pid(), pid(), reference(), keyword()) :: tuple()
+  def task(runner, driver, ref, fields) do
     command =
-      Codec.proc_commit_command(
+      Codec.task_commit_command(
         Keyword.fetch!(fields, :operative_id),
-        Keyword.fetch!(fields, :proc_idx),
+        Keyword.fetch!(fields, :task_idx),
         Keyword.fetch!(fields, :iter),
-        Keyword.fetch!(fields, :entities_ran),
+        Keyword.fetch!(fields, :cells_ran),
         Keyword.fetch!(fields, :handoff),
         Keyword.get(fields, :outbox, []),
         Keyword.get(fields, :compensating, false),
@@ -38,7 +38,7 @@ defmodule Flezha.SDK.Workflow.Commit do
 
   @doc """
   Ship `IterCommit` for one finished iteration. `completes` marks the
-  iteration a procedure ended the instance in, and `result` is what it ends
+  iteration a tasklet ended the instance in, and `result` is what it ends
   with, so a resume after this commit ends the instance rather than waiting.
   """
   @spec iter(pid(), pid(), reference(), keyword()) :: tuple()
@@ -80,7 +80,7 @@ defmodule Flezha.SDK.Workflow.Commit do
 
   @doc """
   Ship one saga marker on the runner's record wire. Presence is the signal:
-  the controller decodes the identity and persists a per-Entity marker file,
+  the controller decodes the identity and persists a per-Cell marker file,
   which is what a rehydrating bind reads back onto its restore frames.
   """
   @spec record(pid(), String.t(), binary()) :: :ok

@@ -5,7 +5,7 @@ defmodule Flezha.SDK.Local do
   `start/2` takes the `Flezha.SDK.StreamOperative` module you deploy, compiles
   the topology its `channels/1` already declares, and stands the operative up on
   an in-node stream pair this run owns. Nothing about the class changes: no
-  local-mode callback, no second declaration. Entity lifecycle, key resolution,
+  local-mode callback, no second declaration. Cell lifecycle, key resolution,
   routing, mailboxes, overflow and the retry ladder are the deployed ones —
   `feed/3` enters through the same `Flezha.SDK.Operative.Inbox.input/4` a frame
   off a bound data stream enters, and `on_sink/3` takes output where production
@@ -26,7 +26,7 @@ defmodule Flezha.SDK.Local do
       :ok = Flezha.SDK.Local.run_until_idle(run, 5_000)
       :ok = Flezha.SDK.Local.stop(run)
 
-  A complete two-procedure `WordCount` — the entry chain, both procedures and
+  A complete two-tasklet `WordCount` — the entry chain, both tasklets and
   the keyed sink — is in `docs/quickstart.md`.
   """
 
@@ -64,7 +64,7 @@ defmodule Flezha.SDK.Local do
       [name: :unhandled, kind: :count]
     ]
 
-  # Consecutive idle probes needed before a run is called settled: an Entity
+  # Consecutive idle probes needed before a run is called settled: a Cell
   # between its dispatch and the emit that follows it is momentarily idle by
   # every probe, and the first probe of a run establishes the dispatch total
   # the rest are compared against.
@@ -74,7 +74,7 @@ defmodule Flezha.SDK.Local do
     @moduledoc """
     One value a graph released on a declared sink, carrying the bytes the sink's
     serializer produced and the metadata a deployed run would have put on the
-    wire — the channel name, and on a `keyed/1` sink the `flz.entity`, `flz.seq`
+    wire — the channel name, and on a `keyed/1` sink the `flz.cell`, `flz.seq`
     and `flz.key` stamps.
     """
 
@@ -118,7 +118,7 @@ defmodule Flezha.SDK.Local do
     do: Call.control(run, {:feed, channel, payload}, {:error, @silent})
 
   @doc """
-  Block until every Entity has drained and nothing is in flight, or `budget_ms`
+  Block until every Cell has drained and nothing is in flight, or `budget_ms`
   elapses — which is reported rather than passed off as done.
   """
   @spec run_until_idle(pid(), non_neg_integer()) :: :ok | {:error, String.t()}
@@ -131,7 +131,7 @@ defmodule Flezha.SDK.Local do
   end
 
   @doc """
-  Stop the run and every Entity it holds. A run whose starter has already gone
+  Stop the run and every Cell it holds. A run whose starter has already gone
   is stopped by that exit; asking again is answered, never raised.
   """
   @spec stop(pid()) :: :ok
@@ -142,7 +142,7 @@ defmodule Flezha.SDK.Local do
   end
 
   @doc """
-  The live operative, for a caller that wants to read its Entities, or nil from
+  The live operative, for a caller that wants to read its Cells, or nil from
   a run that will not answer.
   """
   @spec operative(pid()) :: pid() | nil
@@ -234,7 +234,7 @@ defmodule Flezha.SDK.Local do
   # The operative forwards a park here because local mode is its runner: an
   # entry parse that failed, or a value the partition guard refused. Nothing
   # acks it, so it is named rather than swallowed.
-  def handle_cast({:park, _entity, _identity, body}, s) do
+  def handle_cast({:park, _cell, _identity, body}, s) do
     Logger.warning(
       "[flezha] local mode: operative `#{s.id}` parked an input on channel " <>
         "`#{body.channel}`: #{body.error}"
@@ -243,7 +243,7 @@ defmodule Flezha.SDK.Local do
     {:noreply, s}
   end
 
-  # A procedure's spawn request. Local mode has no control plane, so it is
+  # A tasklet's spawn request. Local mode has no control plane, so it is
   # answered as a runner whose session is down answers it.
   def handle_cast({:spawn, caller, spawn, _payload, _if_running}, s) do
     Spawn.answer(caller, spawn, :unavailable, "")
@@ -338,7 +338,7 @@ defmodule Flezha.SDK.Local do
 
   defp channel_names(%Topology{entries: entries}, :entry), do: Map.keys(entries)
 
-  # A sink channel takes the producing procedure's name unless `named/2` gave it
+  # A sink channel takes the producing tasklet's name unless `named/2` gave it
   # one; the compiled route already resolved which.
   defp channel_names(%Topology{routes: routes}, :sink),
     do: for({_source, rs} <- routes, %{to: {:sink, _}, channel: c} <- rs, uniq: true, do: c)
@@ -365,7 +365,7 @@ defmodule Flezha.SDK.Local do
     end
   end
 
-  # The Entities first, then the router every completion passes back through,
+  # The Cells first, then the router every completion passes back through,
   # so a dispatch that ends behind the walk is caught by the router rather than
   # missed by both. `s.stream` is this run's own side of the in-node pair: a
   # frame the router wrote but that process has not forwarded yet is in flight.
@@ -375,17 +375,17 @@ defmodule Flezha.SDK.Local do
 
     handouts == 0 and deferred == 0 and
       Process.info(self(), :message_queue_len) == {:message_queue_len, 0} and
-      settled_entities?(s)
+      settled_cells?(s)
   end
 
   # A router that will not answer cannot be walked, so the run is not idle.
-  defp settled_entities?(%{op: op} = s) do
-    case Operative.entities(op) do
+  defp settled_cells?(%{op: op} = s) do
+    case Operative.cells(op) do
       {:error, _busy} ->
         false
 
       nodes ->
-        pids = for {_procedure, _mode, keyed} <- nodes, {_key, pid} <- keyed, do: pid
+        pids = for {_tasklet, _mode, keyed} <- nodes, {_key, pid} <- keyed, do: pid
         Enum.all?(pids ++ [s.stream.pid, op], &settled?/1)
     end
   end
