@@ -43,7 +43,6 @@ defmodule Flezha.SDK.Operative do
 
   # What a router that will not answer tells its caller.
   @busy {:error, :operative_busy}
-  @default_retry_max 3
   # What an entry input carries into routing: no metadata, no key, no Cell,
   # and the durable offset the controller stamped under the tier.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
@@ -549,6 +548,7 @@ defmodule Flezha.SDK.Operative do
 
   defp start_cell(%State{topology: topo} = s, node_ref, key) do
     module = topo.node_modules[node_ref]
+    ladder = Topology.retry_ladder(topo, node_ref)
 
     Cell.start(
       operative: self(),
@@ -562,8 +562,8 @@ defmodule Flezha.SDK.Operative do
       cell_key: key,
       capacity: Tasklet.mailbox_capacity(module),
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
-      retry_max: knob(topo, node_ref, :retry_max, @default_retry_max),
-      retry_backoff_ms: knob(topo, node_ref, :retry_backoff_ms, Knob.ladder(:sdk_retry).base),
+      retry_max: ladder.retry_max,
+      retry_backoff_ms: ladder.retry_backoff_ms,
       counters: s.counters,
       hold_cap: s.hold_cap,
       secondaries: s.secondaries,

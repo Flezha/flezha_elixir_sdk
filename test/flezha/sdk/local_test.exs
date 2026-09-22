@@ -127,7 +127,7 @@ defmodule Flezha.SDK.LocalTest do
   defmodule Job do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "local_job"
-    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
   end
 
   # Asks to end its operative on `end`, which a stream never does. Reports every

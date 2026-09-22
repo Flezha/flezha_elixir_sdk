@@ -133,7 +133,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule LinearFlow do
     def factory_id, do: "linear_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Tagger) |> Channels.into(Join)
     end
   end
@@ -141,7 +141,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule DiamondFlow do
     def factory_id, do: "diamond_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       fan |> Channels.into(Left) |> Channels.into(Join)
       fan |> Channels.into(Right) |> Channels.into(Join)
@@ -151,7 +151,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule FailingFlow do
     def factory_id, do: "failing_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Undoable) |> Channels.into(Boom)
     end
   end
@@ -159,7 +159,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule SagaFlow do
     def factory_id, do: "saga_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       c
       |> Channels.input("in")
       |> Channels.into(Undoable)
@@ -172,7 +172,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def factory_id, do: "opted_out_flow"
     def persistence_enabled, do: false
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Tagger)
     end
   end
@@ -192,7 +192,59 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defmodule SpawningFlow do
     def factory_id, do: "spawning_flow"
-    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(SpawnStep)
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(SpawnStep)
+  end
+
+  # Fails every attempt, retryably, and reports each one.
+  defmodule Flaky do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "flaky"
+    def init_state(_), do: nil
+
+    def run(_input, _state, _ctx) do
+      send(:workflow_driver_test_collector, :attempt)
+      {:error, "flaky"}
+    end
+  end
+
+  defmodule EdgeLadderFlow do
+    def factory_id, do: "edge_ladder_flow"
+
+    def channels(c) do
+      c
+      |> Channels.input("in")
+      |> Channels.retry_max(2)
+      |> Channels.retry_backoff_ms(1)
+      |> Channels.into(Flaky)
+    end
+  end
+
+  # Tries every timer call and reports what the ctx answered, then fails with
+  # the refusal, as a tasklet reading the answer does.
+  defmodule TimerStep do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "timer_step"
+    def init_state(_), do: nil
+
+    def run(_input, state, ctx) do
+      answers = [
+        Ctx.timer_after(ctx, 60_000),
+        Ctx.timer_at_event_time(ctx, 5),
+        Ctx.cancel_processing_time_timer(ctx, 60_000),
+        Ctx.cancel_event_time_timer(ctx, 5)
+      ]
+
+      send(:workflow_driver_test_collector, {:timer_answers, answers})
+      with {:ok, _at} <- hd(answers), do: {:ok, state}
+    end
+  end
+
+  defmodule TimerFlow do
+    def factory_id, do: "timer_flow"
+
+    def channels(c) do
+      c |> Channels.input("in") |> Channels.retry_max(1) |> Channels.into(TimerStep)
+    end
   end
 
   # --- harness ---
@@ -260,6 +312,13 @@ defmodule Flezha.SDK.Workflow.DriverTest do
              inspect({:ok, %{id: "child-go", outcome: :spawned}})
   end
 
+  test "a spawn naming a stream factory resolves factory_not_workflow" do
+    handle = Spawn.request(self(), false, "prices", "p", [])
+    assert_receive {:"$gen_cast", {:spawn, _caller, spawn, "p", :deliver}}
+    Spawn.answer(self(), %{spawn | claimed?: true}, {"factory_not_workflow", ""}, "")
+    assert Spawn.await(handle, 1_000) == {:error, {:factory_not_workflow, "prices"}}
+  end
+
   # --- the structured chain ---
 
   test "a linear chain commits each stage in DAG order and completes ok" do
@@ -304,7 +363,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule OneArmedFlow do
     def factory_id, do: "one_armed_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       fan |> Channels.into(Left) |> Channels.into(Join)
     end
@@ -328,6 +387,21 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert error =~ "boom"
   end
 
+  test "a stage's ladder is the edge's: retry_max(2) runs the tasklet twice, then fails it" do
+    messages = drive(EdgeLadderFlow)
+    assert Enum.count(messages, &(&1 == :attempt)) == 2
+    assert %{status: "error", error: error} = completion(messages)
+    assert error =~ "flaky"
+  end
+
+  test "a workflow tasklet cannot arm a timer: every timer call is refused and the run ends naming it" do
+    messages = drive(TimerFlow)
+
+    assert {:timer_answers, List.duplicate({:error, :timers_unavailable}, 4)} in messages
+    assert %{status: "error", error: error} = completion(messages)
+    assert error =~ "timer_step: TimersUnavailable"
+  end
+
   test "a failure runs every declared compensate hook in reverse order" do
     messages = drive(SagaFlow)
     undone = for {:undone, name} <- messages, do: name
@@ -348,7 +422,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Tagger)
     end
   end
@@ -373,7 +447,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def max_duration_ms, do: 600_000
     def persistence_enabled, do: false
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Heard)
     end
   end
@@ -396,7 +470,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def loop_mode, do: :chained
     def persistence_enabled, do: false
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Countdown)
     end
   end
@@ -414,7 +488,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       a = c |> Channels.input("a") |> Channels.into(Left)
       b = c |> Channels.input("b") |> Channels.into(Right)
       Channels.into(a, Join)
@@ -453,7 +527,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule Strict do
     def factory_id, do: "strict"
 
-    def tasklets(c) do
+    def channels(c) do
       c
       |> Channels.input_with("in", fn
         "bad" -> raise ArgumentError, "not readable"
@@ -482,7 +556,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule EdgeStrict do
     def factory_id, do: "edge_strict"
 
-    def tasklets(c) do
+    def channels(c) do
       c
       |> Channels.input("in")
       |> Channels.map(fn
@@ -609,7 +683,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule HybridFlow do
     def factory_id, do: "hybrid_flow"
 
-    def tasklets(c) do
+    def channels(c) do
       c
       |> Channels.input("in")
       |> Channels.into(Tagger)
@@ -701,8 +775,8 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a refused barrier ends the run abnormally after its ladder" do
     messages = drive(LinearFlow, error: "disk full")
     assert %{status: "error", error: "disk full"} = completion(messages)
-    # first send plus the re-sends the class's barrier_retry_attempts allows
-    assert length(commits(messages)) == 3
+    # every send the runner's fixed re-send count allows, the first included
+    assert length(commits(messages)) == Flezha.SDK.Knob.barrier_resend_attempts()
   end
 
   # --- a tasklet ending its instance ---
@@ -731,7 +805,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     def loop_mode, do: :per_input
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
     end
   end
@@ -739,7 +813,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule ClosingPass do
     def factory_id, do: "closing_pass"
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Tagger)
     end
   end
@@ -747,7 +821,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule ClosingThenFailing do
     def factory_id, do: "closing_then_failing"
 
-    def tasklets(c) do
+    def channels(c) do
       c |> Channels.input("in") |> Channels.into(Closer) |> Channels.into(Boom)
     end
   end
@@ -782,7 +856,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
   defmodule KeyedClosing do
     def factory_id, do: "keyed_closing"
-    def tasklets(c), do: c |> Channels.input("in") |> Channels.into(KeyedCloser)
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(KeyedCloser)
   end
 
   # Two tasklets of one frontier both complete: the later-declared one wins
@@ -790,7 +864,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   defmodule FannedClosing do
     def factory_id, do: "fanned_closing"
 
-    def tasklets(c) do
+    def channels(c) do
       fan = c |> Channels.input("in") |> Channels.into(Tagger)
       Channels.into(fan, KeyedCloser)
       Channels.into(fan, LateCloser)

@@ -28,7 +28,10 @@ defmodule Flezha.SDK.Ctx do
   `run/3` (or `on_timer/4`) answers `{:ok, _}`, and a firing commits its own
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
-  once per invocation — and, inside a firing, the scheduled timestamp.
+  once per invocation — and, inside a firing, the scheduled timestamp. Inside a
+  workflow's tasklet timers are unavailable until they fire there: the Cell
+  hands `timers: :unavailable`, and the four timer calls answer
+  `{:error, :timers_unavailable}` and arm nothing.
 
   Under the effectively-once tier two more slots ride the same dictionary:
   `checkpoint/1` raises the flag the Cell reads at the invocation's end to
@@ -78,7 +81,8 @@ defmodule Flezha.SDK.Ctx do
   A fresh ctx for one invocation of `module`. `now_ms` is captured once here;
   `opts` carries the node's channel name, whether its sink is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
-  (`key_required?`), the Cell's pending timers (`timers`, empty by default),
+  (`key_required?`), the Cell's pending timers (`timers`, empty by default,
+  `:unavailable` inside a workflow),
   the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
   runner a spawn request goes to (`runner`, nil for none) and whether the input
@@ -152,23 +156,26 @@ defmodule Flezha.SDK.Ctx do
   def now(%__MODULE__{now_ms: ms}), do: ms
 
   @doc "Register a processing-time timer `delay_ms` after `now/1`; `{:ok, at}`, the cancellation handle."
-  @spec timer_after(t(), integer()) :: {:ok, non_neg_integer()} | {:error, Timers.refusal()}
+  @spec timer_after(t(), integer()) ::
+          {:ok, non_neg_integer()} | {:error, Timers.refusal() | :timers_unavailable}
   def timer_after(%__MODULE__{} = ctx, delay_ms),
     do: with_session(ctx, &Timers.register_after(&1, delay_ms))
 
   @doc "Register an event-time timer at `at`; refused under a clock that is not `:event_time`."
   @spec timer_at_event_time(t(), non_neg_integer()) ::
-          {:ok, non_neg_integer()} | {:error, Timers.refusal()}
+          {:ok, non_neg_integer()} | {:error, Timers.refusal() | :timers_unavailable}
   def timer_at_event_time(%__MODULE__{} = ctx, at),
     do: with_session(ctx, &Timers.register(&1, :event_time, at))
 
   @doc "Cancel the processing-time timer `timer_after/2` answered; whether one was pending."
-  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: boolean()
+  @spec cancel_processing_time_timer(t(), non_neg_integer()) ::
+          boolean() | {:error, :timers_unavailable}
   def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
     do: cancel(ctx, :processing_time, at)
 
   @doc "Cancel the event-time timer `timer_at_event_time/2` answered; whether one was pending."
-  @spec cancel_event_time_timer(t(), non_neg_integer()) :: boolean()
+  @spec cancel_event_time_timer(t(), non_neg_integer()) ::
+          boolean() | {:error, :timers_unavailable}
   def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
 
   @doc "The owning Cell's key, or nil for a Single Cell."
@@ -282,8 +289,11 @@ defmodule Flezha.SDK.Ctx do
 
   # An invocation that opened no session has nothing to commit; a firing
   # commits its removal, op 0 of a session opened here if `on_timer/4` opened
-  # none.
+  # none. A Cell whose timers are unavailable never armed one, so its set is
+  # the empty one it was seeded with.
   @doc false
+  def take_timers(%__MODULE__{timers: :unavailable}), do: {Timers.new(), [], @zero_tally}
+
   def take_timers(%__MODULE__{ref: ref, firing: nil} = ctx) do
     case Process.delete(timers_key(ref)) do
       nil -> {ctx.timers, [], @zero_tally}
@@ -305,6 +315,8 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(completion_key(ref))
   end
 
+  defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, :timers_unavailable}
+
   defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
     case fun.(session(ctx)) do
       {:ok, at, session} ->
@@ -316,6 +328,8 @@ defmodule Flezha.SDK.Ctx do
         {:error, refusal}
     end
   end
+
+  defp cancel(%__MODULE__{timers: :unavailable}, _kind, _at), do: {:error, :timers_unavailable}
 
   defp cancel(%__MODULE__{ref: ref} = ctx, kind, at) do
     {changed?, session} = Timers.cancel(session(ctx), kind, at)

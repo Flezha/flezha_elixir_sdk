@@ -139,7 +139,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     # a stray e2e instance from outliving the test run.
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -181,7 +181,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -205,7 +205,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -223,7 +223,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -251,7 +251,7 @@ defmodule ElixirRunner.WorkflowsLoop do
       end
     end
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -287,7 +287,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_1"
 
-    def tasklets(c),
+    def channels(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(1))
   end
 
@@ -296,7 +296,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_4"
 
-    def tasklets(c),
+    def channels(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
   end
 
@@ -305,7 +305,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "bench_chain_16"
 
-    def tasklets(c),
+    def channels(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(16))
   end
 
@@ -315,7 +315,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     def factory_id, do: "bench_chain_optout_4"
     def persistence_enabled, do: false
 
-    def tasklets(c),
+    def channels(c),
       do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
   end
 

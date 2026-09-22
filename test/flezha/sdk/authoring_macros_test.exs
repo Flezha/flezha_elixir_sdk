@@ -135,10 +135,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     use Flezha.SDK.WorkflowOperative,
       factory_id: "tuned_workflow",
       loop_mode: :chained,
-      retry_attempts: 7
+      rollback_mode: :keep_progress
 
     @impl true
-    def tasklets(c) do
+    def channels(c) do
       c |> input("in") |> into(Stateless) |> sink("out")
     end
   end
@@ -146,9 +146,34 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "an operative macro defines only the knobs written" do
     assert TunedWorkflow.factory_id() == "tuned_workflow"
     assert TunedWorkflow.loop_mode() == :chained
-    assert TunedWorkflow.retry_attempts() == 7
+    assert TunedWorkflow.rollback_mode() == :keep_progress
     refute function_exported?(TunedWorkflow, :wake_after_ms, 0)
-    refute function_exported?(TunedWorkflow, :rollback_mode, 0)
+    refute function_exported?(TunedWorkflow, :max_duration_ms, 0)
+  end
+
+  test "a retired workflow retry option fails to compile, as any unknown option does" do
+    for option <- ["retry_attempts: 5", "retry_backoff_ms: 20", "barrier_retry_attempts: 3"] do
+      error =
+        refused("""
+        use Flezha.SDK.WorkflowOperative, factory_id: "w", #{option}
+        def channels(c), do: c
+        """)
+
+      [key | _] = String.split(option, ":")
+      assert error.description =~ "has no option :#{key}"
+    end
+  end
+
+  test "a loop or rollback mode outside its set fails to compile, naming the value" do
+    for {option, value} <- [{"loop_mode", ":forever"}, {"rollback_mode", ":undo_everything"}] do
+      error =
+        refused("""
+        use Flezha.SDK.WorkflowOperative, factory_id: "w", #{option}: #{value}
+        def channels(c), do: c
+        """)
+
+      assert error.description =~ option and error.description =~ value
+    end
   end
 
   test "an operative macro refuses an unknown option and a missing factory_id" do
@@ -227,9 +252,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   # The compiled topology keeps its entries in a map, so the builder's own
   # record is what states their order — the same read `conformance.ex` makes.
 
-  defp entry_names(module, declare \\ :channels) do
+  defp entry_names(module) do
     c = Channels.new()
-    _ = apply(module, declare, [c])
+    _ = module.channels(c)
     c |> Channels.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
   end
 
@@ -354,6 +379,16 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
+  defmodule Chat do
+    @moduledoc false
+    use Flezha.SDK.WorkflowOperative, factory_id: "chat", sink: "replies", loop_mode: :per_input
+
+    def run(input, state, ctx) do
+      emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
   defmodule Counter do
     @moduledoc false
     use Flezha.SDK.StreamOperative, factory_id: "counter", input: "ticks", max_cells: 10
@@ -368,7 +403,6 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "an operative module with a run body is a whole stream operative" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
-    refute function_exported?(Upcase, :tasklets, 1)
 
     assert {:ok, short} = Topology.build(Upcase)
     assert {:ok, hand} = Topology.build(UpcaseTwinOperative)
@@ -379,12 +413,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "an operative module with a run body is a whole workflow operative" do
     assert Place.factory_id() == "place"
-    assert function_exported?(Place, :tasklets, 1)
-    refute function_exported?(Place, :channels, 1)
+    assert function_exported?(Place, :channels, 1)
 
     assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Place)
     assert spec.knobs.loop_mode == :once
-    assert entry_names(Place, :tasklets) == ["order"]
+    assert entry_names(Place) == ["order"]
+  end
+
+  test "a short-form workflow declares its loop mode" do
+    assert Chat.loop_mode() == :per_input
+    assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Chat)
+    assert spec.knobs.loop_mode == :per_input
+    assert entry_names(Chat) == ["input"]
   end
 
   test "the generated tasklet is a module of its own, named after the factory id" do
@@ -436,27 +476,50 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
              Flezha.SDK.unregister_factory(left, TunedWorkflow)
   end
 
-  # Declared without `@behaviour`, because the kind is read from the callbacks a
-  # module exports, not from what it says it implements — and naming both
-  # behaviours here would only add the compiler's own conflict warnings to a
-  # shape this test is about refusing.
-  defmodule BothKinds do
+  # The kind is the behaviour, not the body's name: both kinds write `channels/1`.
+  defmodule HandWrittenWorkflow do
     @moduledoc false
-    def factory_id, do: "both_kinds"
-    def channels(_c), do: :ok
-    def tasklets(_c), do: :ok
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "hand_written_workflow"
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
+  # A body and no behaviour: nothing says which kind it is.
   defmodule NeitherKind do
     @moduledoc false
     def factory_id, do: "neither_kind"
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
+  end
+
+  test "the kind is read from the behaviour a module declares" do
+    runner = Flezha.SDK.create_runner("kind_ns")
+
+    assert %Flezha.SDK{classes: [{HandWrittenWorkflow, %Flezha.SDK.Workflow.Spec{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenWorkflow)
+
+    assert %Flezha.SDK{classes: [{HandWrittenOperative, %Topology{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenOperative)
   end
 
   test "an operative of both kinds, or of neither, is refused at registration" do
+    # Compiled here, so the compiler's own note on two behaviours sharing a
+    # callback stays with the shape this test refuses.
+    {[{both_kinds, _bytecode}], _warnings} =
+      with_io(:stderr, fn ->
+        Code.compile_string("""
+        defmodule Flezha.SDK.AuthoringMacrosTest.BothKinds do
+          @behaviour Flezha.SDK.StreamOperative
+          @behaviour Flezha.SDK.WorkflowOperative
+          def factory_id, do: "both_kinds"
+          def channels(c), do: c
+        end
+        """)
+      end)
+
     runner = Flezha.SDK.create_runner("kind_refusals_ns")
 
-    assert {:error, {:AmbiguousOperativeKind, BothKinds}} =
-             Flezha.SDK.register_factory(runner, BothKinds)
+    assert {:error, {:AmbiguousOperativeKind, ^both_kinds}} =
+             Flezha.SDK.register_factory(runner, both_kinds)
 
     assert {:error, {:UnknownOperativeKind, NeitherKind}} =
              Flezha.SDK.register_factory(runner, NeitherKind)
@@ -472,12 +535,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a run body beside a topology body does not compile" do
-    for {macro, body} <- [{"StreamOperative", "channels"}, {"WorkflowOperative", "tasklets"}] do
+    for macro <- ["StreamOperative", "WorkflowOperative"] do
       error =
         refused("""
         use Flezha.SDK.#{macro}, factory_id: "x", sink: "out"
         def run(_i, s, _c), do: {:ok, s}
-        def #{body}(c), do: c
+        def channels(c), do: c
         """)
 
       assert String.starts_with?(error.description, "ShortFormWithTopology"),
@@ -505,14 +568,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "a short form takes no class setting, and a full form no short-form option" do
+  test "a short form takes no class setting but a workflow's loop mode, and a full form no short-form option" do
     setting =
       refused("""
-      use Flezha.SDK.WorkflowOperative, factory_id: "x", loop_mode: :chained
+      use Flezha.SDK.WorkflowOperative, factory_id: "x", loop_mode: :chained, max_duration_ms: 5_000
       def run(_i, s, _c), do: {:ok, s}
       """)
 
-    assert setting.description =~ "loop_mode"
+    assert setting.description =~ "max_duration_ms" and not (setting.description =~ "loop_mode")
 
     for option <- [~s|sink: "out"|, "max_cells: 10"] do
       stray =

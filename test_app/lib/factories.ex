@@ -238,6 +238,21 @@ defmodule ElixirRunner.SugarWorkflow do
   end
 end
 
+# A workflow short form that loops: one pass per message on `input`, and the
+# instance stays after each.
+defmodule ElixirRunner.SugarWorkflowPerInput do
+  @moduledoc false
+  use Flezha.SDK.WorkflowOperative,
+    factory_id: "sugar_workflow_per_input",
+    sink: "sugar_workflow_per_input_out",
+    loop_mode: :per_input
+
+  def run(input, state, ctx) do
+    emit(ctx, input)
+    {:ok, state}
+  end
+end
+
 # The short form with no sink: `ticks` feeds a tasklet that only keeps state.
 defmodule ElixirRunner.SugarStateOnly do
   @moduledoc false
@@ -717,6 +732,7 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.SugarStoreInput,
       ElixirRunner.SugarNamedInput,
       ElixirRunner.SugarWorkflow,
+      ElixirRunner.SugarWorkflowPerInput,
       ElixirRunner.SugarStateOnly
     ]
   end

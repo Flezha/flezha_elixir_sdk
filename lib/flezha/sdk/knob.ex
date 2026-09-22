@@ -155,6 +155,12 @@ defmodule Flezha.SDK.Knob do
     end
   end
 
+  @doc "Sends of one workflow commit barrier, the first included, before the run fails."
+  # A re-send is the connection's business, not a class's, so nothing sets it;
+  # in lockstep with the core's `BARRIER_RESEND_ATTEMPTS`.
+  @spec barrier_resend_attempts() :: pos_integer()
+  def barrier_resend_attempts, do: 3
+
   @doc "The row `ladder` declares, for a site that takes one of its bounds as a default."
   @spec ladder(ladder()) :: map()
   def ladder(ladder), do: Map.fetch!(@ladders, ladder)

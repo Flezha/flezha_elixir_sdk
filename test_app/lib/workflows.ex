@@ -193,7 +193,7 @@ defmodule ElixirRunner.Workflows do
 
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, "tier_commit_a")
-      Ctx.emit_keyed(ctx, "job", "committed:" <> input)
+      Ctx.emit(ctx, "committed:" <> input)
       {:ok, state}
     end
   end
@@ -322,7 +322,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "echo_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -354,7 +354,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "typed_once_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -369,7 +369,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "commit_block_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -386,7 +386,7 @@ defmodule ElixirRunner.Workflows do
     def factory_id, do: "sync_durable_workflow"
     def sync_durability, do: true
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -403,7 +403,7 @@ defmodule ElixirRunner.Workflows do
     def factory_id, do: "optout_commit_block"
     def persistence_enabled, do: false
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -414,19 +414,19 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
+  # The hybrid mid-chain shape the conformance fixture's `commit_block_chain`
+  # twin is transcribed from: A's channel reaches a plugin sink and feeds B.
   defmodule TierCommitBlockWorkflow do
     @moduledoc false
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "tier_commit_block_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
-      |> effectively_once()
       |> input("in")
       |> into(ElixirRunner.Workflows.TierCommitA)
-      |> keyed()
       |> sink_with("mid", & &1)
       |> into(ElixirRunner.Workflows.BlockB)
     end
@@ -437,7 +437,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "saga_block_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -455,7 +455,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "outbox_block_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -471,7 +471,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "undo_outbox_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -489,11 +489,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "branch_workflow"
 
-    # Fail fast: the compensation scenario is about the rollback order, not
-    # the ladder before it.
-    def retry_attempts, do: 0
-
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       mid =
@@ -502,9 +498,12 @@ defmodule ElixirRunner.Workflows do
         |> into(ElixirRunner.Workflows.BranchA)
         |> sink_with("mid", fn s -> "a:" <> s end)
 
+      # Fail fast: the compensation scenario is about the rollback order, not
+      # the ladder before it.
       mid
       |> into(ElixirRunner.Workflows.BranchB)
       |> sink_with("bmid", fn s -> "b:" <> s end)
+      |> retry_max(1)
       |> into(ElixirRunner.Workflows.BranchD)
       |> sink("d_out")
 
@@ -521,7 +520,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "diamond_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       fan =
@@ -550,7 +549,7 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "retry_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       import Flezha.SDK.Channels
 
       c
@@ -562,10 +561,40 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
+  # `workflow_timer_refused`: a tasklet that registers a timer inside a
+  # workflow. Timers do not fire there yet, so the ctx refuses naming
+  # `TimersUnavailable`, the tasklet fails with the refusal, and the instance
+  # ends in error rather than losing the timer.
+  defmodule TimerRefused do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "workflow_timer_refused"
+    def init_state(_), do: nil
+
+    def run(_input, state, ctx) do
+      with {:ok, _at} <- Ctx.timer_after(ctx, 60_000), do: {:ok, state}
+    end
+  end
+
+  defmodule WorkflowTimerRefused do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "workflow_timer_refused"
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("input")
+      |> into(ElixirRunner.Workflows.TimerRefused)
+    end
+  end
+
   @doc "The durable structured workflow classes this runner advertises."
   def all do
     [
       EchoWorkflow,
+      WorkflowTimerRefused,
       TypedOnceWorkflow,
       CommitBlockWorkflow,
       SyncDurableWorkflow,

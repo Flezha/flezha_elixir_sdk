@@ -2,8 +2,8 @@ defmodule Flezha.SDK.WorkflowOperative do
   @moduledoc """
   A workflow operative, declared with `use` (see `__using__/1`), which defines
   this behaviour's zero-arity callbacks from its options and imports the channel
-  builder. The author writes `tasklets/1`: a DAG of Tasklets, Channels and
-  Cells authored on the same builder token a stream operative uses. A
+  builder. The author writes `channels/1`, as a stream operative does: a DAG
+  of Tasklets, Channels and Cells authored on the same builder token. A
   tasklet ends its instance with `Flezha.SDK.Ctx.complete/2`.
 
   Every knob below is optional and reads its default through this module's
@@ -22,12 +22,15 @@ defmodule Flezha.SDK.WorkflowOperative do
     :self_terminating?,
     :loop_mode,
     :wake_after_ms,
-    :retry_attempts,
-    :retry_backoff_ms,
-    :barrier_retry_attempts,
     :rollback_mode,
     :persistence_enabled,
     :sync_durability
+  ]
+
+  # The values the two mode options take; any other is refused where it is written.
+  @modes [
+    loop_mode: [:once, :per_input, :chained],
+    rollback_mode: [:all_or_nothing, :keep_progress]
   ]
 
   @doc """
@@ -36,20 +39,24 @@ defmodule Flezha.SDK.WorkflowOperative do
       use Flezha.SDK.WorkflowOperative, factory_id: "checkout", loop_mode: :chained
 
       @impl true
-      def tasklets(c) do
+      def channels(c) do
         c |> input("in") |> into(Reserve) |> into(Charge) |> sink("receipts")
       end
 
   `factory_id` is required; every knob above is optional, and **only the
   options written define anything**, so a default stays where the reader
-  functions resolve it. `tasklets/1` takes an argument and stays a `def` the
-  author writes. An unknown option is a `CompileError` naming it.
+  functions resolve it. `channels/1` takes an argument and stays a `def` the
+  author writes. An unknown option is a `CompileError` naming it, and so is a
+  `loop_mode` or `rollback_mode` outside the values their types name. A retry
+  ladder is not a class setting: it is the edge's `retry_max/2` and
+  `retry_backoff_ms/2`, as on a stream.
 
   `Flezha.SDK.Channels` is imported.
 
-  A module that writes its one tasklet's `run/3` instead of `tasklets/1`
+  A module that writes its one tasklet's `run/3` instead of `channels/1`
   is the §5 short form, a `once` workflow that runs its tasklet on its first
-  message; see `Flezha.SDK.StreamOperative.__using__/1`:
+  message unless it writes `loop_mode:`, the one class setting a short form
+  takes; see `Flezha.SDK.StreamOperative.__using__/1`:
 
       use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
 
@@ -58,7 +65,8 @@ defmodule Flezha.SDK.WorkflowOperative do
         {:ok, state}
       end
   """
-  defmacro __using__(opts), do: Tasklet.__operative_using__(opts, @use_options, __MODULE__)
+  defmacro __using__(opts),
+    do: Tasklet.__operative_using__(opts, @use_options, __MODULE__, @modes)
 
   @type loop_mode :: :once | :per_input | :chained
   @type rollback_mode :: :all_or_nothing | :keep_progress
@@ -73,7 +81,7 @@ defmodule Flezha.SDK.WorkflowOperative do
   committed, so a fan-out interleaves independently and a fan-in is dispatched
   once with the accumulated batch of those producers.
   """
-  @callback tasklets(Flezha.SDK.Channels.t()) :: any()
+  @callback channels(Flezha.SDK.Channels.t()) :: any()
 
   @doc "Optional human description."
   @callback description() :: String.t()
@@ -97,15 +105,6 @@ defmodule Flezha.SDK.WorkflowOperative do
   """
   @callback wake_after_ms() :: pos_integer() | nil
 
-  @doc "Total attempts a structured tasklet's cell gets, the first included."
-  @callback retry_attempts() :: non_neg_integer()
-
-  @doc "Backoff base of the retry ladder; attempt n waits base × 2^(n-1), jittered."
-  @callback retry_backoff_ms() :: non_neg_integer()
-
-  @doc "Sends of one commit barrier, the first included, before an unacked commit fails the run."
-  @callback barrier_retry_attempts() :: non_neg_integer()
-
   @doc "Saga rollback scope when the operative terminates abnormally after partial progress."
   @callback rollback_mode() :: rollback_mode()
 
@@ -123,9 +122,6 @@ defmodule Flezha.SDK.WorkflowOperative do
                       self_terminating?: 0,
                       loop_mode: 0,
                       wake_after_ms: 0,
-                      retry_attempts: 0,
-                      retry_backoff_ms: 0,
-                      barrier_retry_attempts: 0,
                       rollback_mode: 0,
                       persistence_enabled: 0,
                       sync_durability: 0
@@ -135,9 +131,6 @@ defmodule Flezha.SDK.WorkflowOperative do
     self_terminating?: true,
     loop_mode: :once,
     wake_after_ms: nil,
-    retry_attempts: 3,
-    retry_backoff_ms: 500,
-    barrier_retry_attempts: 3,
     rollback_mode: :all_or_nothing,
     persistence_enabled: true,
     sync_durability: false
@@ -150,11 +143,11 @@ defmodule Flezha.SDK.WorkflowOperative do
     if Tasklet.exports?(module, knob, 0), do: apply(module, knob, []), else: default
   end
 
-  @doc "Whether the class declares its tasklet DAG."
-  @spec structured?(module()) :: boolean()
-  def structured?(module), do: Tasklet.exports?(module, :tasklets, 1)
-
   @doc "Every knob's declared value, as the spec freezes them."
   @spec knobs(module()) :: map()
   def knobs(module), do: Map.new(@defaults, fn {k, _} -> {k, knob(module, k)} end)
+
+  @doc false
+  # The mode values, for the registration check a hand-written callback meets.
+  def modes, do: @modes
 end

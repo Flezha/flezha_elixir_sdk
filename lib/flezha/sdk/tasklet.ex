@@ -154,6 +154,9 @@ defmodule Flezha.SDK.Tasklet do
   # Everything a short form takes beyond `factory_id`: its own options and its
   # tasklet's.
   @short_form_only @short_form_options ++ @use_options
+  # The one class setting a short form takes, a workflow's loop mode: it
+  # defines `loop_mode/0` exactly as the full form's option does.
+  @short_form_settings [:loop_mode]
 
   # `Flezha.SDK.Ctx`'s authoring surface, imported by `use`. `apply/3` is
   # deliberately absent: importing it would shadow `Kernel.apply/3` in every
@@ -262,14 +265,24 @@ defmodule Flezha.SDK.Tasklet do
     end
   end
 
-  # The option checks all three `use` macros make: a keyword list, no unknown
-  # option, and the one option that macro requires. `required` is
-  # `{key, what_it_is}`, so the refusal says what the author is being asked for.
+  # The option checks all three `use` macros make: a keyword list, a value
+  # inside the set `values` names for its option, no unknown option, and the
+  # one option that macro requires. `required` is `{key, what_it_is}`, so the
+  # refusal says what the author is being asked for.
   @doc false
-  def __validate__(opts, known, macro, {required, what}) do
+  def __validate__(opts, known, macro, {required, what}, values \\ []) do
     unless Keyword.keyword?(opts) do
       raise CompileError,
         description: "`use #{inspect(macro)}` takes a keyword list, read #{inspect(opts)}"
+    end
+
+    for {key, allowed} <- values,
+        {:ok, value} <- [Keyword.fetch(opts, key)],
+        value not in allowed do
+      raise CompileError,
+        description:
+          "`use #{inspect(macro)}` has no #{key} #{inspect(value)}; it takes " <>
+            Enum.map_join(allowed, ", ", &inspect/1)
     end
 
     for {key, _value} <- opts, key not in known do
@@ -304,22 +317,27 @@ defmodule Flezha.SDK.Tasklet do
   # what a short form's `run/3` body is written with (the ctx imports and the
   # `state` block). A short form's own options, and its tasklet's, are kept
   # for `__before_compile_operative__/1`. The two kinds differ only in their
-  # option list, so this is the one place that states what an operative
-  # declaration expands to.
+  # options, the values some of them take, and the `@behaviour` they set, which
+  # is what the kind is read from, so this is the one place that states what an
+  # operative declaration expands to.
   @doc false
-  def __operative_using__(opts, use_options, behaviour) do
+  def __operative_using__(opts, use_options, behaviour, values \\ []) do
     opts =
       __validate__(
         opts,
         [:factory_id | @short_form_only ++ use_options],
         behaviour,
-        {:factory_id, "the id the controller places by"}
+        {:factory_id, "the id the controller places by"},
+        values
       )
 
     callbacks = __callbacks__(opts, use_options, behaviour)
     factory_id = Keyword.fetch!(opts, :factory_id)
     short_form = Keyword.take(opts, @short_form_only)
-    settings = for {key, _value} <- opts, key in use_options, do: key
+
+    settings =
+      for {key, _value} <- opts, key in use_options, key not in @short_form_settings, do: key
+
     ctx_imports = @ctx_imports
 
     quote do
@@ -333,54 +351,50 @@ defmodule Flezha.SDK.Tasklet do
 
       unquote_splicing(callbacks)
 
-      @flezha_operative {unquote(behaviour), unquote(factory_id), unquote(short_form),
-                         unquote(settings)}
+      @flezha_operative {unquote(factory_id), unquote(short_form), unquote(settings)}
       # After `Flezha.SDK.State`'s hook, so a `state` block's callbacks exist.
       @before_compile {Flezha.SDK.Tasklet, :__before_compile_operative__}
     end
   end
 
   # An operative module is a short form exactly when it defines `run/3` and no
-  # topology body.
+  # `channels/1`, the topology body both kinds share.
   @doc false
   defmacro __before_compile_operative__(env) do
-    {behaviour, factory_id, short_form, settings} =
-      Module.get_attribute(env.module, :flezha_operative)
-
-    body = if behaviour == Flezha.SDK.StreamOperative, do: :channels, else: :tasklets
+    {factory_id, short_form, settings} = Module.get_attribute(env.module, :flezha_operative)
     run? = Module.defines?(env.module, {:run, 3})
-    topology = for fun <- [:channels, :tasklets], Module.defines?(env.module, {fun, 1}), do: fun
+    topology? = Module.defines?(env.module, {:channels, 1})
 
     cond do
-      run? and topology != [] ->
+      run? and topology? ->
         refuse(
           "ShortFormWithTopology: #{inspect(env.module)} defines `run/3`, the short form's " <>
-            "tasklet body, and `#{hd(topology)}/1`; the short form generates its topology, " <>
+            "tasklet body, and `channels/1`; the short form generates its topology, " <>
             "so write one or the other"
         )
 
       run? and settings != [] ->
         refuse(
           "#{inspect(env.module)} is a short form, whose class settings are the defaults; " <>
-            "`#{hd(settings)}:` is the full form's: write `#{body}/1` and a tasklet module"
+            "`#{hd(settings)}:` is the full form's: write `channels/1` and a tasklet module"
         )
 
       run? ->
-        short_form(env.module, behaviour, body, factory_id, short_form)
+        short_form(env.module, factory_id, short_form)
 
-      topology != [] and short_form != [] ->
+      topology? and short_form != [] ->
         refuse(
-          "#{inspect(env.module)} writes `#{body}/1`; `#{elem(hd(short_form), 0)}:` is a short " <>
-            "form's option, which a full form states in `#{body}/1` and its tasklets instead"
+          "#{inspect(env.module)} writes `channels/1`; `#{elem(hd(short_form), 0)}:` is a " <>
+            "short form's option, which a full form states in `channels/1` and its tasklets instead"
         )
 
-      topology != [] ->
+      topology? ->
         nil
 
       true ->
         refuse(
           "#{inspect(env.module)} declares no body: write `run/3` for a single-tasklet " <>
-            "operative, or `#{body}/1`"
+            "operative, or `channels/1`"
         )
     end
   end
@@ -393,7 +407,7 @@ defmodule Flezha.SDK.Tasklet do
   # `init_state/1` is overridable, which `Module.defines?/2` does not report),
   # and the topology body wiring the entry channel into it and, with a `sink`,
   # it to that plugin channel.
-  defp short_form(module, behaviour, body, factory_id, options) do
+  defp short_form(module, factory_id, options) do
     tasklet = Module.concat(module, Tasklet)
     entry = Keyword.get(options, :input, "input")
     tasklet_options = Macro.escape([name: factory_id] ++ Keyword.take(options, @use_options))
@@ -432,8 +446,8 @@ defmodule Flezha.SDK.Tasklet do
         unquote_splicing(delegated)
       end
 
-      @impl unquote(behaviour)
-      def unquote(body)(c), do: unquote(topology)
+      @impl true
+      def channels(c), do: unquote(topology)
     end
   end
 

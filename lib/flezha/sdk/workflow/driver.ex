@@ -10,9 +10,9 @@ defmodule Flezha.SDK.Workflow.Driver do
   It presents the same contract to an `Flezha.SDK.Cell` that
   `Flezha.SDK.Operative` does: a Cell casts its emits to its `operative`
   pid and knows nothing else about it. So every Cell mechanism — the state,
-  the records, the retry ladder, the timers, the tier — is reused as it
-  stands, and what is written here is only what a *bounded* run adds: the
-  frontier, the barrier and the journal.
+  the records, the retry ladder — is reused as it stands, and what is written
+  here is only what a *bounded* run adds: the frontier, the barrier and the
+  journal.
 
   The reference drives a chain on a pool thread that blocks on each barrier.
   This one is event-driven, because a blocked BEAM process cannot answer the
@@ -32,7 +32,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   require Logger
 
-  alias Flezha.SDK.{Cell, Topology}
+  alias Flezha.SDK.{Cell, Knob, Topology}
   alias Flezha.SDK.Operative.{Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
@@ -696,7 +696,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   defp barrier_settled(%State{barrier: barrier} = s, error) do
-    attempts = s.spec.knobs.barrier_retry_attempts
+    attempts = Knob.barrier_resend_attempts()
 
     if barrier.attempt < attempts do
       Logger.warning(

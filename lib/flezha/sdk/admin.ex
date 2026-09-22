@@ -25,7 +25,7 @@ defmodule Flezha.SDK.Admin do
 
   @doc """
   Start an operative of `factory_id`, on the specification `flz operative start`
-  takes: `id:`, `kind:`, `init_values:` and `opts:`, each optional. Answers the
+  takes: `id:`, `init_values:` and `opts:`, each optional. Answers the
   id it runs under, the generated one when no `id:` was given, and whether this
   call started it or found a live instance already holding the id.
 
@@ -39,7 +39,6 @@ defmodule Flezha.SDK.Admin do
     fields =
       %{"factory_id" => factory_id}
       |> put_given("id", Keyword.get(opts, :id))
-      |> put_given("kind", Keyword.get(opts, :kind))
       |> put_given("init_values", Keyword.get(opts, :init_values))
       |> put_given("opts", Keyword.get(opts, :opts))
 

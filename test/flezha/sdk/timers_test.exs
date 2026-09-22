@@ -2,11 +2,12 @@ defmodule Flezha.SDK.TimersTest do
   @moduledoc """
   The pending-timer set and the session over a copy of it: the twin of
   `flz_core/src/timer.rs`'s own tests, minus the arming (the BEAM's) and the
-  registry (telemetry's).
+  registry (telemetry's). Then the ctx's four timer calls over it, and their
+  refusal where timers are unavailable.
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.Timers
+  alias Flezha.SDK.{Ctx, Timers}
 
   @policy %{tasklet: "counter_probe_tasklet", cap: 10_000, clock: :wall}
 
@@ -135,6 +136,30 @@ defmodule Flezha.SDK.TimersTest do
       assert tally == %{registered: 1, fired: 1, cancelled: 0, refused: 0}
       refute Timers.contains?(pending, :processing_time, 9_000)
       assert Timers.contains?(pending, :processing_time, 39_000)
+    end
+  end
+
+  describe "the ctx" do
+    # A workflow stage hands its Cells `timers: :unavailable`; a stream's Cell
+    # hands its pending set.
+    test "with timers unavailable every timer call is refused and nothing is armed" do
+      ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy, timers: :unavailable)
+
+      assert Ctx.timer_after(ctx, 1_000) == {:error, :timers_unavailable}
+      assert Ctx.timer_at_event_time(ctx, 5) == {:error, :timers_unavailable}
+      assert Ctx.cancel_processing_time_timer(ctx, 2_000) == {:error, :timers_unavailable}
+      assert Ctx.cancel_event_time_timer(ctx, 5) == {:error, :timers_unavailable}
+      assert {pending, [], _tally} = Ctx.take_timers(ctx)
+      assert Timers.empty?(pending)
+    end
+
+    test "a stream's ctx still arms the same call" do
+      ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy)
+
+      assert Ctx.timer_after(ctx, 1_000) == {:ok, 2_000}
+      assert {pending, [op], _tally} = Ctx.take_timers(ctx)
+      assert op == Timers.register_op(:processing_time, 2_000)
+      assert Timers.contains?(pending, :processing_time, 2_000)
     end
   end
 

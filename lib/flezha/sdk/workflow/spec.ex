@@ -4,8 +4,9 @@ defmodule Flezha.SDK.Workflow.Spec do
   validated tasklet DAG, plus the class's loop, rollback and durability
   facts.
 
-  A structured class authors on the same builder a stream class does, so its
-  topology is compiled by `Flezha.SDK.Topology.build/2` and only the refusals a
+  A structured class authors in `channels/1` on the same builder a stream class
+  does, so its topology is compiled by `Flezha.SDK.Topology.build/2`, which
+  also refuses the stream's settings on it, and only the refusals a
   *bounded* graph adds are decided here: an entry channel to arrive on,
   acyclic, reachable, no dynamic cells, and a chained loop whose every chain
   converges on one terminal. Each entry channel roots a chain (the nodes it
@@ -62,21 +63,25 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   @doc """
   Compile `module` into a workflow spec, or refuse it. A class that declares
-  no `tasklets/1` has no body to run and is refused `NoWorkflowBody`.
+  no `channels/1` has no body to run and is refused `NoWorkflowBody`.
   """
   @spec build(module()) :: {:ok, t()} | {:error, {:invalid_workflow, [term()]}}
   def build(module) do
     knobs = WorkflowOperative.knobs(module)
     base = %__MODULE__{factory_id: module.factory_id(), module: module, knobs: knobs}
-    class_issues = class_refusals(module, knobs)
 
-    if WorkflowOperative.structured?(module),
+    class_issues =
+      []
+      |> check_terminable(base.factory_id, knobs)
+      |> check_modes(base.factory_id, knobs)
+
+    if Tasklet.exports?(module, :channels, 1),
       do: structured(module, base, class_issues),
       else: refuse([{:NoWorkflowBody, mod_name(module)} | class_issues])
   end
 
   defp structured(module, %__MODULE__{} = spec, issues) do
-    case Topology.build(module, :tasklets) do
+    case Topology.build(module, :workflow) do
       {:error, {:invalid_topology, topology_issues}} ->
         refuse(Enum.map(topology_issues, &{:Topology, &1}) ++ issues)
 
@@ -134,14 +139,6 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   # --- class facts ---
 
-  defp class_refusals(module, knobs) do
-    factory_id = module.factory_id()
-
-    []
-    |> check_terminable(factory_id, knobs)
-    |> check_retry_backoff(factory_id, knobs)
-  end
-
   # A class whose only exit is an external stop, with no wall-clock backstop,
   # can run for ever and no scenario can prove it finished.
   defp check_terminable(is, factory_id, %{self_terminating?: false, max_duration_ms: nil}),
@@ -149,11 +146,14 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   defp check_terminable(is, _factory_id, _knobs), do: is
 
-  # A ladder with a zero base re-runs the failing cell in a hot loop.
-  defp check_retry_backoff(is, factory_id, %{retry_attempts: n, retry_backoff_ms: 0}) when n > 1,
-    do: [{:ZeroRetryBackoff, factory_id, n} | is]
-
-  defp check_retry_backoff(is, _factory_id, _knobs), do: is
+  # The `use` macro refuses a mode outside its set at compile time; a
+  # hand-written `loop_mode/0` or `rollback_mode/0` meets the same set here.
+  defp check_modes(is, factory_id, knobs) do
+    for {knob, allowed} <- WorkflowOperative.modes(),
+        (value = Map.fetch!(knobs, knob)) not in allowed,
+        reduce: is,
+        do: (is -> [{:InvalidMode, factory_id, knob, value} | is])
+  end
 
   @doc """
   The keys a stage's Cells are registered under, in the order they are

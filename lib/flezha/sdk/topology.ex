@@ -24,11 +24,9 @@ defmodule Flezha.SDK.Topology do
   `test/fixtures/reference_topologies.txt` is the contract both this and the
   core are measured against. One of its rows names a surface the v1 subset
   does not carry (`branch`), so `BranchTooFewArms` is absent here by design
-  rather than missing. Two more of its class-fact rows this SDK does not judge:
-  a workflow class here DOES declare the effectively-once tier — the
-  `commit_block_chain` twin of that same file is one — and the checkpoint-hold
-  flag cannot be written without its delay, because `outputs_at_checkpoint/2`
-  takes both.
+  rather than missing. One more of its class-fact rows this SDK does not
+  judge: the checkpoint-hold flag cannot be written without its delay, because
+  `outputs_at_checkpoint/2` takes both.
 
   Routing model (v1, keyless channels deferred): an input on an entry channel,
   or a value a node emits, fans out along the source's routes; each route fuses
@@ -37,7 +35,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Graph, Tasklet, StreamOperative}
+  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, StreamOperative}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -61,6 +59,7 @@ defmodule Flezha.SDK.Topology do
   @type t :: %__MODULE__{}
 
   @transform_links [:map, :filter, :flat_map]
+  @default_retry_max 3
 
   # A channel name rides every frame the channel produces, as the `channel`
   # metadata value under the metadata region's one-byte length prefix. The core
@@ -70,18 +69,19 @@ defmodule Flezha.SDK.Topology do
   @max_channel_name_bytes 255
 
   @doc """
-  Compile `module`'s declaration into a topology. `declare` names the callback
-  that authors it: `:channels` for a stream class, `:tasklets` for a workflow
-  one — the two surfaces author on the same builder, so they compile through
-  the same function, and the kind is what decides which class facts apply.
+  Compile `module`'s `channels/1` into a topology. Both kinds author their graph
+  there on the same builder, so they compile through the same function, and
+  `kind` (`:stream` or `:workflow`, the class's own) decides which class facts
+  apply.
   """
-  @spec build(module(), atom()) :: {:ok, t()} | {:error, {:invalid_topology, [term()]}}
-  def build(module, declare \\ :channels) do
+  @spec build(module(), :stream | :workflow) ::
+          {:ok, t()} | {:error, {:invalid_topology, [term()]}}
+  def build(module, kind \\ :stream) do
     c = Channels.new()
 
-    case declare_on(module, declare, c) do
+    case declare_on(module, c) do
       :ok ->
-        compile(module, declare, Channels.take(c))
+        compile(module, kind, Channels.take(c))
 
       {:deferred, message} ->
         _ = Channels.take(c)
@@ -89,21 +89,21 @@ defmodule Flezha.SDK.Topology do
     end
   end
 
-  defp declare_on(module, declare, c) do
-    _ = apply(module, declare, [c])
+  defp declare_on(module, c) do
+    _ = module.channels(c)
     :ok
   rescue
     e in UndefinedFunctionError -> {:deferred, Exception.message(e)}
   end
 
-  defp compile(module, declare, acc) do
+  defp compile(module, kind, acc) do
     {channels, chain_issues} = derive(acc)
     routes = routes(channels)
     incoming = incoming(channels)
     node_mode = derive_modes(acc, incoming)
     shape = %{channels: channels, routes: routes, incoming: incoming, node_mode: node_mode}
 
-    issues = acc.issues ++ chain_issues ++ facts(module, declare, acc, shape)
+    issues = acc.issues ++ chain_issues ++ facts(module, kind, acc, shape)
 
     if issues == [] do
       {:ok,
@@ -397,11 +397,11 @@ defmodule Flezha.SDK.Topology do
 
   # --- stage three: the topology and class facts over the derived shape ---
 
-  defp facts(module, declare, acc, shape) do
+  defp facts(module, kind, acc, shape) do
     names(acc, shape.channels) ++
       Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
-      class_facts(module, declare, acc) ++
+      kind_facts(module, kind, acc, mod_name(module)) ++
       cycles(acc, shape.routes) ++
       changeful_identity(acc)
   end
@@ -581,24 +581,30 @@ defmodule Flezha.SDK.Topology do
 
   defp check_shedding(is, _channel, _tier?), do: is
 
-  defp class_facts(module, declare, acc) do
-    name = mod_name(module)
-
-    kind_facts(module, declare, name) ++
-      checkpoint_facts(acc, name) ++ correction_facts(acc, name)
+  # Each kind is judged on its own settings, and a setting of the other kind
+  # is refused by its own name rather than by the rule that assumes its kind.
+  # A workflow commits stage by stage, so the tier, its checkpoint policy and
+  # a correction window have nothing to act on there. `sync_durability` is a
+  # workflow knob: a stream class acknowledges at input rates, where a remote
+  # round trip per acknowledgement is not a guarantee it can keep, and this
+  # SDK's stream behaviour has no such callback: declaring one is an authoring
+  # error, not a knob nothing reads.
+  defp kind_facts(_module, :workflow, %{tier: tier}, name) do
+    for {true, refusal} <- [
+          {tier.effectively_once, :EffectivelyOnceOnWorkflow},
+          {tier.checkpoint != nil, :CheckpointOnWorkflow},
+          {tier.correction != nil, :CorrectionWindowOnWorkflow}
+        ],
+        do: {refusal, name}
   end
 
-  # What a class of one kind may not declare on the other kind's builder.
-  # `sync_durability` is a workflow knob: a stream class acknowledges at input
-  # rates, where a remote round trip per acknowledgement is not a guarantee it
-  # can keep, and this SDK's stream behaviour has no such callback — declaring
-  # one is an authoring error, not a knob nothing reads.
-  defp kind_facts(_module, :tasklets, _name), do: []
+  defp kind_facts(module, :stream, acc, name) do
+    sync =
+      if Tasklet.exports?(module, :sync_durability, 0) and module.sync_durability(),
+        do: [{:SyncDurabilityOnStream, name}],
+        else: []
 
-  defp kind_facts(module, _stream, name) do
-    if Tasklet.exports?(module, :sync_durability, 0) and module.sync_durability(),
-      do: [{:SyncDurabilityOnStream, name}],
-      else: []
+    sync ++ checkpoint_facts(acc, name) ++ correction_facts(acc, name)
   end
 
   # What the checkpoint policy refuses: a policy without the tier it holds the
@@ -679,6 +685,24 @@ defmodule Flezha.SDK.Topology do
       {ref, _module} -> {:ok, ref}
       nil -> {:error, :tasklet_not_found}
     end
+  end
+
+  @doc """
+  The retry ladder a node's Cells climb: what the edges into it declare, the
+  shared defaults where they are silent. A stream's Cells and a workflow
+  stage's both read it here, so the two kinds cannot climb different ladders.
+  """
+  @spec retry_ladder(t(), reference()) :: %{
+          retry_max: pos_integer(),
+          retry_backoff_ms: non_neg_integer()
+        }
+  def retry_ladder(%__MODULE__{node_knobs: knobs}, node_ref) do
+    declared = Map.get(knobs, node_ref, %{})
+
+    %{
+      retry_max: declared[:retry_max] || @default_retry_max,
+      retry_backoff_ms: declared[:retry_backoff_ms] || Knob.ladder(:sdk_retry).base
+    }
   end
 
   @doc false

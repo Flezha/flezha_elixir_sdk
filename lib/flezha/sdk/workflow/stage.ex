@@ -4,19 +4,20 @@ defmodule Flezha.SDK.Workflow.Stage do
   them, and how the driver learns the stage has finished.
 
   Every Cell here is an ordinary `Flezha.SDK.Cell` — the same process a
-  stream operative runs, with the same state, records, ladder and timers. Two
-  options are all that differ: the ladder comes from the class's
-  `retry_attempts`/`retry_backoff_ms` rather than from an edge's knobs, and an
-  exhausted ladder reports the failure instead of parking to the DLQ, because
-  a workflow answers a failed tasklet by unwinding rather than by shedding
-  the input.
+  stream operative runs, with the same state, records and ladder, bounded by
+  the consuming edge's `retry_max`/`retry_backoff_ms` as a stream's Cell is.
+  Two options are all that differ: an exhausted ladder reports the failure
+  instead of parking to the DLQ, because a workflow answers a failed tasklet by
+  unwinding rather than by shedding the input, and timers are unavailable, so a
+  timer call answers `{:error, :timers_unavailable}` and arms nothing until
+  timers fire inside a workflow.
 
   A stage is finished when every one of its Cells has drained past a
   barrier queued behind its batch. An invocation that emits nothing reports
   nothing, so counting outputs could never tell the driver a stage was done.
   """
 
-  alias Flezha.SDK.{Cell, Tasklet}
+  alias Flezha.SDK.{Cell, Tasklet, Topology}
   alias Flezha.SDK.Workflow.Spec
 
   @doc """
@@ -93,6 +94,7 @@ defmodule Flezha.SDK.Workflow.Stage do
   defp start_cell(%Spec{topology: topology, knobs: knobs}, node_ref, key, opts) do
     module = Map.fetch!(topology.node_modules, node_ref)
     operative_id = Keyword.fetch!(opts, :operative_id)
+    ladder = Topology.retry_ladder(topology, node_ref)
 
     {:ok, pid} =
       Cell.start(
@@ -105,15 +107,15 @@ defmodule Flezha.SDK.Workflow.Stage do
         cell_key: key,
         capacity: Tasklet.mailbox_capacity(module),
         policy: :drop_nothing,
-        retry_max: max(knobs.retry_attempts, 1),
-        retry_backoff_ms: knobs.retry_backoff_ms,
+        retry_max: ladder.retry_max,
+        retry_backoff_ms: ladder.retry_backoff_ms,
         park_on_exhaustion: false,
         counters: Keyword.fetch!(opts, :counters),
         secondaries: Keyword.get(opts, :secondaries, []),
         slots: Keyword.get(opts, :slots),
         credit: Keyword.get(opts, :credit),
         persistence_enabled: knobs.persistence_enabled,
-        ctx_opts: [runner: Keyword.get(opts, :runner)]
+        ctx_opts: [runner: Keyword.get(opts, :runner), timers: :unavailable]
       )
 
     pid

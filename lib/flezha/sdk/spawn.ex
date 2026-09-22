@@ -54,6 +54,7 @@ defmodule Flezha.SDK.Spawn do
           | {:error,
              {:already_running, String.t()}
              | {:factory_unknown, String.t()}
+             | {:factory_not_workflow, String.t()}
              | {:refused, String.t()}
              | :timeout
              | :unavailable}
@@ -168,9 +169,9 @@ defmodule Flezha.SDK.Spawn do
   end
 
   # As the reference maps a reply: an error is a refusal whatever the outcome
-  # says, a success carries the id the controller resolved, `already_running`
-  # and `factory_unknown` name the id they are about, and a word this SDK does
-  # not know is a refusal naming it.
+  # says, a success carries the id the controller resolved, `already_running`,
+  # `factory_unknown` and `factory_not_workflow` name the id they are about,
+  # and a word this SDK does not know is a refusal naming it.
   defp interpret(_spawn, reply, _error) when reply in [:timeout, :unavailable],
     do: {:error, reply}
 
@@ -183,6 +184,9 @@ defmodule Flezha.SDK.Spawn do
 
   defp interpret(spawn, {"factory_unknown", _id}, _error),
     do: {:error, {:factory_unknown, spawn.factory_id}}
+
+  defp interpret(spawn, {"factory_not_workflow", _id}, _error),
+    do: {:error, {:factory_not_workflow, spawn.factory_id}}
 
   defp interpret(_spawn, {other, _id}, _error),
     do: {:error, {:refused, "unknown outcome `#{other}`"}}

@@ -41,8 +41,7 @@ defmodule Flezha.SDK.Local do
     Operative,
     Spawn,
     Topology,
-    Transport,
-    WorkflowOperative
+    Transport
   }
 
   alias Flezha.SDK.Operative.Inbox
@@ -297,7 +296,7 @@ defmodule Flezha.SDK.Local do
   # declaration: a member's key-group range arrives with `AddOperative`, so a
   # local run is unpartitioned by construction.
   defp refuse_controller_only(module) do
-    if WorkflowOperative.structured?(module) do
+    if Flezha.SDK.operative_kind(module) == {:ok, :workflow} do
       needs_controller(
         inspect(module),
         "a workflow",

@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Workflow.SpecTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Ctx}
+  alias Flezha.SDK.{Channels, Ctx, Topology}
   alias Flezha.SDK.Workflow.Spec
 
   # --- fixtures ---
@@ -50,7 +50,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     @behaviour Flezha.SDK.WorkflowOperative
     def factory_id, do: "linear_workflow"
 
-    def tasklets(c) do
+    def channels(c) do
       c
       |> Channels.input("in")
       |> Channels.into(PassTask)
@@ -70,7 +70,6 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     assert spec.factory_id == "linear_workflow"
     assert spec.knobs.loop_mode == :once
     assert spec.knobs.rollback_mode == :all_or_nothing
-    assert spec.knobs.retry_attempts == 3
     assert spec.knobs.persistence_enabled
   end
 
@@ -101,7 +100,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
 
   # --- class-fact refusals ---
 
-  test "NoWorkflowBody: no tasklets/1" do
+  test "NoWorkflowBody: no channels/1" do
     defmodule Bodyless do
       def factory_id, do: "bodyless"
     end
@@ -120,36 +119,94 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule StopOnly do
       def factory_id, do: "stop_only"
       def self_terminating?, do: false
-      def tasklets(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
     defmodule StopOnlyCapped do
       def factory_id, do: "stop_only_capped"
       def self_terminating?, do: false
       def max_duration_ms, do: 5_000
-      def tasklets(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
     assert :ExternalStopOnly in issues(StopOnly)
     assert {:ok, _} = Spec.build(StopOnlyCapped)
   end
 
-  test "ZeroRetryBackoff — a ladder with a zero base" do
-    defmodule HotLadder do
-      def factory_id, do: "hot_ladder"
-      def retry_backoff_ms, do: 0
-      def tasklets(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+  test "InvalidMode — a hand-written mode outside its set is refused naming the value" do
+    defmodule ForeverLoop do
+      def factory_id, do: "forever_loop"
+      def loop_mode, do: :forever
+      def rollback_mode, do: :best_effort
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule FailFast do
-      def factory_id, do: "fail_fast"
-      def retry_backoff_ms, do: 0
-      def retry_attempts, do: 1
-      def tasklets(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    assert {:error, {:invalid_workflow, issues}} = Spec.build(ForeverLoop)
+    assert {:InvalidMode, "forever_loop", :loop_mode, :forever} in issues
+    assert {:InvalidMode, "forever_loop", :rollback_mode, :best_effort} in issues
+  end
+
+  # --- a setting of the other kind ---
+
+  # A workflow class writes the same builder a stream does, so what only a
+  # stream carries is refused by its own name, carried as the topology's.
+  defp kind_refusals(module) do
+    assert {:error, {:invalid_workflow, issues}} = Spec.build(module)
+    for {:Topology, issue} <- issues, do: elem(issue, 0)
+  end
+
+  test "the tier, a checkpoint setting and a correction window on a workflow are refused by name" do
+    defmodule TierWorkflow do
+      def factory_id, do: "tier_workflow"
+
+      def channels(c),
+        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert :ZeroRetryBackoff in issues(HotLadder)
-    assert {:ok, _} = Spec.build(FailFast), "a zero base is legal for fail-fast"
+    defmodule CheckpointWorkflow do
+      def factory_id, do: "checkpoint_workflow"
+
+      def channels(c),
+        do: c |> Channels.checkpoint_every(500) |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    defmodule CorrectionWorkflow do
+      def factory_id, do: "correction_workflow"
+
+      def channels(c),
+        do:
+          c
+          |> Channels.correction_window(60_000)
+          |> Channels.input("in")
+          |> Channels.into(TailTask)
+    end
+
+    assert kind_refusals(TierWorkflow) == [:EffectivelyOnceOnWorkflow]
+    # Judged as the workflow's own setting, not by the stream rule that needs the tier.
+    assert kind_refusals(CheckpointWorkflow) == [:CheckpointOnWorkflow]
+    assert kind_refusals(CorrectionWorkflow) == [:CorrectionWindowOnWorkflow]
+  end
+
+  test "synchronous durability on a stream is refused, and a stream keeps its tier" do
+    defmodule SyncStream do
+      @behaviour Flezha.SDK.StreamOperative
+      def factory_id, do: "sync_stream"
+      def sync_durability, do: true
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    defmodule TierStream do
+      @behaviour Flezha.SDK.StreamOperative
+      def factory_id, do: "tier_stream"
+
+      def channels(c),
+        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    assert {:error, {:invalid_topology, [{:SyncDurabilityOnStream, _}]}} =
+             Topology.build(SyncStream)
+
+    assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierStream)
   end
 
   # --- structural refusals ---
@@ -158,16 +215,16 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule NoEntry do
       def factory_id, do: "no_entry"
 
-      def tasklets(c) do
+      def channels(c) do
         c |> Channels.input("in") |> Channels.into(PassTask)
         :ok
       end
     end
 
-    # A class whose `tasklets/1` declares no channel at all.
+    # A class whose `channels/1` declares no channel at all.
     defmodule Empty do
       def factory_id, do: "empty"
-      def tasklets(_c), do: :ok
+      def channels(_c), do: :ok
     end
 
     assert :NoEntryChannel in issues(Empty)
@@ -178,7 +235,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule TwoRoots do
       def factory_id, do: "two_roots"
 
-      def tasklets(c) do
+      def channels(c) do
         s = Channels.input(c, "in")
         Channels.into(s, PassTask)
         Channels.into(s, TailTask)
@@ -194,7 +251,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule EntryMerge do
       def factory_id, do: "entry_merge"
 
-      def tasklets(c) do
+      def channels(c) do
         entry = Channels.input(c, "in")
         entry |> Channels.into(PassTask) |> Channels.into(TailTask)
         Channels.into(entry, TailTask)
@@ -213,7 +270,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule TwoChains do
       def factory_id, do: "two_chains"
 
-      def tasklets(c) do
+      def channels(c) do
         a = c |> Channels.input("a") |> Channels.into(PassTask)
         b = c |> Channels.input("b") |> Channels.into(TailTask)
         Channels.into(a, JoinTask)
@@ -237,7 +294,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule DynamicWorkflow do
       def factory_id, do: "dynamic_workflow"
 
-      def tasklets(c) do
+      def channels(c) do
         c
         |> Channels.input("in")
         |> Channels.into(PassTask)
@@ -253,7 +310,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule StaticWorkflow do
       def factory_id, do: "static_workflow"
 
-      def tasklets(c) do
+      def channels(c) do
         c |> Channels.input("in") |> Channels.into(StaticTask)
       end
     end
@@ -267,7 +324,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def factory_id, do: "branching_chain"
       def loop_mode, do: :chained
 
-      def tasklets(c) do
+      def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
         Channels.into(mid, TailTask)
         Channels.into(mid, OtherTailTask)
@@ -278,7 +335,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def factory_id, do: "converging_chain"
       def loop_mode, do: :chained
 
-      def tasklets(c) do
+      def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
         Channels.into(mid, TailTask)
       end
@@ -293,7 +350,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def factory_id, do: "branching_per_input"
       def loop_mode, do: :per_input
 
-      def tasklets(c) do
+      def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
         Channels.into(mid, TailTask)
         Channels.into(mid, OtherTailTask)
@@ -310,7 +367,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule BadTopology do
       def factory_id, do: "bad_topology"
 
-      def tasklets(c) do
+      def channels(c) do
         c |> Channels.input("in") |> Channels.key_by(& &1) |> Channels.into(StaticTask)
       end
     end
@@ -325,12 +382,22 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     defmodule ManyProblems do
       def factory_id, do: "many_problems"
       def self_terminating?, do: false
-      def retry_backoff_ms, do: 0
+    end
+
+    defmodule TieredStopOnly do
+      def factory_id, do: "tiered_stop_only"
+      def self_terminating?, do: false
+
+      def channels(c),
+        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
     end
 
     found = issues(ManyProblems)
     assert :NoWorkflowBody in found
     assert :ExternalStopOnly in found
-    assert :ZeroRetryBackoff in found
+
+    assert {:error, {:invalid_workflow, issues}} = Spec.build(TieredStopOnly)
+    assert {:ExternalStopOnly, "tiered_stop_only"} in issues
+    assert {:Topology, {:EffectivelyOnceOnWorkflow, inspect(TieredStopOnly)}} in issues
   end
 end

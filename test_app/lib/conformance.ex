@@ -101,12 +101,23 @@ defmodule ElixirRunner.Conformance.Row do
   @moduledoc false
   @behaviour Flezha.SDK.StreamOperative
 
-  # One class module for every interpreted row: the steps it declares are the
-  # row the interpreter is driving, so the class kind and the class flags a row
-  # reads off its module both come from the same context.
+  # The stream class every interpreted row of that kind registers: the steps it
+  # declares are the row the interpreter is driving, so the class flags a row
+  # reads off its module come from the same context.
   def factory_id, do: ElixirRunner.Conformance.context().topology
   def channels(c), do: ElixirRunner.Conformance.declare(c)
   def sync_durability, do: ElixirRunner.Conformance.context().sync_durability
+end
+
+defmodule ElixirRunner.Conformance.WorkflowRow do
+  @moduledoc false
+  @behaviour Flezha.SDK.WorkflowOperative
+
+  # The workflow class a `class.workflow` row registers, the same steps on the
+  # same builder: what it writes that a workflow does not carry is judged by
+  # the workflow's own registration.
+  def factory_id, do: ElixirRunner.Conformance.context().topology
+  def channels(c), do: ElixirRunner.Conformance.declare(c)
 end
 
 # The refusal table's `shorthand_duplicate_id` pair: a stream short form and a
@@ -137,7 +148,8 @@ defmodule ElixirRunner.Conformance do
   @moduledoc """
   The Elixir arm of the refusal table: every row of
   `test/fixtures/reference_topologies.txt` driven through
-  `Flezha.SDK.Channels` and judged by `Flezha.SDK.Topology.build/2`.
+  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2`, on a
+  stream class, or on a workflow class for a row that writes `class.workflow`.
 
   Two entry points, both in `ElixirRunner.Application`:
 
@@ -154,21 +166,22 @@ defmodule ElixirRunner.Conformance do
   with `persistence_enabled/0`.
   """
 
-  alias ElixirRunner.Conformance.Row
-  alias Flezha.SDK.{Channels, Topology}
+  alias ElixirRunner.Conformance.{Row, WorkflowRow}
+  alias Flezha.SDK.Channels
+  alias Flezha.SDK.Workflow.Spec
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
   @manifest "test/apps/elixir_runner/conformance.json"
 
   # Authorable in no builder — the fixture header says why for each.
-  @unauthorable ~w(detached raw_flags raw_class_flags)
+  @unauthorable ~w(detached raw_flags)
 
   # The two rows the fixture cites rather than re-spells: this app's own
   # fixtures, whose derived lines are the seven-column table at the top.
   @cited %{
-    "hybrid_channel" => {ElixirRunner.HybridChannelOp, :channels},
-    "commit_block_chain" => {ElixirRunner.Workflows.TierCommitBlockWorkflow, :tasklets}
+    "hybrid_channel" => ElixirRunner.HybridChannelOp,
+    "commit_block_chain" => ElixirRunner.Workflows.TierCommitBlockWorkflow
   }
 
   @default_mailbox_capacity 1024
@@ -209,14 +222,27 @@ defmodule ElixirRunner.Conformance do
   end
 
   defp register(row) do
-    {module, declare} = class_of(row)
+    module = class_of(row)
     put_context(row)
 
-    case Topology.build(module, declare) do
+    case registered(module) do
       {:ok, _topology} -> [module]
-      {:error, {:invalid_topology, issues}} -> die(rejection(row.topology, issues))
+      {:error, issues} -> die(rejection(row.topology, issues))
     end
   end
+
+  # The row's class through the registration a runner makes, which reads its
+  # kind and judges it as that kind; nothing connects. A workflow's verdict
+  # carries its topology inside its spec.
+  defp registered(module) do
+    case "conformance" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(module) do
+      %Flezha.SDK{classes: [{^module, class}]} -> {:ok, topology(class)}
+      {:error, {_invalid, issues}} when is_list(issues) -> {:error, issues}
+    end
+  end
+
+  defp topology(%Spec{topology: topology}), do: topology
+  defp topology(topology), do: topology
 
   defp rejection(topology, issues),
     do: "topology rejected [#{Enum.join(names(issues), ", ")}] declaring #{topology}"
@@ -251,23 +277,29 @@ defmodule ElixirRunner.Conformance do
   end
 
   defp built(row) do
-    {module, declare} = class_of(row)
+    module = class_of(row)
     put_context(row)
 
-    case Topology.build(module, declare) do
+    case registered(module) do
       {:ok, topology} ->
         %{
           "topology" => row.topology,
           "outcome" => "accepted",
-          "derived" => derived(topology, entry_order(module, declare))
+          "derived" => derived(topology, entry_order(module))
         }
 
-      {:error, {:invalid_topology, issues}} ->
+      {:error, issues} ->
         %{"topology" => row.topology, "outcome" => "refused", "names" => names(issues)}
     end
   end
 
-  defp class_of(row), do: Map.get(@cited, row.topology, {Row, :channels})
+  defp class_of(row) do
+    cond do
+      cited = @cited[row.topology] -> cited
+      "class.workflow" in steps(row) -> WorkflowRow
+      true -> Row
+    end
+  end
 
   # --- the §5 short form ---
   #
@@ -351,8 +383,12 @@ defmodule ElixirRunner.Conformance do
   end
 
   # The refusal names, read off the verdict as data: a refusal is a tagged
-  # tuple whose tag IS the reference's name.
-  defp names(issues), do: Enum.map(issues, &(&1 |> elem(0) |> Atom.to_string()))
+  # tuple whose tag IS the reference's name. A workflow carries a refusal its
+  # topology raised as `{:Topology, issue}`, which names the issue.
+  defp names(issues), do: Enum.map(issues, &name/1)
+
+  defp name({:Topology, issue}), do: name(issue)
+  defp name(issue), do: issue |> elem(0) |> Atom.to_string()
 
   # --- the derived declaration ---
 
@@ -401,9 +437,9 @@ defmodule ElixirRunner.Conformance do
 
   # The entry channels in declaration order. The compiled topology keeps them
   # in a map, so the record the builder wrote is what states their order.
-  defp entry_order(module, declare) do
+  defp entry_order(module) do
     c = Channels.new()
-    _ = apply(module, declare, [c])
+    _ = module.channels(c)
     c |> Channels.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
   end
 
@@ -484,6 +520,8 @@ defmodule ElixirRunner.Conformance do
   defp stream_link(other, _, _stream),
     do: raise("the fixture spells a link this interpreter does not map: #{other}")
 
+  # The kind is the class module's, which `class_of/1` chose from this flag.
+  defp class_flag("workflow", _value, acc), do: acc
   defp class_flag("persistent", _value, acc), do: acc
   defp class_flag("sync_durability", _value, acc), do: acc
 
@@ -534,8 +572,7 @@ defmodule ElixirRunner.Conformance do
   # The context is application environment rather than the process dictionary
   # because the boot path builds the topology in the SDK's own process.
   defp put_context(row) do
-    steps =
-      row.steps |> String.split(";") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+    steps = steps(row)
 
     Application.put_env(:elixir_runner, :conformance_row, %{
       topology: row.topology,
@@ -544,6 +581,9 @@ defmodule ElixirRunner.Conformance do
       sync_durability: "class.sync_durability" in steps
     })
   end
+
+  defp steps(row),
+    do: row.steps |> String.split(";") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
   defp mailboxes(steps) do
     for step <- steps,

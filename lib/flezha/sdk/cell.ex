@@ -724,8 +724,10 @@ defmodule Flezha.SDK.Cell do
   defp clock_now(%State{} = s, value), do: Clock.now(s, value)
   # The invocation's timer session opens over the live pending set; a firing's
   # opens on its own removal. A replayed input's spawn requests issue nothing.
+  # The static facts come first, so a workflow stage's `timers: :unavailable`
+  # stands over the pending set.
   defp ctx_opts(%State{} = s, item, replay),
-    do: [timers: s.timers.pending, firing: firing(item), replay: replay != nil] ++ s.ctx_opts
+    do: s.ctx_opts ++ [timers: s.timers.pending, firing: firing(item), replay: replay != nil]
 
   defp firing(%Fire{kind: kind, at: at}), do: {kind, at}
   defp firing(_value), do: nil
@@ -812,5 +814,10 @@ defmodule Flezha.SDK.Cell do
   defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp format_error(reason) when is_binary(reason), do: reason
+
+  # The ctx's timer refusal inside a workflow, under the name every SDK gives it.
+  defp format_error(:timers_unavailable),
+    do: "TimersUnavailable: a workflow tasklet cannot register or cancel a timer"
+
   defp format_error(reason), do: inspect(reason)
 end

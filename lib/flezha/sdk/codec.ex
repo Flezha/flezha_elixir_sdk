@@ -6,6 +6,8 @@ defmodule Flezha.SDK.Codec do
   """
 
   alias Flezha.SDK.Proto.RunnerCommands
+  alias Flezha.SDK.Topology
+  alias Flezha.SDK.Workflow.Spec
 
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
@@ -97,16 +99,31 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
-  @doc "Build the `UpdateFactories` command tuple from a list of `{id, description}`."
-  @spec update_factories_command([{String.t(), String.t() | nil}]) :: {atom(), struct()}
+  @doc "Build the `UpdateFactories` command tuple from a list of `{id, description, kind}`."
+  @spec update_factories_command([{String.t(), String.t() | nil, String.t()}]) ::
+          {atom(), struct()}
   def update_factories_command(factories) do
     decls =
-      Enum.map(factories, fn {id, desc} ->
-        %RunnerCommands.FactoryDecl{id: id, description: desc || "", sdk_lang: @sdk_lang}
+      Enum.map(factories, fn {id, desc, kind} ->
+        %RunnerCommands.FactoryDecl{
+          id: id,
+          description: desc || "",
+          sdk_lang: @sdk_lang,
+          kind: kind
+        }
       end)
 
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}
   end
+
+  @doc """
+  The kind a registered class is announced as. `Flezha.SDK.register_factory/2`
+  builds a workflow spec for a module of the workflow behaviour and a topology
+  for a stream, so the class it registered already states the kind.
+  """
+  @spec kind(Spec.t() | Topology.t()) :: String.t()
+  def kind(%Spec{}), do: "workflow"
+  def kind(%Topology{}), do: "stream"
 
   @doc """
   The `AdminRequest` command tuple: the verb, and its arguments as a JSON

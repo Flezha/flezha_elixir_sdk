@@ -11,8 +11,10 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{RunnerServer, Topology, WorkflowOperative}
+  alias Flezha.SDK.{Codec, RunnerServer, StreamOperative, Topology, WorkflowOperative}
   alias Flezha.SDK.Workflow.Spec
+
+  @kinds [{StreamOperative, :stream}, {WorkflowOperative, :workflow}]
 
   @enforce_keys [:namespace]
   defstruct namespace: nil, transport: :native, classes: [], server: nil
@@ -42,14 +44,12 @@ defmodule Flezha.SDK do
   @doc """
   Declare an operative of either kind. Legal before and after `start/1`.
 
-  The kind is read from the callbacks the module exports, never named by the
-  call: `channels/1` makes a stream, `tasklets/1` a workflow. A module
-  exporting both is refused `{:AmbiguousOperativeKind, module}` and one
-  exporting neither `{:UnknownOperativeKind, module}`.
+  The kind is read from the module, never named by the call; see
+  `operative_kind/1`. Both kinds write their graph in `channels/1`.
 
-  Both kinds ride the same declared set — the controller places by factory id
-  and learns the kind from the `AddOperative` it sends, not from the
-  advertisement — so the two share every downstream reader.
+  Both kinds ride the same declared set, and the runner announces each
+  entry's kind with its factory id, so the controller knows the kind before it
+  places and the two share every downstream reader.
   """
   @spec register_factory(result(), module()) :: result()
   def register_factory({:error, _} = e, _module), do: e
@@ -96,7 +96,9 @@ defmodule Flezha.SDK do
 
   def start(%__MODULE__{} = h) do
     topologies = Map.new(h.classes, fn {_m, t} -> {t.factory_id, t} end)
-    factories = Enum.map(h.classes, fn {m, t} -> {t.factory_id, description(m)} end)
+
+    factories =
+      Enum.map(h.classes, fn {m, t} -> {t.factory_id, description(m), Codec.kind(t)} end)
 
     opts = [
       namespace: h.namespace,
@@ -206,24 +208,29 @@ defmodule Flezha.SDK do
     end
   end
 
-  # --- helpers ---
+  @doc """
+  The kind `module` declares, read from its `@behaviour`, which the `use`
+  macros set and a hand-written module writes:
+  `Flezha.SDK.StreamOperative` is a stream, `Flezha.SDK.WorkflowOperative` a
+  workflow. A module declaring both is `{:AmbiguousOperativeKind, module}` and
+  one declaring neither `{:UnknownOperativeKind, module}`, the contract's names
+  (`docs/sdk/authoring_contract.md` §5.1).
+  """
+  @spec operative_kind(module()) :: {:ok, :stream | :workflow} | {:error, {atom(), module()}}
+  def operative_kind(module) do
+    declared = if Code.ensure_loaded?(module), do: behaviours(module), else: []
 
-  # The kind a module declares, read from the callbacks it exports. A module of
-  # both kinds, or of neither, cannot be placed and says so by the contract's
-  # name for it (`docs/sdk/authoring_contract.md` §5.1).
-  defp operative_kind(module) do
-    loaded = Code.ensure_loaded?(module) and function_exported?(module, :factory_id, 0)
-    stream? = loaded and function_exported?(module, :channels, 1)
-
-    workflow? = loaded and WorkflowOperative.structured?(module)
-
-    case {stream?, workflow?} do
-      {true, true} -> {:error, {:AmbiguousOperativeKind, module}}
-      {true, false} -> {:ok, :stream}
-      {false, true} -> {:ok, :workflow}
-      {false, false} -> {:error, {:UnknownOperativeKind, module}}
+    case for({behaviour, kind} <- @kinds, behaviour in declared, do: kind) do
+      [kind] -> {:ok, kind}
+      [] -> {:error, {:UnknownOperativeKind, module}}
+      _both -> {:error, {:AmbiguousOperativeKind, module}}
     end
   end
+
+  # --- helpers ---
+
+  defp behaviours(module),
+    do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
   defp build_class(:stream, module), do: Topology.build(module)
   defp build_class(:workflow, module), do: Spec.build(module)

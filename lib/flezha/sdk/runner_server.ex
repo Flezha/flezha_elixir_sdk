@@ -197,7 +197,7 @@ defmodule Flezha.SDK.RunnerServer do
       s = %{
         s
         | topologies: Map.put(s.topologies, fid, topology),
-          factories: s.factories ++ [{fid, nil}]
+          factories: s.factories ++ [{fid, nil, Codec.kind(topology)}]
       }
 
       ship_update_factories(s)
@@ -220,7 +220,7 @@ defmodule Flezha.SDK.RunnerServer do
         s = %{
           s
           | topologies: Map.delete(s.topologies, fid),
-            factories: Enum.reject(s.factories, fn {f, _} -> f == fid end)
+            factories: Enum.reject(s.factories, &(elem(&1, 0) == fid))
         }
 
         ship_update_factories(s)
@@ -696,8 +696,8 @@ defmodule Flezha.SDK.RunnerServer do
       "namespace" => namespace,
       "factory_ids" => Enum.map(factories, &elem(&1, 0)),
       "factories" =>
-        Enum.map(factories, fn {id, desc} ->
-          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang()}
+        Enum.map(factories, fn {id, desc, kind} ->
+          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang(), "kind" => kind}
         end),
       "stable_id" => stable_id
     }

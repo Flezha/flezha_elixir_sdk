@@ -13,10 +13,11 @@ defmodule Flezha.SDK.Declarations do
   A stream class declares the tier and its granularity when declared, and both
   correction keys whenever a window is — an undeclared beyond-window fate
   reaches the controller as the default rather than as an absence, as it does
-  in every other SDK. A workflow class declares the tier, synchronous
-  durability, the compensable positions (a rewind may only unwind those) and
-  the leaves, since the operative is done when every leaf has committed. The
-  cadence, the outputs posture and the delay stay SDK-side.
+  in every other SDK. A workflow class declares synchronous durability, the
+  compensable positions (a rewind may only unwind those) and the leaves, since
+  the operative is done when every leaf has committed; it carries no tier,
+  which registration refuses on it. The cadence, the outputs posture and the
+  delay stay SDK-side.
   """
 
   alias Flezha.SDK.{Tasklet, Topology}
@@ -46,7 +47,6 @@ defmodule Flezha.SDK.Declarations do
   def for(%Spec{} = spec) do
     %{}
     |> put_when(spec.knobs.sync_durability, "durability", "sync_remote")
-    |> put_when(spec.topology && spec.topology.effectively_once?, "effectively_once", "true")
     |> put_tasks("compensable_tasks", spec, &Tasklet.compensates?/1)
     |> put_tasks("leaf_tasks", spec, nil)
   end
