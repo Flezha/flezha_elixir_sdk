@@ -590,11 +590,47 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
+  # `static_cell_workflow`: a per-input loop whose one tasklet declares three
+  # static cells and routes every message to two of them; each cell that runs
+  # emits `<cell key>:<message>`, so one message yields exactly two outputs.
+  defmodule StaticCellStep do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "static_cell_step"
+    def init_state(_), do: nil
+    def cell_keys, do: ["a", "b", "c"]
+    def cells_for(_input), do: ["a", "b"]
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, "#{Ctx.cell_key(ctx)}:#{input}")
+      {:ok, state}
+    end
+  end
+
+  defmodule StaticCellWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "static_cell_workflow"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Workflows.StaticCellStep)
+      |> sink("out")
+    end
+  end
+
   @doc "The durable structured workflow classes this runner advertises."
   def all do
     [
       EchoWorkflow,
       WorkflowTimerRefused,
+      StaticCellWorkflow,
       TypedOnceWorkflow,
       CommitBlockWorkflow,
       SyncDurableWorkflow,

@@ -112,6 +112,7 @@
     "workflow": [
       "echo_workflow",
       "workflow_timer_refused",
+      "static_cell_workflow",
       "typed_once_workflow",
       "commit_block_workflow",
       "sync_durable_workflow",
