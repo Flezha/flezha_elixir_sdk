@@ -12,34 +12,19 @@ defmodule Flezha.SDK.Operative do
   the seq its dispatch started at with the emit ordinal, and the key. Routing
   is serialized here (per-Cell ordering); Cells dispatch concurrently.
 
-  A dynamic node's Cells are minted per key up to its `max_cells/0` and,
-  under a declared `cell_idle_ttl_ms/0`, swept by one `:reap` tick here:
-  the sweep runs in this process, so no push can be routed while it asks each
-  Cell whether it is idle — the drain gate — and an idle one evicts itself
-  destructively before the next push can mint its successor. Evicted keys are
-  remembered, bounded, so a live read can say "evicted" rather than "never
-  existed". What that Cell could not ship — the records it still held, then
-  its delete — it hands here on the way out, and a rebind replays those before
-  it rebinds the live Cells or replays its own outputs, so a dead Cell's
-  delete cannot arrive behind its replacement's first record.
+  Its Cells are the `Flezha.SDK.Operative.Cells` set, the one a workflow
+  driver holds too: minted per mode, capped, and swept by a `:reap` tick that
+  runs in this process, so no push can be routed while it runs. What an
+  evicted Cell could not ship — the records it still held, then its delete —
+  it hands here on the way out, and a rebind replays those before it rebinds
+  the live Cells or replays its own outputs, so a dead Cell's delete cannot
+  arrive behind its replacement's first record.
   """
 
   use GenServer
-  require Logger
 
-  alias Flezha.SDK.{
-    Call,
-    Counters,
-    Cell,
-    Hold,
-    KeyGroup,
-    Knob,
-    Park,
-    Tasklet,
-    Topology
-  }
-
-  alias Flezha.SDK.Operative.{Inbox, Routing}
+  alias Flezha.SDK.{Call, Cell, Hold, Park}
+  alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
 
   # What a router that will not answer tells its caller.
   @busy {:error, :operative_busy}
@@ -47,34 +32,13 @@ defmodule Flezha.SDK.Operative do
   # and the durable offset the controller stamped under the tier.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
 
-  # The identity slot a park with no resolved channel takes. A name off the
-  # wire never becomes a path component: the controller makes this slot a
-  # directory under the dead-letter root, and the name the frame asked for
-  # rides the row's `channel` field. `flz_core` spells it the same way.
-  # How long a sweep waits on one Cell's idle probe before moving on.
-  # `FLEZHA_REAP_INTERVAL_MS`, else a quarter of the shortest TTL, at most this.
-  # Evicted keys remembered; beyond it a key reads as never existed.
-  @evicted_trace_cap 1_024
-  # Evictions one sweep performs at most: the router is held while it runs,
-  # so a burst of expiries drains over a few ticks rather than stalling it.
-  @evict_budget 256
-
   defmodule State do
     @moduledoc false
     defstruct [
       :operative_id,
       :topology,
-      :range,
-      :counters,
-      :hold_cap,
       :runner,
-      :secondaries,
-      :slots,
-      :credit,
-      cells: %{},
-      dynamic: %{},
-      evicted: nil,
-      held: nil,
+      :cells,
       handed: nil
     ]
   end
@@ -119,120 +83,52 @@ defmodule Flezha.SDK.Operative do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    topology = Keyword.fetch!(opts, :topology)
     counters = Keyword.fetch!(opts, :counters)
     # The reconnect cap, resolved once: this Operative's holds and every
     # Cell's are bounded by one number the caller can state, rather than by
     # what the process-wide variable said at each separate construction.
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
 
-    state = %State{
-      operative_id: Keyword.fetch!(opts, :operative_id),
-      topology: topology,
-      range: Keyword.fetch!(opts, :range),
-      counters: counters,
-      hold_cap: hold_cap,
-      runner: Keyword.fetch!(opts, :runner),
-      secondaries: Keyword.fetch!(opts, :secondaries),
-      credit: Keyword.get(opts, :credit),
-      # The slot survives the Cell: what a persistent Cell last shipped,
-      # for the replacement of one killed untrappably.
-      slots: :ets.new(:flezha_sdk_slots, [:public, :set]),
-      dynamic: dynamic_knobs(topology),
-      # Outputs no stream will take, the frames a Cell that stopped handed
-      # on, and the keys a sweep evicted: one structure, three holds. The
-      # handoff cannot share `held`: it arrives after outputs it has to
-      # precede, and one FIFO cannot say that.
-      held: Hold.new(cap: hold_cap, counters: counters),
-      handed: Hold.new(cap: hold_cap, counters: counters),
-      evicted: Hold.new(cap: @evicted_trace_cap)
-    }
+    cells =
+      opts
+      |> Keyword.take([
+        :operative_id,
+        :topology,
+        :range,
+        :counters,
+        :runner,
+        :secondaries,
+        :credit
+      ])
+      |> Keyword.merge(kind: :stream, hold_cap: hold_cap)
+      |> Cells.new()
+      |> Cells.schedule_reap()
 
-    {:ok, state |> prewarm() |> schedule_reap()}
+    {:ok,
+     %State{
+       operative_id: Keyword.fetch!(opts, :operative_id),
+       topology: Keyword.fetch!(opts, :topology),
+       runner: Keyword.fetch!(opts, :runner),
+       cells: cells,
+       # The frames a Cell that stopped handed on. The handoff cannot share
+       # the Cells' output hold: it arrives after outputs it has to precede,
+       # and one FIFO cannot say that.
+       handed: Hold.new(cap: hold_cap, counters: counters)
+     }}
   end
-
-  # The dynamic nodes' knobs, read once: the cap, and the TTL when declared.
-  defp dynamic_knobs(topo) do
-    for {node_ref, :dynamic} <- topo.node_mode, into: %{} do
-      module = topo.node_modules[node_ref]
-
-      {node_ref, %{cap: Tasklet.max_cells(module), ttl_ms: Tasklet.cell_idle_ttl_ms(module)}}
-    end
-  end
-
-  # One tick for the whole operative, at the shortest TTL's cadence; no TTL, no tick.
-  defp schedule_reap(%State{dynamic: dynamic} = s) do
-    case for {_ref, %{ttl_ms: ttl}} <- dynamic, ttl != nil, do: ttl do
-      [] -> s
-      ttls -> Process.send_after(self(), :reap, reap_interval(Enum.min(ttls)))
-    end
-
-    s
-  end
-
-  defp reap_interval(ttl_ms),
-    do:
-      Knob.get(
-        :reap_interval_ms,
-        ttl_ms |> div(4) |> min(Knob.get(:sdk_max_reap_interval_ms)) |> max(1)
-      )
 
   @impl true
-  def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{topology: topo} = s) do
-    with {:ok, node_ref} <- Topology.node_of(topo, tasklet),
-         {:ok, slot_key} <- slot_key(s, node_ref, key) do
-      case {get_in(s.cells, [node_ref, slot_key]), materialise?} do
-        {nil, false} -> {:reply, {:error, missing(s, node_ref, slot_key)}, s}
-        {nil, true} -> materialise(s, node_ref, slot_key)
-        {pid, _} -> {:reply, {:ok, pid}, s}
-      end
-    else
-      {:error, _} = error -> {:reply, error, s}
-    end
+  def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{} = s) do
+    {reply, cells} = Cells.lookup(s.cells, tasklet, key, materialise?)
+    {:reply, reply, %{s | cells: cells}}
   end
 
-  def handle_call(:cells, _from, %State{topology: topo} = s) do
-    listing =
-      Enum.map(topo.order, fn node_ref ->
-        pids = s.cells |> Map.get(node_ref, %{}) |> Enum.sort()
-        {topo.node_modules[node_ref].name(), topo.node_mode[node_ref], pids}
-      end)
+  def handle_call(:cells, _from, %State{} = s), do: {:reply, Cells.listing(s.cells), s}
 
-    {:reply, listing, s}
-  end
-
-  # A restore's case: mint the key it names, unless the node is at its cap.
-  defp materialise(%State{} = s, node_ref, key) do
-    case ensure_cell(s, node_ref, key) do
-      {:capped, s} -> {:reply, {:error, :cell_capped}, s}
-      {pid, s} -> {:reply, {:ok, pid}, s}
-    end
-  end
-
-  # Evicted and never-existed serve the same absence; the diagnosis differs.
-  defp missing(%State{topology: topo} = s, node_ref, key) do
-    if topo.node_mode[node_ref] == :dynamic and Hold.member?(s.evicted, key),
-      do: :cell_evicted,
-      else: :cell_not_found
-  end
-
-  # Eagerly create Single (one) and owned Static cells; Dynamic ones are lazy.
-  defp prewarm(%State{topology: topo} = state) do
-    Enum.reduce(topo.node_mode, state, fn
-      {node_ref, :single}, acc ->
-        ensure_cell(acc, node_ref, nil) |> elem(1)
-
-      {node_ref, :static}, acc ->
-        module = topo.node_modules[node_ref]
-
-        Tasklet.cell_keys(module)
-        |> Enum.filter(&KeyGroup.owns?(acc.range, &1))
-        |> Enum.reduce(acc, fn key, a -> ensure_cell(a, node_ref, key) |> elem(1) end)
-
-      {_node_ref, :dynamic}, acc ->
-        acc
-    end)
-  end
+  # A restore frame landed. Its saga markers are a workflow's; a stream has
+  # no restore gate to count it toward.
+  def handle_call({:restore_landed, _identity, _intent, _done}, _from, %State{} = s),
+    do: {:reply, :ok, s}
 
   # The end of a replayed slice: a payload-less broadcast closing every Cell's
   # slice at once, because an input reaches ONE Cell by key and a marker
@@ -240,7 +136,7 @@ defmodule Flezha.SDK.Operative do
   # channel, so it is answered before any is resolved.
   @impl true
   def handle_cast({:input, _channel, _message, %{"flz.replay_end" => _}}, %State{} = s) do
-    for {_node_ref, keyed} <- s.cells, {_key, pid} <- keyed, do: send(pid, :end_replay_slice)
+    for pid <- Cells.pids(s.cells), do: send(pid, :end_replay_slice)
     {:noreply, s}
   end
 
@@ -287,44 +183,23 @@ defmodule Flezha.SDK.Operative do
     {:noreply, s}
   end
 
+  # A Cell died — forget it; it is recreated on that key's next input. A
+  # crash must not take the Operative down with it, and must not leave the
+  # key unroutable; the log is what makes a key crashing on every input
+  # visible instead of looking like silent inactivity. Monitored, not linked,
+  # so this process's own exit — `:normal` on `RemOperative` — ends every Cell
+  # through its monitor of this process. The Cell's `after` cannot run for an
+  # untrappable kill, so its in-flight slot is released there too.
   @impl true
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s) do
-    # A Cell died — forget it; it is recreated on that key's next input. A
-    # crash must not take the Operative down with it, and must not leave the
-    # key unroutable; the log is what makes a key crashing on every input
-    # visible instead of looking like silent inactivity. Monitored, not
-    # linked, so this process's own exit — `:normal` on `RemOperative` — ends
-    # every Cell through its monitor of this process.
-    dead = for {ref, keyed} <- s.cells, {key, ^pid} <- keyed, do: {ref, key}
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s),
+    do: {:noreply, %{s | cells: Cells.down(s.cells, pid, reason)}}
 
-    s =
-      Enum.reduce(dead, s, fn {node_ref, key}, acc ->
-        if reason not in [:normal, :shutdown] do
-          Logger.warning(
-            "[Flezha.SDK] cell crashed: operative=#{acc.operative_id} " <>
-              "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
-          )
-        end
-
-        # The Cell's `after` cannot run for an untrappable kill, so its
-        # in-flight slot is released here or it would report a stall forever.
-        acc |> forget_cell(node_ref, key) |> remint(node_ref, key, reason)
-      end)
-
-    {:noreply, s}
-  end
-
-  # Each Cell rebinds and replays its held records BEFORE this replays an
-  # output of the same dispatch, which is why the rebind is a call: a send only
-  # orders the mailbox, and the guarantee is about the order two processes
-  # write to the wire. What a stopped Cell handed on goes ahead of both: its
-  # delete has to reach the controller before a replacement's first record.
+  # What a stopped Cell handed on goes ahead of the Cells' own records and
+  # outputs: its delete has to reach the controller before a replacement's
+  # first record.
   def handle_info({:secondaries, secondaries}, %State{} = s) do
-    s = %{s | secondaries: secondaries}
-    s = %{s | handed: s |> wire(s.handed) |> Hold.replay()}
-    for {_ref, keyed} <- s.cells, {_key, pid} <- keyed, do: Cell.rebind(pid, secondaries)
-
-    {:noreply, %{s | held: s |> wire(s.held) |> Hold.replay()}}
+    s = %{s | handed: s.handed |> Hold.bind(secondaries) |> Hold.replay()}
+    {:noreply, %{s | cells: Cells.rebind(s.cells, secondaries)}}
   end
 
   # A Cell that stopped in an orderly way hands on what no stream would
@@ -341,59 +216,10 @@ defmodule Flezha.SDK.Operative do
   end
 
   # The sweep runs here, so no push is routed while it runs: the drain gate.
-  def handle_info(:reap, %State{} = s) do
-    {s, _left} =
-      Enum.reduce(s.dynamic, {s, @evict_budget}, fn
-        {node_ref, %{ttl_ms: ttl}}, {acc, left} when ttl != nil ->
-          reap_node(acc, node_ref, ttl, left)
-
-        _no_ttl, acc ->
-          acc
-      end)
-
-    {:noreply, schedule_reap(s)}
-  end
+  def handle_info(:reap, %State{} = s),
+    do: {:noreply, %{s | cells: s.cells |> Cells.reap(MapSet.new()) |> Cells.schedule_reap()}}
 
   def handle_info(_msg, s), do: {:noreply, s}
-
-  # A Single or Static Cell that crashed is minted again at once, as
-  # `prewarm/1` minted it: what its slot holds — armed timers above all — must
-  # not wait for an input. A dynamic one stays lazy, as its keys are.
-  defp remint(%State{topology: topo} = s, node_ref, key, reason) do
-    if reason in [:normal, :shutdown] or topo.node_mode[node_ref] == :dynamic,
-      do: s,
-      else: s |> ensure_cell(node_ref, key) |> elem(1)
-  end
-
-  # Two calls per Cell: a bounded probe that changes nothing, then — for one
-  # proved idle — the eviction, synchronous, so its delete is on the wire
-  # before any push can mint a successor on the same stream.
-  defp reap_node(%State{} = s, node_ref, ttl_ms, budget) do
-    s.cells
-    |> Map.get(node_ref, %{})
-    |> Enum.reduce({s, budget}, fn
-      _cell, {acc, 0} ->
-        {acc, 0}
-
-      {key, pid}, {acc, left} ->
-        if Cell.idle_for?(pid, ttl_ms, Knob.get(:sdk_idle_probe_ms)) and
-             Cell.evict(pid) == :evicted,
-           do: {note_evicted(forget_cell(acc, node_ref, key), key), left - 1},
-           else: {acc, left}
-    end)
-  end
-
-  defp note_evicted(%State{evicted: evicted} = s, key) do
-    dynamic_event(s, :evicted)
-    %{s | evicted: Hold.push(evicted, key)}
-  end
-
-  defp dynamic_event(%State{operative_id: oid}, event),
-    do:
-      :telemetry.execute([:flezha, :sdk, :dynamic], %{count: 1}, %{
-        operative_id: oid,
-        event: event
-      })
 
   # --- routing ---
 
@@ -430,7 +256,7 @@ defmodule Flezha.SDK.Operative do
   defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
     stamp_with = if route.keyed, do: {s.operative_id, s.topology.node_modules}
     {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
-    {emit_output(s, metadata, bytes), ordinal + 1}
+    {%{s | cells: Cells.emit_output(s.cells, metadata, bytes)}, ordinal + 1}
   end
 
   defp deliver(
@@ -469,179 +295,13 @@ defmodule Flezha.SDK.Operative do
         do: %Cell.Input{value: value, offset: emit.offset, replay: Map.get(emit, :replay)},
         else: value
 
-    case Map.fetch!(topo.node_mode, node_ref) do
-      :single ->
-        enqueue(s, node_ref, nil, item)
-
-      :static ->
-        module = topo.node_modules[node_ref]
-
-        Tasklet.cells_for(module, value)
-        |> Enum.filter(&KeyGroup.owns?(s.range, &1))
-        |> Enum.reduce(s, fn k, acc -> enqueue(acc, node_ref, k, item) end)
-
-      :dynamic ->
-        case KeyGroup.admit(s.range, key || "") do
-          :ok -> enqueue(s, node_ref, key, item)
-          {:error, reason} -> park_misroute(s, node_ref, value, reason)
-        end
-    end
-  end
-
-  # A `:drop_nothing` enqueue is a `GenServer.call`, so a Cell that died between
-  # the last input and this one takes the CALLER down — this Operative — unless
-  # the exit is caught. The `:DOWN` clause cannot be relied on to have run first:
-  # the input and the down message are two messages racing for the same mailbox.
-  # Catching it here is what makes "the key is routable again on its next
-  # input" true by construction rather than by ordering luck; the retry starts
-  # a fresh Cell, which is what the `:DOWN` clause would have arranged.
-  defp enqueue(%State{} = s, node_ref, key, value, retry? \\ true) do
-    case ensure_cell(s, node_ref, key) do
-      {:capped, s} -> s
-      {pid, s} -> push(s, pid, node_ref, key, value, retry?)
-    end
-  end
-
-  defp push(%State{} = s, pid, node_ref, key, value, retry?) do
-    case knob(s.topology, node_ref, :on_full, :drop_nothing) do
-      :drop_nothing -> Cell.enqueue_block(pid, value)
-      other -> Cell.enqueue_drop(pid, value, other)
-    end
-
-    s
-  catch
-    :exit, _reason when retry? ->
-      enqueue(forget_cell(s, node_ref, key), node_ref, key, value, false)
-  end
-
-  defp ensure_cell(%State{} = s, node_ref, key) do
-    keyed = Map.get(s.cells, node_ref, %{})
-
-    case Map.get(keyed, key) do
-      nil -> mint_cell(s, node_ref, key, keyed)
-      pid -> {pid, s}
-    end
-  end
-
-  # A dynamic node at its cap mints nothing for a new key: the shared core's
-  # best-effort cap — counted, never reported back to the controller.
-  defp mint_cell(%State{dynamic: dynamic} = s, node_ref, key, keyed) do
-    case Map.get(dynamic, node_ref) do
-      %{cap: cap} when map_size(keyed) >= cap ->
-        dynamic_event(s, :capped)
-        {:capped, s}
-
-      knobs ->
-        {:ok, pid} = start_cell(s, node_ref, key)
-        Process.monitor(pid)
-        if knobs, do: dynamic_event(s, :created)
-        {pid, %{s | cells: Map.put(s.cells, node_ref, Map.put(keyed, key, pid))}}
-    end
-  end
-
-  # Drop a dead Cell and release its in-flight slot. Idempotent with the
-  # `:DOWN` clause, which does the same for the down message that follows.
-  defp forget_cell(%State{} = s, node_ref, key) do
-    Counters.dispatch_finished(s.counters, Cell.identity(s.operative_id, node_ref, key))
-    %{s | cells: Map.update(s.cells, node_ref, %{}, &Map.delete(&1, key))}
-  end
-
-  defp start_cell(%State{topology: topo} = s, node_ref, key) do
-    module = topo.node_modules[node_ref]
-    ladder = Topology.retry_ladder(topo, node_ref)
-
-    Cell.start(
-      operative: self(),
-      operative_id: s.operative_id,
-      node_ref: node_ref,
-      node_name: topo.node_name[node_ref],
-      # The channel this Cell consumes from: what a park reports, matching
-      # the reference SDK.
-      input_channel: inbound_channel(topo, node_ref),
-      module: module,
-      cell_key: key,
-      capacity: Tasklet.mailbox_capacity(module),
-      policy: knob(topo, node_ref, :on_full, :drop_nothing),
-      retry_max: ladder.retry_max,
-      retry_backoff_ms: ladder.retry_backoff_ms,
-      counters: s.counters,
-      hold_cap: s.hold_cap,
-      secondaries: s.secondaries,
-      slots: s.slots,
-      credit: s.credit,
-      persistence_enabled: topo.persistence_enabled?,
-      tier: tier_facts(topo, node_ref),
-      ctx_opts: [runner: s.runner] ++ ctx_opts(topo, node_ref, key)
-    )
-  end
-
-  # What a Cell of this node needs to know about the tier: whether it is on,
-  # the checkpoint policy, the sink routes it captures its own outputs through
-  # — the router delivers a tier class's emits to nodes only — and whether it
-  # has an inter-tasklet edge at all.
-  defp tier_facts(topo, node_ref) do
-    routes = Map.get(topo.routes, {:node, node_ref}, [])
-
-    %{
-      on?: topo.effectively_once?,
-      checkpoint: topo.checkpoint,
-      sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
-      edges?: Enum.any?(routes, &match?(%{to: {:node, _}}, &1)),
-      correction: topo.correction
-    }
-  end
-
-  # The facts the ctx refuses on: this node's channel name, whether an output
-  # reaches a keyed sink, and whether such a sink leaves a keyless Cell no
-  # key to fall back on.
-  defp ctx_opts(topo, node_ref, key) do
-    keyed =
-      for %{to: {:sink, _}, keyed: true} = r <- Map.get(topo.routes, {:node, node_ref}, []), do: r
-
-    [
-      channel: topo.node_channel[node_ref],
-      keyed_sink?: keyed != [],
-      key_required?: key == nil and Enum.any?(keyed, &is_nil(&1.key_by))
-    ]
-  end
-
-  # The key a Cell is registered under for its node's mode: none for a
-  # Single node, a declared and owned one for a Static node, any owned key for
-  # a Dynamic node.
-  defp slot_key(%State{topology: topo} = s, node_ref, key) do
-    case Map.fetch!(topo.node_mode, node_ref) do
-      :single when key in [nil, ""] ->
-        {:ok, nil}
-
-      :static ->
-        if key in Tasklet.cell_keys(topo.node_modules[node_ref]) and
-             KeyGroup.owns?(s.range, key),
-           do: {:ok, key},
-           else: {:error, :cell_not_found}
-
-      :dynamic when is_binary(key) ->
-        if KeyGroup.owns?(s.range, key), do: {:ok, key}, else: {:error, :cell_not_found}
-
-      _ ->
-        {:error, :cell_not_found}
+    case Cells.deliver(s.cells, node_ref, value, key, item) do
+      {{:misroute, reason}, cells} -> park_misroute(%{s | cells: cells}, node_ref, value, reason)
+      {_keys, cells} -> %{s | cells: cells}
     end
   end
 
   # --- parking (entry-parse + partition mis-route) ---
-
-  # The channel a node consumes from — an entry channel by its own name, an
-  # inter-tasklet edge by the producing node's output name. A static
-  # topology fact: a node several channels feed reports the first route found.
-  defp inbound_channel(topo, node_ref) do
-    Enum.find_value(topo.routes, fn {source, routes} ->
-      if Enum.any?(routes, &(&1.to == {:node, node_ref})) do
-        case source do
-          {:entry, channel} -> channel
-          {:node, producer} -> topo.node_name[producer] || inspect(producer)
-        end
-      end
-    end)
-  end
 
   defp park_misroute(%State{} = s, node_ref, value, reason) do
     label = node_ref_label(s, node_ref)
@@ -649,26 +309,9 @@ defmodule Flezha.SDK.Operative do
     s
   end
 
-  # Sink outputs ride a secondary stream directly (no router hop). The controller
-  # routes io_out by payload-id = operative id, so any secondary carries it.
-  # An output no stream will take is held for the next bound one rather than
-  # lost: the caller cannot learn of a send-side loss, so nothing here may
-  # discard a frame in silence.
-  # A client stream signals congestion by withholding its write's reply, so the
-  # buffer never turns a frame away here; what does reach the class's held arm
-  # is a transport that is gone. The runner's close detection reconnects, and
-  # the rebind replays what was held.
-  defp emit_output(%State{operative_id: oid} = s, meta, bytes) do
-    {_verdict, held} = Hold.write({:output, oid}, wire(s, s.held), {bytes, meta})
-    %{s | held: held}
-  end
-
   # The hold, on the streams bound right now. `secondaries` is the one source
   # of truth for what is bound, so no hold can hold a stale stream.
-  defp wire(%State{secondaries: secondaries}, hold), do: Hold.bind(hold, secondaries)
-
-  defp knob(topo, node_ref, key, default),
-    do: get_in(topo.node_knobs, [node_ref, key]) || default
+  defp wire(%State{cells: cells}, hold), do: Hold.bind(hold, cells.secondaries)
 
   defp node_ref_label(%State{topology: topo}, node_ref),
     do: topo.node_name[node_ref] || inspect(node_ref)

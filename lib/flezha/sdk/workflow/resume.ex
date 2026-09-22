@@ -58,7 +58,7 @@ defmodule Flezha.SDK.Workflow.Resume do
           struct(),
           String.t(),
           Instance.Item.t() | nil,
-          (term(), reference(), [term()] -> [term()])
+          (term(), reference(), [term()] -> [{term(), String.t() | nil}])
         ) :: map()
   def start(%{instance: %Instance{journal: journal}} = state, channel, message, through_edge) do
     dag = state.spec.dag
@@ -102,7 +102,8 @@ defmodule Flezha.SDK.Workflow.Resume do
   defp root_batch(channel, root, _journal, %Instance.Item{payload: payload}, through_edge),
     do: through_edge.({:entry, channel}, root, [payload])
 
-  defp root_batch(_channel, _root, journal, nil, _through_edge), do: carry(journal)
+  defp root_batch(_channel, _root, journal, nil, _through_edge),
+    do: Enum.map(carry(journal), &{&1, nil})
 
   # What every committed producer of `node` released, each through its own
   # edge — the same application the live pass made.
@@ -142,6 +143,22 @@ defmodule Flezha.SDK.Workflow.Resume do
         task_idx = Map.fetch!(dag.pos, node),
         MapSet.member?(committed, task_idx),
         do: %{node_ref: node, task_idx: task_idx, cells: cells_ran(state, task_idx)}
+  end
+
+  @doc """
+  The tasklets a pending rewind unwinds, as stage records in the order they
+  committed, each carrying the iteration it committed in.
+  """
+  @spec rewind_stages(struct()) :: [map()]
+  def rewind_stages(%{instance: %Instance{journal: nil}}), do: []
+
+  def rewind_stages(%{instance: %Instance{journal: journal}} = state) do
+    node_at = Map.new(state.spec.dag.pos, fn {node, task_idx} -> {task_idx, node} end)
+
+    for %{task_idx: task_idx, iter: iter, cells_ran: cells} <- journal.rewind_undo,
+        node = node_at[task_idx],
+        node != nil,
+        do: %{node_ref: node, task_idx: task_idx, iter: iter, cells: cells}
   end
 
   # What the skipped committed tasklets of the resumed iteration asked for:

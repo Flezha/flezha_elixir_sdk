@@ -1,123 +1,52 @@
 defmodule Flezha.SDK.Workflow.Stage do
   @moduledoc """
-  One stage of a workflow chain: its Cells, how a batch is split across
-  them, and how the driver learns the stage has finished.
+  One stage of a workflow chain: how its batch reaches its Cells, and how the
+  driver learns the stage has finished.
 
-  Every Cell here is an ordinary `Flezha.SDK.Cell` — the same process a
-  stream operative runs, with the same state, records and ladder, bounded by
-  the consuming edge's `retry_max`/`retry_backoff_ms` as a stream's Cell is.
-  Two options are all that differ: an exhausted ladder reports the failure
-  instead of parking to the DLQ, because a workflow answers a failed tasklet by
-  unwinding rather than by shedding the input, and timers are unavailable, so a
-  timer call answers `{:error, :timers_unavailable}` and arms nothing until
-  timers fire inside a workflow.
+  Every Cell here is one of the stream operative's, held through
+  `Flezha.SDK.Operative.Cells`, with the same state, records and ladder,
+  bounded by the consuming edge's `retry_max`/`retry_backoff_ms` as a stream's
+  Cell is. A value reaches its Cells by the same per-mode target resolution
+  the stream operative routes with: the one Cell of a Single node, the keys
+  `cells_for/1` names on a Static one, the Cell of its edge's key on a Dynamic
+  one, minted on first sight up to the node's cap.
 
-  A stage is finished when every one of its Cells has drained past a
-  barrier queued behind its batch. An invocation that emits nothing reports
+  A stage is finished when every Cell it handed a value to has drained past a
+  barrier queued behind its values. An invocation that emits nothing reports
   nothing, so counting outputs could never tell the driver a stage was done.
   """
 
-  alias Flezha.SDK.{Cell, Tasklet, Topology}
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Cell
+  alias Flezha.SDK.Operative.Cells
 
   @doc """
-  Build every stage's Cells, in DAG order. They exist before anything runs
-  so a `RestoreInitState` frame arriving right after the `AddOperative` ack
-  always finds its Cell registered.
+  Hand `batch` — `{value, key}` pairs, the key the edge gave each value — to
+  the stage's Cells and queue one barrier behind each Cell that received one.
+  Answers the keys of those Cells in the order they were first reached, the
+  `{ref, node_ref}` pairs the driver waits on, and the Cell set.
   """
-  @spec build_all(Spec.t(), keyword()) :: %{reference() => [pid()]}
-  def build_all(%Spec{} = spec, opts) do
-    Map.new(spec.dag.order, fn node_ref ->
-      pids =
-        spec
-        |> Spec.stage_keys(node_ref)
-        |> Enum.map(&start_cell(spec, node_ref, &1, opts))
+  @spec dispatch(Cells.t(), reference(), [{term(), String.t() | nil}], pid()) ::
+          {[String.t() | nil], [{reference(), reference()}], Cells.t()}
+  def dispatch(%Cells{} = cells, node_ref, batch, reply_to) do
+    {reached, cells} =
+      Enum.reduce(batch, {[], cells}, fn {value, key}, {reached, cells} ->
+        case Cells.deliver(cells, node_ref, value, key, value) do
+          {{:misroute, _reason}, cells} -> {reached, cells}
+          {keys, cells} -> {reached ++ keys, cells}
+        end
+      end)
 
-      {node_ref, pids}
-    end)
-  end
+    # The Cell a key holds now, which a push that re-minted a dead one changed.
+    keyed = Map.get(cells.cells, node_ref, %{})
+    reached = for key <- Enum.uniq(reached), Map.has_key?(keyed, key), do: key
 
-  @doc """
-  Hand `batch` to a stage's Cells and queue a barrier behind each. Answers
-  `{ref, node_ref}` pairs the driver waits on: the stage is finished when the
-  last of them has replied.
-  """
-  @spec dispatch(Spec.t(), reference(), [pid()], [term()], pid()) :: [{reference(), reference()}]
-  def dispatch(%Spec{} = spec, node_ref, pids, batch, reply_to) do
-    partitions = partition(spec, node_ref, batch)
+    awaiting =
+      Enum.map(reached, fn key ->
+        ref = make_ref()
+        Cell.barrier(Map.fetch!(keyed, key), ref, reply_to)
+        {ref, node_ref}
+      end)
 
-    pids
-    |> Enum.with_index()
-    |> Enum.map(fn {pid, index} ->
-      Enum.each(Map.get(partitions, index, []), &Cell.enqueue_block(pid, &1))
-      ref = make_ref()
-      Cell.barrier(pid, ref, reply_to)
-      {ref, node_ref}
-    end)
-  end
-
-  @doc """
-  Split `batch` across a stage's Cells by slot index: everything to slot 0
-  in Single mode, by `cells_for/1` in Static mode. A value naming a key the
-  stage does not declare reaches nothing, as it does on the stream path.
-  """
-  @spec partition(Spec.t(), reference(), [term()]) :: %{non_neg_integer() => [term()]}
-  def partition(%Spec{} = spec, node_ref, batch) do
-    keys = Spec.stage_keys(spec, node_ref)
-
-    Enum.reduce(batch, %{}, fn value, acc ->
-      spec
-      |> slots_for(node_ref, keys, value)
-      |> Enum.reduce(acc, fn slot, acc -> Map.update(acc, slot, [value], &(&1 ++ [value])) end)
-    end)
-  end
-
-  @doc "The slot `key` is registered in, or 0 when the stage has one Cell."
-  @spec index_of(Spec.t(), reference(), String.t() | nil) :: non_neg_integer()
-  def index_of(%Spec{} = spec, node_ref, key),
-    do: spec |> Spec.stage_keys(node_ref) |> Enum.find_index(&(&1 == key)) |> Kernel.||(0)
-
-  defp slots_for(%Spec{topology: topology}, node_ref, keys, value) do
-    case Map.fetch!(topology.node_mode, node_ref) do
-      :static ->
-        topology.node_modules
-        |> Map.fetch!(node_ref)
-        |> Tasklet.cells_for(value)
-        |> Enum.map(&Enum.find_index(keys, fn k -> k == &1 end))
-        |> Enum.reject(&is_nil/1)
-
-      _single ->
-        [0]
-    end
-  end
-
-  defp start_cell(%Spec{topology: topology, knobs: knobs}, node_ref, key, opts) do
-    module = Map.fetch!(topology.node_modules, node_ref)
-    operative_id = Keyword.fetch!(opts, :operative_id)
-    ladder = Topology.retry_ladder(topology, node_ref)
-
-    {:ok, pid} =
-      Cell.start(
-        operative: Keyword.fetch!(opts, :operative),
-        operative_id: operative_id,
-        node_ref: node_ref,
-        node_name: topology.node_name[node_ref],
-        input_channel: topology.node_channel[node_ref],
-        module: module,
-        cell_key: key,
-        capacity: Tasklet.mailbox_capacity(module),
-        policy: :drop_nothing,
-        retry_max: ladder.retry_max,
-        retry_backoff_ms: ladder.retry_backoff_ms,
-        park_on_exhaustion: false,
-        counters: Keyword.fetch!(opts, :counters),
-        secondaries: Keyword.get(opts, :secondaries, []),
-        slots: Keyword.get(opts, :slots),
-        credit: Keyword.get(opts, :credit),
-        persistence_enabled: knobs.persistence_enabled,
-        ctx_opts: [runner: Keyword.get(opts, :runner), timers: :unavailable]
-      )
-
-    pid
+    {reached, awaiting, cells}
   end
 end

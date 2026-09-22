@@ -39,9 +39,9 @@ defmodule Flezha.SDK.CallBoundsTest do
     def init(:ok), do: {:ok, :ok}
   end
 
-  # Answers a lookup and nothing else: the compensation-marker call is made
-  # only after a lookup succeeds, so the one site that needs a half-wedged
-  # target gets one.
+  # Answers a lookup, as an operative, and a restore, as the Cell it found,
+  # and nothing else: the call that counts a landed restore is made only
+  # after both, so the one site that needs a half-wedged target gets one.
   defmodule LookupOnly do
     @moduledoc false
     use GenServer
@@ -54,6 +54,9 @@ defmodule Flezha.SDK.CallBoundsTest do
     @impl true
     def handle_call({:lookup, _tasklet, _key, _materialise}, _from, s),
       do: {:reply, {:ok, self()}, s}
+
+    def handle_call({:restore, _header, _snapshot, _log, terminal}, _from, s),
+      do: {:reply, {:ok, terminal, false}, s}
 
     def handle_call(_other, _from, s), do: {:noreply, s}
   end
@@ -80,13 +83,10 @@ defmodule Flezha.SDK.CallBoundsTest do
         end)
 
       assert answers == %{
-               commands_markers:
+               commands_landed:
                  {:answered,
                   {"error",
-                   [
-                     "restore_init_state: cell_busy: the operative did not take the " <>
-                       "compensation markers"
-                   ]}},
+                   ["restore_init_state: cell_busy: the operative did not take the restore"]}},
                credit_session: {:answered, nil},
                cell_apply_state: {:answered, {:error, "cell_busy: the Cell did not answer"}},
                cell_evict: {:answered, :busy},
@@ -183,7 +183,7 @@ defmodule Flezha.SDK.CallBoundsTest do
       {:cell_apply_state, fn -> Cell.apply_state(w, %{}) end},
       {:cell_idle_for, fn -> Cell.idle_for?(w, 1, 100) end},
       {:cell_evict, fn -> Cell.evict(w) end},
-      {:commands_markers, fn -> restore_with_markers(lookup_only) end}
+      {:commands_landed, fn -> restore_landed(lookup_only) end}
     ]
   end
 
@@ -195,9 +195,10 @@ defmodule Flezha.SDK.CallBoundsTest do
     ]
   end
 
-  # The compensation markers ride a restore, so the site is driven through the
-  # command that makes it; the response the controller would read is the answer.
-  defp restore_with_markers(op) do
+  # A landed restore is counted by the command that folds it, so the site is
+  # driven through that command; the response the controller would read is
+  # the answer.
+  defp restore_landed(op) do
     me = self()
     cell_id = Wire.encode_cell_id("op-1", "task", "k")
 

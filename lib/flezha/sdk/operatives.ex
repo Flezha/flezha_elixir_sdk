@@ -42,7 +42,7 @@ defmodule Flezha.SDK.Operatives do
       # this id must agree: a mismatch would drive a stream topology through
       # the workflow driver, or the reverse, and neither has the other's shape.
       kind == "workflow" ->
-        start_workflow(s, add, topo)
+        start_workflow(s, add, topo, range)
 
       match?(%Spec{}, topo) ->
         {:error, "factory #{add.factory_id} is a workflow class; kind was #{inspect(kind)}", s}
@@ -84,11 +84,12 @@ defmodule Flezha.SDK.Operatives do
     registered(s, add, op_pid, topo)
   end
 
-  defp start_workflow(s, add, %Spec{} = spec) do
+  defp start_workflow(s, add, %Spec{} = spec, range) do
     {:ok, pid} =
       Driver.start_link(
         operative_id: add.operative_id,
         spec: spec,
+        range: range,
         journal: Codec.journal_facts(add.task_journal),
         owed_inbox: add.inbox_tail_count || 0,
         resume_cell_count: add.resume_cell_count || 0,
@@ -101,7 +102,7 @@ defmodule Flezha.SDK.Operatives do
     registered(s, add, pid, spec)
   end
 
-  defp start_workflow(s, add, _topology),
+  defp start_workflow(s, add, _topology, _range),
     do: {:error, "factory #{add.factory_id} is a stream class; kind was \"workflow\"", s}
 
   # A started instance of either kind is registered, takes its `init_values`

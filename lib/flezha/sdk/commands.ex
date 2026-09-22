@@ -26,7 +26,7 @@ defmodule Flezha.SDK.Commands do
   @whole %{tasklet: nil, cell_key: nil}
   # One refusal, and each surface adds the prefix its siblings carry.
   @router_silent "cell_busy: the operative did not answer"
-  @marker_silent "cell_busy: the operative did not take the compensation markers"
+  @marker_silent "cell_busy: the operative did not take the restore"
 
   @typedoc "How a command answers: status, errors, raw_data, the reply frame's metadata."
   @type respond :: (String.t(), [String.t()], binary(), map() -> any())
@@ -37,13 +37,8 @@ defmodule Flezha.SDK.Commands do
     off_loop(respond, fn ->
       case cell(s, cmd.cell_id, materialise: true) do
         {:ok, pid} ->
-          case note_compensation(s, cmd) do
-            :ok ->
-              restore(pid, cmd, respond)
-
-            {:error, reason} ->
-              respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
-          end
+          answer = restore(pid, cmd)
+          land(s, cmd, respond, answer)
 
         {:error, :bad_cell_id} ->
           respond.("error", ["restore_init_state: malformed cell_id"], response(cmd, 0), %{})
@@ -53,10 +48,11 @@ defmodule Flezha.SDK.Commands do
         {:error, :operative_busy} ->
           respond.("error", ["restore_init_state: " <> @router_silent], response(cmd, 0), %{})
 
-        # No live Cell to rebuild: the controller's terminal covers what it
-        # shipped, and the ack is what lets the bind proceed.
+        # No Cell to rebuild — a tasklet the class dropped, a key its cap
+        # refuses: the controller's terminal covers what it shipped, and the
+        # ack is what lets the bind proceed.
         {:error, _absent} ->
-          respond.("success", [], response(cmd, cmd.terminal_seq), %{})
+          land(s, cmd, respond, {"success", [], response(cmd, cmd.terminal_seq)})
       end
     end)
   end
@@ -191,7 +187,7 @@ defmodule Flezha.SDK.Commands do
 
   # --- restore, compaction ---
 
-  defp restore(pid, cmd, respond) do
+  defp restore(pid, cmd) do
     case Cell.restore(
            pid,
            cmd.snapshot_header,
@@ -200,46 +196,41 @@ defmodule Flezha.SDK.Commands do
            cmd.terminal_seq
          ) do
       {:ok, terminal, migrated} ->
-        respond.(
-          "success",
-          [],
-          Codec.encode_restore_response(cmd.cell_id, terminal, migrated),
-          %{}
-        )
+        {"success", [], Codec.encode_restore_response(cmd.cell_id, terminal, migrated)}
 
       {:error, reason} ->
-        respond.("error", ["restore_init_state: #{reason}"], response(cmd, 0), %{})
+        {"error", ["restore_init_state: #{reason}"], response(cmd, 0)}
     end
   end
 
-  # The saga markers the controller persisted for this Cell ride the restore
-  # frame: `intent` that its tasklet completed forward and may need undo,
-  # `done` that its compensation already ran. They are instance-scoped, so
-  # they go to the operative rather than to the Cell — a workflow driver
-  # reads them to finish an unwind the crash interrupted, and a stream
-  # operative ignores the cast.
-  defp note_compensation(s, cmd) do
+  # The frame has landed, whether or not a Cell took it: the operative counts
+  # it toward a workflow's restore gate, so a frame no Cell takes never holds
+  # the gate, and takes the saga markers the controller persisted for the
+  # Cell — `intent` that its tasklet completed forward and may need undo,
+  # `done` that its compensation already ran. A call, not a cast: the driver
+  # decides whether to resume an unwind when the last frame lands, and a
+  # marker racing that decision would let a crash mid-rollback resume forward
+  # instead. An operative that will not take it fails the restore, so the
+  # Controller retries rather than resuming from a record that never landed.
+  defp land(s, cmd, respond, {status, errors, raw}) do
     intent = Map.get(cmd, :has_compensation_intent, false)
     done = Map.get(cmd, :has_compensation_done, false)
-    if intent or done, do: ship_markers(s, cmd, intent, done), else: :ok
-  end
 
-  defp ship_markers(s, cmd, intent, done) do
-    with {:ok, {operative_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
-         {:ok, op} <- operative(s, operative_id) do
-      # A call, not a cast: the driver decides whether to resume an unwind when
-      # the last restore lands, and a marker racing that decision would let a
-      # crash mid-rollback resume forward instead. Only a workflow class ever
-      # gets here — both flags are always false for a stream operative. A driver
-      # that will not take the markers fails the restore, so the Controller
-      # retries rather than resuming an unwind from a record that never landed.
-      Call.control(
-        op,
-        {:compensation_markers, cmd.cell_id, intent, done},
-        {:error, @marker_silent}
-      )
-    else
-      _unaddressable -> :ok
+    landed =
+      with {:ok, {operative_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
+           {:ok, op} <- operative(s, operative_id) do
+        Call.control(op, {:restore_landed, cmd.cell_id, intent, done}, {:error, @marker_silent})
+      else
+        # No operative to count it: nothing waits on this frame.
+        _unaddressable -> :ok
+      end
+
+    case landed do
+      :ok ->
+        respond.(status, errors, raw, %{})
+
+      {:error, reason} ->
+        respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
     end
   end
 

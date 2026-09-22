@@ -280,11 +280,6 @@ defmodule Flezha.SDK.Cell do
   def handle_call({:restore, header, snapshot, log, hint}, _from, %State{} = s) do
     case Records.restore(s, header, snapshot, log, hint) do
       {:ok, s, terminal, migrated} ->
-        # A workflow driver holds its first tasklet until every Cell the
-        # bind owes has been rebuilt, so a resumed run reads persisted state
-        # instead of cold-starting. A stream Operative has nothing to hold and
-        # ignores this.
-        send(s.operative, {:restored, self()})
         {:reply, {:ok, terminal, migrated}, Clock.rearm(Tier.cancel_deadline(s))}
 
       {:error, reason} ->

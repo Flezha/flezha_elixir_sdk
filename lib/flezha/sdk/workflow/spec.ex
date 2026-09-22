@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Workflow.Spec do
   does, so its topology is compiled by `Flezha.SDK.Topology.build/2`, which
   also refuses the stream's settings on it, and only the refusals a
   *bounded* graph adds are decided here: an entry channel to arrive on,
-  acyclic, reachable, no dynamic cells, and a chained loop whose every chain
+  acyclic, reachable, and a chained loop whose every chain
   converges on one terminal. Each entry channel roots a chain (the nodes it
   feeds and everything reachable from them), and a message runs only the chain
   of the channel it arrived on.
@@ -27,7 +27,7 @@ defmodule Flezha.SDK.Workflow.Spec do
   once — and reported as `{:error, {:invalid_workflow, issues}}`.
   """
 
-  alias Flezha.SDK.{Graph, Park, Tasklet, Topology, WorkflowOperative}
+  alias Flezha.SDK.{Graph, Tasklet, Topology, WorkflowOperative}
 
   @enforce_keys [:factory_id, :module]
   defstruct factory_id: nil,
@@ -104,7 +104,6 @@ defmodule Flezha.SDK.Workflow.Spec do
     issues =
       []
       |> check_entry(factory_id, topo)
-      |> check_dynamic_cells(factory_id, topo)
       |> check_chained_loop(factory_id, dag, knobs)
 
     {dag, issues}
@@ -114,13 +113,6 @@ defmodule Flezha.SDK.Workflow.Spec do
   # has nothing its messages could arrive on.
   defp check_entry(is, factory_id, topo) do
     if map_size(topo.entries) == 0, do: [{:NoEntryChannel, factory_id} | is], else: is
-  end
-
-  defp check_dynamic_cells(is, factory_id, topo) do
-    Enum.reduce(topo.node_mode, is, fn
-      {ref, :dynamic}, is -> [{:DynamicCells, factory_id, node_label(topo, ref)} | is]
-      {_ref, _mode}, is -> is
-    end)
   end
 
   # Iteration N+1 of a handoff-chained loop is seeded from iteration N's
@@ -153,33 +145,6 @@ defmodule Flezha.SDK.Workflow.Spec do
         (value = Map.fetch!(knobs, knob)) not in allowed,
         reduce: is,
         do: (is -> [{:InvalidMode, factory_id, knob, value} | is])
-  end
-
-  @doc """
-  The keys a stage's Cells are registered under, in the order they are
-  built: one `nil` for a Single node, the declared keyset for a Static one.
-  """
-  @spec stage_keys(t(), reference()) :: [String.t() | nil]
-  def stage_keys(%__MODULE__{topology: topology}, node_ref) do
-    case Map.fetch!(topology.node_mode, node_ref) do
-      :static -> topology.node_modules |> Map.fetch!(node_ref) |> Tasklet.cell_keys()
-      _single -> [nil]
-    end
-  end
-
-  @doc "The wire identity of one Cell of a stage."
-  @spec cell_identity(t(), String.t(), reference(), String.t() | nil) :: binary()
-  def cell_identity(%__MODULE__{topology: topology}, operative_id, node_ref, key) do
-    name = Map.fetch!(topology.node_modules, node_ref).name()
-    Park.identity(operative_id, name, key || "")
-  end
-
-  @doc "The wire identities of a stage's Cells, in the same order as `stage_keys/2`."
-  @spec cell_identities(t(), String.t(), reference()) :: [binary()]
-  def cell_identities(%__MODULE__{} = spec, operative_id, node_ref) do
-    spec
-    |> stage_keys(node_ref)
-    |> Enum.map(&cell_identity(spec, operative_id, node_ref, &1))
   end
 
   @doc "The tasklet a node runs, by the name it declares."
@@ -227,13 +192,6 @@ defmodule Flezha.SDK.Workflow.Spec do
     if MapSet.member?(seen, ref),
       do: reachable(children, rest, seen),
       else: reachable(children, Map.fetch!(children, ref) ++ rest, MapSet.put(seen, ref))
-  end
-
-  # How a refusal names a node: the name the author gave it, else the
-  # tasklet's own. `tasklet_name/2` is the other rule — what `name/0`
-  # answers, which is what a running failure is reported against.
-  defp node_label(topo, ref) do
-    Map.get(topo.node_name, ref) || Map.fetch!(topo.node_modules, ref).name()
   end
 
   defp mod_name(module), do: inspect(module)

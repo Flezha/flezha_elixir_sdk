@@ -147,6 +147,7 @@ defmodule ElixirRunner.Workflows do
   defstep(DiamA, "diam_a")
   defstep(DiamB1, "diam_b1")
   defstep(RetryA, "retry_a", compensate: Ctx.emit(ctx, "undone"))
+  defstep(KeyedCommit, "keyed_commit", compensate: :ok)
 
   defstep(UndoOutboxA, "undo_outbox_a",
     compensate:
@@ -166,6 +167,26 @@ defmodule ElixirRunner.Workflows do
       Gate.block_until_released()
       {:ok, state}
     end
+  end
+
+  defmodule KeySplit do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "key_split"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      input |> String.split(",") |> Enum.each(&Ctx.emit(ctx, &1))
+      {:ok, state}
+    end
+  end
+
+  defmodule KeyedFail do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "keyed_fail"
+    def init_state(_), do: nil
+    def run(_input, _state, _ctx), do: {:error, {:non_retryable, "keyed_fail always fails"}}
   end
 
   defmodule SagaC do
@@ -450,6 +471,46 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
+  # The entry's comma-separated key list is split into one value per key, and
+  # a `key_by` on that value mints one Cell per key of a durable compensable
+  # tasklet that declares no keys; each Cell commits one idempotent change.
+  # The third tasklet blocks until the release env, or fails.
+  def keyed_commits(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("in")
+    |> into(ElixirRunner.Workflows.KeySplit)
+    |> named("keys")
+    |> key_by(& &1)
+    |> into(ElixirRunner.Workflows.KeyedCommit)
+    |> named("committed")
+  end
+
+  defmodule KeyedBlockWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "keyed_block_workflow"
+
+    def channels(c),
+      do:
+        c
+        |> ElixirRunner.Workflows.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Workflows.BlockB)
+  end
+
+  defmodule KeyedSagaWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "keyed_saga_workflow"
+
+    def channels(c),
+      do:
+        c
+        |> ElixirRunner.Workflows.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Workflows.KeyedFail)
+  end
+
   defmodule OutboxBlockWorkflow do
     @moduledoc false
     @behaviour Flezha.SDK.WorkflowOperative
@@ -637,6 +698,8 @@ defmodule ElixirRunner.Workflows do
       OptOutCommitBlockWorkflow,
       TierCommitBlockWorkflow,
       SagaBlockWorkflow,
+      KeyedBlockWorkflow,
+      KeyedSagaWorkflow,
       OutboxBlockWorkflow,
       UndoOutboxWorkflow,
       BranchWorkflow,

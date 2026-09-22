@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Workflow.DriverTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Codec, Counters, Ctx, Spawn}
+  alias Flezha.SDK.{Channels, Codec, Commands, Counters, Ctx, Operative, Park, Spawn}
   alias Flezha.SDK.Operative.Inbox
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Workflow.{Driver, Resume, Spec}
@@ -989,7 +989,16 @@ defmodule Flezha.SDK.Workflow.DriverTest do
         ]
       })
 
-    messages = drive(ClosingLoop, operative_id: "wf-resume", journal: journal, park_idle_ms: 0)
+    # The controller re-forwards the interrupted pass's message, and the bind
+    # says so: without the owed count the loop could park before it lands.
+    messages =
+      drive(ClosingLoop,
+        operative_id: "wf-resume",
+        journal: journal,
+        park_idle_ms: 0,
+        owed_inbox: 1
+      )
+
     assert for(c <- commits(messages), do: c.task_idx) == [1]
     assert [%{iter: 1, completes: true, result: "turns:1"}] = iter_commits(messages)
     refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
@@ -1009,5 +1018,266 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     messages = collect_all()
     assert Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
     refute Enum.any?(messages, &match?({:shipped, {:workflow_completed, _}}, &1))
+  end
+
+  # --- keyed tasklets ---
+
+  defmodule Splitter do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "splitter"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      input |> String.split(",") |> Enum.each(&Ctx.emit(ctx, &1))
+      {:ok, state}
+    end
+  end
+
+  # Keyed by the edge into it: emits `<key>:<item>`, reports its undo.
+  defmodule KeyedUndo do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "keyed_undo"
+    def init_state(_), do: nil
+    def cell_idle_ttl_ms, do: 20
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, Ctx.cell_key(ctx) <> ":" <> input)
+      {:ok, state}
+    end
+
+    def compensate(_outputs, state, ctx) do
+      send(:workflow_driver_test_collector, {:undone_key, name(), Ctx.cell_key(ctx)})
+      {:ok, state}
+    end
+  end
+
+  defmodule KeyedPlain do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "keyed_plain"
+    def init_state(_), do: nil
+    def cell_idle_ttl_ms, do: 20
+
+    def run(input, state, _ctx) do
+      send(:workflow_driver_test_collector, {:plain_ran, input})
+      {:ok, state}
+    end
+  end
+
+  # Holds its pass until the test releases it.
+  defmodule Blocker do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "blocker"
+    def init_state(_), do: nil
+
+    def run(_input, state, _ctx) do
+      send(:workflow_driver_test_collector, {:blocking, self()})
+
+      receive do
+        :release -> {:ok, state}
+      end
+    end
+  end
+
+  # Two static Cells of which `cells_for` names one, and it emits nothing.
+  defmodule Silent do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "silent"
+    def cell_keys, do: ["a", "b"]
+    def cells_for(_value), do: ["a"]
+    def init_state(_), do: nil
+    def run(_input, state, _ctx), do: {:ok, state}
+
+    def compensate(_outputs, state, ctx) do
+      send(:workflow_driver_test_collector, {:undone_key, name(), Ctx.cell_key(ctx)})
+      {:ok, state}
+    end
+  end
+
+  defp keyed(c), do: c |> Channels.input("in") |> Channels.into(Splitter) |> Channels.key_by(& &1)
+
+  defmodule KeyedFlow do
+    def factory_id, do: "keyed_flow"
+
+    def channels(c),
+      do: c |> Flezha.SDK.Workflow.DriverTest.keyed_entry() |> Channels.into(KeyedUndo)
+  end
+
+  defmodule KeyedSagaFlow do
+    def factory_id, do: "keyed_saga_flow"
+
+    def channels(c) do
+      c
+      |> Flezha.SDK.Workflow.DriverTest.keyed_entry()
+      |> Channels.into(KeyedUndo)
+      |> Channels.into(Boom)
+    end
+  end
+
+  defmodule KeyedBlockFlow do
+    def factory_id, do: "keyed_block_flow"
+    def persistence_enabled, do: false
+
+    def channels(c) do
+      c
+      |> Flezha.SDK.Workflow.DriverTest.keyed_entry()
+      |> Channels.into(KeyedUndo)
+      |> Channels.into(Blocker)
+    end
+  end
+
+  defmodule SilentFlow do
+    def factory_id, do: "silent_flow"
+
+    def channels(c) do
+      entry = Channels.input(c, "in")
+      Channels.into(entry, Silent)
+      entry |> Channels.into(Tagger) |> Channels.into(Boom)
+    end
+  end
+
+  # A per-message loop that journals nothing, so it waits for its next
+  # message instead of parking: a keyed compensable stage, then a keyed
+  # hookless one.
+  defp keyed_loop(c) do
+    c
+    |> keyed_entry()
+    |> Channels.into(KeyedUndo)
+    |> Channels.key_by(& &1)
+    |> Channels.into(KeyedPlain)
+  end
+
+  def keyed_entry(c), do: keyed(c)
+  def keyed_loop_channels(c), do: keyed_loop(c)
+
+  defmodule KeyedLoopAllOrNothing do
+    def factory_id, do: "keyed_loop_aon"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def persistence_enabled, do: false
+    def channels(c), do: Flezha.SDK.Workflow.DriverTest.keyed_loop_channels(c)
+  end
+
+  defmodule KeyedLoopKeepProgress do
+    def factory_id, do: "keyed_loop_kp"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :keep_progress
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def persistence_enabled, do: false
+    def channels(c), do: Flezha.SDK.Workflow.DriverTest.keyed_loop_channels(c)
+  end
+
+  defp identity(operative_id, tasklet, key), do: Park.identity(operative_id, tasklet, key)
+
+  test "a keyed stage mints a Cell per key on dispatch, and its commit names each once" do
+    messages = drive(KeyedFlow, operative_id: "wf-keyed", message: "a,b,a")
+    assert %{status: "ok"} = completion(messages)
+    assert [_split, keyed] = commits(messages)
+
+    assert Enum.sort(keyed.cells_ran) ==
+             Enum.map(~w(a b), &identity("wf-keyed", "keyed_undo", &1))
+
+    assert keyed.handoff |> Enum.map(&Resume.decode(&1.payload)) |> Enum.sort() ==
+             ["a:a", "a:a", "b:b"],
+           "the second value keyed `a` reached the Cell the first one minted"
+  end
+
+  test "a keyed stage is undone once per key" do
+    messages = drive(KeyedSagaFlow, operative_id: "wf-keyed-saga", message: "a,b,c")
+    assert %{status: "error"} = completion(messages)
+    assert Enum.sort(for {:undone_key, "keyed_undo", key} <- messages, do: key) == ~w(a b c)
+  end
+
+  test "a Cell that emitted nothing is recorded and undone; one that received nothing is neither" do
+    messages = drive(SilentFlow, operative_id: "wf-silent")
+    assert %{status: "error"} = completion(messages)
+    ran = for c <- commits(messages), not c.compensating, id <- c.cells_ran, do: id
+    assert identity("wf-silent", "silent", "a") in ran
+    refute identity("wf-silent", "silent", "b") in ran
+    assert for({:undone_key, "silent", key} <- messages, do: key) == ["a"]
+  end
+
+  test "a keyed Cell is swept only between passes, and all-or-nothing keeps what it could undo" do
+    for {class, id, kept} <- [
+          {KeyedLoopAllOrNothing, "wf-sweep-aon", true},
+          {KeyedLoopKeepProgress, "wf-sweep-kp", false}
+        ] do
+      driver = start_loop(class, operative_id: id)
+      Inbox.input(driver, "in", "a", %{})
+      assert_receive {:plain_ran, "a:a"}, 5_000
+      # Several TTLs and sweep ticks with the loop waiting for its next message.
+      Process.sleep(200)
+
+      assert match?({:ok, _}, Operative.lookup(driver, "keyed_undo", "a")) == kept,
+             "#{id}: the compensable keyed Cell"
+
+      assert Operative.lookup(driver, "keyed_plain", "a:a") == {:error, :cell_evicted},
+             "#{id}: the hookless keyed Cell"
+
+      Driver.stop_workflow(driver)
+      assert %{status: "cancelled"} = completion(drain())
+      Process.unregister(:workflow_driver_test_collector)
+    end
+  end
+
+  test "no keyed Cell is swept while a pass runs" do
+    test = self()
+    handler = "wf-sweep-block-#{inspect(test)}"
+
+    :telemetry.attach(
+      handler,
+      [:flezha, :sdk, :dynamic],
+      fn _event, _measure, %{operative_id: oid, event: event}, _ ->
+        if oid == "wf-sweep-block", do: send(test, {:dynamic, event})
+      end,
+      nil
+    )
+
+    driver = start_driver(KeyedBlockFlow, operative_id: "wf-sweep-block")
+    Inbox.input(driver, nil, "a", %{})
+    assert_receive {:blocking, blocker}, 5_000
+    # The keyed Cell sits idle past its TTL, and sweep ticks queue up, while
+    # the last stage runs.
+    Process.sleep(200)
+    send(blocker, :release)
+    messages = drain()
+    :telemetry.detach(handler)
+    assert %{status: "ok"} = completion(messages)
+    assert {:dynamic, :created} in messages
+    refute {:dynamic, :evicted} in messages
+  end
+
+  test "every restore frame the bind owed opens the gate, whether or not a Cell took it" do
+    driver = start_driver(KeyedFlow, operative_id: "wf-gate", resume_cell_count: 2)
+    s = %{operatives: %{"wf-gate" => {driver, "keyed_flow"}}}
+    test = self()
+
+    for {tasklet, key} <- [{"keyed_undo", "k"}, {"a_tasklet_the_class_dropped", ""}] do
+      cmd = %{
+        cell_id: identity("wf-gate", tasklet, key),
+        snapshot_header: <<>>,
+        snapshot_bytes: <<>>,
+        change_log_bytes: <<>>,
+        terminal_seq: 3,
+        has_compensation_intent: false,
+        has_compensation_done: false
+      }
+
+      Commands.dispatch(
+        :restore_init_state,
+        cmd,
+        fn status, _, _, _ -> send(test, {:restore, status}) end,
+        s
+      )
+
+      assert_receive {:restore, _status}, 2_000
+    end
+
+    assert {:ok, _} = Operative.lookup(driver, "keyed_undo", "k"),
+           "the frame minted its keyed Cell"
+
+    Inbox.input(driver, nil, "a", %{})
+    assert %{status: "ok"} = completion(drain())
   end
 end

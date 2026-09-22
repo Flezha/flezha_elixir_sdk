@@ -290,7 +290,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     assert length(spec.dag.parents[join]) == 2
   end
 
-  test "DynamicCells — a keyed edge into a keyless tasklet" do
+  test "a keyed edge into a keyless tasklet makes it dynamic, as a stream's" do
     defmodule DynamicWorkflow do
       def factory_id, do: "dynamic_workflow"
 
@@ -303,7 +303,9 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       end
     end
 
-    assert :DynamicCells in issues(DynamicWorkflow)
+    assert {:ok, spec} = Spec.build(DynamicWorkflow)
+    tail = Enum.find(spec.dag.order, &(spec.topology.node_modules[&1] == TailTask))
+    assert spec.topology.node_mode[tail] == :dynamic
   end
 
   test "a static-mode tasklet is not a dynamic one" do
