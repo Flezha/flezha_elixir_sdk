@@ -69,10 +69,11 @@ defmodule Flezha.SDK.Workflow.Commit do
   def resend(runner, driver, ref, command), do: barrier(runner, driver, ref, command)
 
   @doc """
-  Ship `IterPark`: the loop found its inbox empty at a committed boundary and
-  tears its run down WITHOUT a terminal frame, which is not an outcome. The
-  controller releases every input-log offset up to `consumed_offset`, the last
-  message the run parked unread (`nil` when it parked none).
+  Ship `IterPark`: an instance of either kind asks to sleep (a loop that found
+  its inbox empty at a committed boundary, a stream at iteration `0`) WITHOUT a
+  terminal frame, which is not an outcome. The controller releases every
+  input-log offset up to `consumed_offset`, the last message the run parked
+  unread (`nil` when it parked none).
   """
   @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer() | nil) ::
           :ok

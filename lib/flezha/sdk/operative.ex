@@ -19,12 +19,18 @@ defmodule Flezha.SDK.Operative do
   it hands here on the way out, and a rebind replays those before it rebinds
   the live Cells or replays its own outputs, so a dead Cell's delete cannot
   arrive behind its replacement's first record.
+
+  A class that sleeps arms one idle timer at bind. When it fires, the owed
+  input tail still awaited or a Cell active inside the window re-arms it; with
+  every Cell quiet past the window the instance ships `IterPark` at iteration
+  `0`, and the controller evicts it.
   """
 
   use GenServer
 
-  alias Flezha.SDK.{Call, Cell, Hold, Park}
+  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park}
   alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
+  alias Flezha.SDK.Workflow.Commit
 
   # What a router that will not answer tells its caller.
   @busy {:error, :operative_busy}
@@ -39,7 +45,12 @@ defmodule Flezha.SDK.Operative do
       :topology,
       :runner,
       :cells,
-      handed: nil
+      handed: nil,
+      # The sleep: the input tail the bind still owes, when it bound, and the
+      # armed idle timer's ref (`nil` once it asked to sleep).
+      owed: 0,
+      bound_at: 0,
+      idle: nil
     ]
   end
 
@@ -104,17 +115,20 @@ defmodule Flezha.SDK.Operative do
       |> Cells.new()
       |> Cells.schedule_reap()
 
-    {:ok,
-     %State{
-       operative_id: Keyword.fetch!(opts, :operative_id),
-       topology: Keyword.fetch!(opts, :topology),
-       runner: Keyword.fetch!(opts, :runner),
-       cells: cells,
-       # The frames a Cell that stopped handed on. The handoff cannot share
-       # the Cells' output hold: it arrives after outputs it has to precede,
-       # and one FIFO cannot say that.
-       handed: Hold.new(cap: hold_cap, counters: counters)
-     }}
+    s = %State{
+      operative_id: Keyword.fetch!(opts, :operative_id),
+      topology: Keyword.fetch!(opts, :topology),
+      runner: Keyword.fetch!(opts, :runner),
+      cells: cells,
+      # The frames a Cell that stopped handed on. The handoff cannot share
+      # the Cells' output hold: it arrives after outputs it has to precede,
+      # and one FIFO cannot say that.
+      handed: Hold.new(cap: hold_cap, counters: counters),
+      owed: Keyword.get(opts, :owed_inbox, 0),
+      bound_at: now_ms()
+    }
+
+    {:ok, if(s.topology.sleep_when_idle?, do: arm_idle(s, Knob.get(:park_idle_ms)), else: s)}
   end
 
   @impl true
@@ -141,6 +155,8 @@ defmodule Flezha.SDK.Operative do
   end
 
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
+    s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
+
     case Inbox.enter(s.runner, s.operative_id, s.topology, channel, message) do
       {:ok, channel, value} ->
         {offset, replay} = frame_facts(s.topology, metadata)
@@ -219,7 +235,56 @@ defmodule Flezha.SDK.Operative do
   def handle_info(:reap, %State{} = s),
     do: {:noreply, %{s | cells: s.cells |> Cells.reap(MapSet.new()) |> Cells.schedule_reap()}}
 
+  def handle_info({:idle, ref}, %State{idle: ref} = s), do: {:noreply, idle_due(s)}
+
   def handle_info(_msg, s), do: {:noreply, s}
+
+  # --- sleeping ---
+
+  defp arm_idle(%State{} = s, after_ms) do
+    ref = make_ref()
+    Process.send_after(self(), {:idle, ref}, max(after_ms, 1))
+    %{s | idle: ref}
+  end
+
+  # The owed tail bounds the wait for itself; a Cell busy or active inside the
+  # window re-arms; every Cell quiet past it sleeps the instance.
+  defp idle_due(%State{} = s) do
+    window = Knob.get(:park_idle_ms)
+    now = now_ms()
+    owed_left = Knob.get(:sdk_owed_inbox_wait_ms) - (now - s.bound_at)
+
+    with :sleep <-
+           if(s.owed > 0 and owed_left > 0, do: {:wait, min(window, owed_left)}, else: :sleep),
+         {:quiet, latest} <- quiet_since(s),
+         quiet_for = now - latest,
+         :sleep <- if(quiet_for < window, do: {:wait, window - quiet_for}, else: :sleep) do
+      Commit.park(s.runner, s.operative_id, 0, 0, nil)
+      %{s | idle: nil}
+    else
+      {:wait, after_ms} -> arm_idle(s, after_ms)
+      :busy -> arm_idle(s, window)
+    end
+  end
+
+  # The latest input of any Cell, the bind when none came later, or `:busy`
+  # when one still holds work.
+  defp quiet_since(%State{cells: cells, bound_at: bound_at}) do
+    probe_ms = Knob.get(:sdk_idle_probe_ms)
+
+    Enum.reduce_while(Cells.pids(cells), {:quiet, bound_at}, fn pid, {:quiet, latest} ->
+      case Cell.quiet_since(pid, probe_ms) do
+        {:quiet, at} -> {:cont, {:quiet, max(latest, at)}}
+        :busy -> {:halt, :busy}
+      end
+    end)
+  end
+
+  # A journaled input the controller re-forwarded or forwarded: stamped with
+  # its input-log offset.
+  defp owed_arrival?(metadata), do: is_map(metadata) and Map.has_key?(metadata, "flz.offset")
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   # --- routing ---
 

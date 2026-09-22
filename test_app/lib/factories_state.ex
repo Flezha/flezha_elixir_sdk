@@ -135,6 +135,42 @@ defmodule ElixirRunner.PersistenceOffCounterOp do
   end
 end
 
+# -- sleeping_counter -------------------------------------------------------
+
+# A stream that sleeps when idle: `key:delta` inputs fold into one total per
+# key, and every input emits `key=total` on the `totals` sink.
+defmodule ElixirRunner.SleepingCounterTask do
+  @moduledoc false
+  @behaviour Flezha.SDK.Tasklet
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "sleeping_counter_tasklet"
+  defdelegate init_state(key), to: ElixirRunner.CounterTask
+  defdelegate apply_change(state, change), to: ElixirRunner.CounterTask
+  defdelegate state_from_json(json), to: ElixirRunner.CounterTask
+
+  def run(input, s, ctx) do
+    [key | rest] = input |> to_string() |> String.split(":", parts: 2)
+    s = Ctx.apply(ctx, s, {:delta, ElixirRunner.Numbers.int(Enum.join(rest))})
+    Ctx.emit(ctx, "#{key}=#{s.value}")
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.SleepingCounterOp do
+  @moduledoc false
+  use Flezha.SDK.StreamOperative, factory_id: "sleeping_counter", sleep_when_idle: true
+
+  def channels(c) do
+    c
+    |> input("input")
+    |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
+    |> into(ElixirRunner.SleepingCounterTask)
+    |> sink("totals")
+  end
+end
+
 # -- coalescing_counter -----------------------------------------------------
 
 defmodule ElixirRunner.TickEntryTask do
@@ -512,6 +548,7 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.StoreInputOp,
       ElixirRunner.StatefulCounterOp,
       ElixirRunner.PersistenceOffCounterOp,
+      ElixirRunner.SleepingCounterOp,
       ElixirRunner.CoalescingCounterOp,
       ElixirRunner.ResumeProbeOp,
       ElixirRunner.SchemaEvolutionV1Op,

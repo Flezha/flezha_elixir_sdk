@@ -165,6 +165,15 @@ defmodule Flezha.SDK.Cell do
     do: Call.cell(pid, {:idle?, ttl_ms}, timeout: timeout, log: false, on_error: false)
 
   @doc """
+  `{:quiet, last_input_ms}` when the Cell holds no work, no record it could
+  not ship and no pending timer; `:busy` otherwise, and for a probe that times
+  out. An instance that sleeps asks it of every Cell.
+  """
+  @spec quiet_since(pid(), timeout()) :: {:quiet, integer()} | :busy
+  def quiet_since(pid, timeout),
+    do: Call.cell(pid, :quiet_since, timeout: timeout, log: false, on_error: :busy)
+
+  @doc """
   Evict a Cell the caller proved idle: it ships `delete_cell_state` when
   it persists, drops its slot so a successor is a cold start, and stops. What
   no stream would take goes to the Operative before the reply, so the caller
@@ -299,12 +308,12 @@ defmodule Flezha.SDK.Cell do
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.task_state, s.change_seq}, s}
 
-  def handle_call({:idle?, ttl_ms}, _from, %State{} = s) do
-    idle? =
-      s.size == 0 and not s.processing? and not s.park.held? and :queue.is_empty(s.waiters) and
-        now_ms() - s.last_input_ms > ttl_ms
+  def handle_call({:idle?, ttl_ms}, _from, %State{} = s),
+    do: {:reply, holds_nothing?(s) and now_ms() - s.last_input_ms > ttl_ms, s}
 
-    {:reply, idle?, s}
+  def handle_call(:quiet_since, _from, %State{} = s) do
+    quiet? = holds_nothing?(s) and s.stream.n == 0 and Timers.empty?(s.timers.pending)
+    {:reply, if(quiet?, do: {:quiet, s.last_input_ms}, else: :busy), s}
   end
 
   def handle_call(:evict, _from, %State{} = s) do
@@ -807,6 +816,10 @@ defmodule Flezha.SDK.Cell do
   end
 
   defp now_ms, do: System.monotonic_time(:millisecond)
+
+  # No queued item, no dispatch in flight, no park held, no deferred push.
+  defp holds_nothing?(%State{} = s),
+    do: s.size == 0 and not s.processing? and not s.park.held? and :queue.is_empty(s.waiters)
 
   defp format_error(reason) when is_binary(reason), do: reason
 

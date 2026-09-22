@@ -4,16 +4,19 @@ defmodule Flezha.SDK.StreamOperative do
   this behaviour's zero-arity callbacks from its options and imports the channel
   builder. The callbacks: a `factory_id/0` the controller places by, a
   `channels/1` the author writes, which authors the topology on the builder
-  token, an optional human `description/0`, and an optional
+  token, an optional human `description/0`, an optional
   `persistence_enabled/0` (default `true`, the Rust `PERSISTENCE_ENABLED`):
   `false` advances every changeful Cell's record seq and ships nothing, so a
-  class toggled back on later never hands the controller a seq it already saw.
+  class toggled back on later never hands the controller a seq it already saw,
+  and an optional `sleep_when_idle/0` (default `false`): an instance idle for
+  `FLEZHA_PARK_IDLE_MS` sleeps and wakes on its next message with its Cells
+  restored, which needs persistence on (`SleepWithoutPersistence` otherwise).
   """
 
   alias Flezha.SDK.Tasklet
 
   # The scalar settings `use` takes, each named after the callback it defines.
-  @use_options [:description, :persistence_enabled]
+  @use_options [:description, :persistence_enabled, :sleep_when_idle]
 
   @doc """
   Write a stream operative as a declaration rather than as one-line callbacks.
@@ -25,8 +28,8 @@ defmodule Flezha.SDK.StreamOperative do
         c |> input("trades") |> into(Candle) |> sink("candles")
       end
 
-  `factory_id` is required; `description` and `persistence_enabled` are
-  optional, and **only the options written define anything**, so a default
+  `factory_id` is required; `description`, `persistence_enabled` and
+  `sleep_when_idle` are optional, and **only the options written define anything**, so a default
   stays where `function_exported?` resolves it. `channels/1` takes arguments
   and stays a `def` the author writes. An unknown option is a `CompileError`
   naming it.
@@ -66,8 +69,9 @@ defmodule Flezha.SDK.StreamOperative do
   @callback channels(Flezha.SDK.Channels.t()) :: any()
   @callback description() :: String.t()
   @callback persistence_enabled() :: boolean()
+  @callback sleep_when_idle() :: boolean()
 
-  @optional_callbacks description: 0, persistence_enabled: 0
+  @optional_callbacks description: 0, persistence_enabled: 0, sleep_when_idle: 0
 
   @doc "Whether the class ships its changeful Tasklets' records."
   @spec persistence_enabled?(module()) :: boolean()
@@ -76,4 +80,9 @@ defmodule Flezha.SDK.StreamOperative do
       do: module.persistence_enabled(),
       else: true
   end
+
+  @doc "Whether an idle instance of the class sleeps."
+  @spec sleep_when_idle?(module()) :: boolean()
+  def sleep_when_idle?(module),
+    do: Tasklet.exports?(module, :sleep_when_idle, 0) and module.sleep_when_idle()
 end

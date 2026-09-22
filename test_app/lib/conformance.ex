@@ -107,6 +107,8 @@ defmodule ElixirRunner.Conformance.Row do
   def factory_id, do: ElixirRunner.Conformance.context().topology
   def channels(c), do: ElixirRunner.Conformance.declare(c)
   def sync_durability, do: ElixirRunner.Conformance.context().sync_durability
+  def persistence_enabled, do: ElixirRunner.Conformance.context().persistent
+  def sleep_when_idle, do: ElixirRunner.Conformance.context().sleep_when_idle
 end
 
 defmodule ElixirRunner.Conformance.WorkflowRow do
@@ -118,6 +120,10 @@ defmodule ElixirRunner.Conformance.WorkflowRow do
   # the workflow's own registration.
   def factory_id, do: ElixirRunner.Conformance.context().topology
   def channels(c), do: ElixirRunner.Conformance.declare(c)
+  def persistence_enabled, do: ElixirRunner.Conformance.context().persistent
+
+  def sleep_when_idle,
+    do: ElixirRunner.Conformance.context().sleep_when_idle or persistence_enabled()
 end
 
 # The refusal table's `shorthand_duplicate_id` pair: a stream short form and a
@@ -162,8 +168,8 @@ defmodule ElixirRunner.Conformance do
   declaration here, not a builder knob, so the palette reads the row's capacity
   off `mailbox_capacity/1` rather than the handle carrying it.
 
-  `class.persistent` maps to nothing: persistence is on unless a class opts out
-  with `persistence_enabled/0`.
+  `class.persistent` and `class.sleep_when_idle` are the row classes'
+  `persistence_enabled/0` and `sleep_when_idle/0`.
   """
 
   alias ElixirRunner.Conformance.{Row, WorkflowRow}
@@ -185,7 +191,14 @@ defmodule ElixirRunner.Conformance do
   }
 
   @default_mailbox_capacity 1024
-  @empty_context %{topology: "none", steps: [], mailbox: %{}, sync_durability: false}
+  @empty_context %{
+    topology: "none",
+    steps: [],
+    mailbox: %{},
+    sync_durability: false,
+    persistent: true,
+    sleep_when_idle: false
+  }
 
   # --- the two entry points ---
 
@@ -524,6 +537,7 @@ defmodule ElixirRunner.Conformance do
   defp class_flag("workflow", _value, acc), do: acc
   defp class_flag("persistent", _value, acc), do: acc
   defp class_flag("sync_durability", _value, acc), do: acc
+  defp class_flag("sleep_when_idle", _value, acc), do: acc
 
   defp class_flag("effectively_once", _value, acc),
     do: %{acc | token: Channels.effectively_once(acc.token)}
@@ -578,7 +592,9 @@ defmodule ElixirRunner.Conformance do
       topology: row.topology,
       steps: steps,
       mailbox: mailboxes(steps),
-      sync_durability: "class.sync_durability" in steps
+      sync_durability: "class.sync_durability" in steps,
+      persistent: "class.persistent" in steps,
+      sleep_when_idle: "class.sleep_when_idle" in steps
     })
   end
 

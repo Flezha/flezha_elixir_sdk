@@ -10,7 +10,9 @@ defmodule Flezha.SDK.Declarations do
   else — the SDK names no controller module, so the pair is kept by the
   reader rather than by a reference.
 
-  A stream class declares the tier and its granularity when declared, and both
+  Either kind declares its persistence switch when it is off and its sleep
+  setting when it is on. A stream class declares the tier and its granularity
+  when declared, and both
   correction keys whenever a window is — an undeclared beyond-window fate
   reaches the controller as the default rather than as an absence, as it does
   in every other SDK. A workflow class declares synchronous durability, the
@@ -41,14 +43,21 @@ defmodule Flezha.SDK.Declarations do
 
     acked = if topo.checkpoint, do: Map.put(tiered, "ack_granularity", "checkpoint"), else: tiered
 
-    corrected(acked, topo.correction)
+    acked |> corrected(topo.correction) |> switches(topo)
   end
 
   def for(%Spec{} = spec) do
     %{}
+    |> switches(spec.topology)
     |> put_when(spec.knobs.sync_durability, "durability", "sync_remote")
     |> put_tasks("compensable_tasks", spec, &Tasklet.compensates?/1)
     |> put_tasks("leaf_tasks", spec, nil)
+  end
+
+  defp switches(declarations, %Topology{} = topo) do
+    declarations
+    |> put_when(not topo.persistence_enabled?, "persistent", "false")
+    |> put_when(topo.sleep_when_idle?, "sleep_when_idle", "true")
   end
 
   defp corrected(declarations, nil), do: declarations

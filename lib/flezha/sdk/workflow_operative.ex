@@ -24,6 +24,7 @@ defmodule Flezha.SDK.WorkflowOperative do
     :wake_after_ms,
     :rollback_mode,
     :persistence_enabled,
+    :sleep_when_idle,
     :sync_durability
   ]
 
@@ -112,6 +113,14 @@ defmodule Flezha.SDK.WorkflowOperative do
   @callback persistence_enabled() :: boolean()
 
   @doc """
+  Whether an instance waiting at a committed boundary for `FLEZHA_PARK_IDLE_MS`
+  sleeps: parks, is evicted and wakes on its next message. Defaults to the
+  class's `persistence_enabled/0`; declaring it without persistence is refused
+  as `SleepWithoutPersistence`.
+  """
+  @callback sleep_when_idle() :: boolean()
+
+  @doc """
   Whether the controller completes the remote ship of each commit barrier
   before acknowledging it. Inert without a durability backend.
   """
@@ -124,6 +133,7 @@ defmodule Flezha.SDK.WorkflowOperative do
                       wake_after_ms: 0,
                       rollback_mode: 0,
                       persistence_enabled: 0,
+                      sleep_when_idle: 0,
                       sync_durability: 0
 
   @defaults %{
@@ -136,8 +146,17 @@ defmodule Flezha.SDK.WorkflowOperative do
     sync_durability: false
   }
 
-  @doc "The declared value of `knob`, or its default when the class is silent."
+  @doc """
+  The declared value of `knob`, or its default when the class is silent;
+  `:sleep_when_idle` defaults to the class's persistence switch.
+  """
   @spec knob(module(), atom()) :: term()
+  def knob(module, :sleep_when_idle) do
+    if Tasklet.exports?(module, :sleep_when_idle, 0),
+      do: module.sleep_when_idle(),
+      else: knob(module, :persistence_enabled)
+  end
+
   def knob(module, knob) do
     default = Map.fetch!(@defaults, knob)
     if Tasklet.exports?(module, knob, 0), do: apply(module, knob, []), else: default
@@ -145,7 +164,11 @@ defmodule Flezha.SDK.WorkflowOperative do
 
   @doc "Every knob's declared value, as the spec freezes them."
   @spec knobs(module()) :: map()
-  def knobs(module), do: Map.new(@defaults, fn {k, _} -> {k, knob(module, k)} end)
+  def knobs(module) do
+    @defaults
+    |> Map.new(fn {k, _} -> {k, knob(module, k)} end)
+    |> Map.put(:sleep_when_idle, knob(module, :sleep_when_idle))
+  end
 
   @doc false
   # The mode values, for the registration check a hand-written callback meets.

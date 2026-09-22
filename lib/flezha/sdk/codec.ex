@@ -272,8 +272,6 @@ defmodule Flezha.SDK.Codec do
         end),
       committed_tasks: Enum.map(j.committed_tasks, &committed_task/1),
       consumed_offset: j.consumed_offset,
-      parked: j.parked,
-      wake_deadline_ms: j.wake_deadline_ms,
       rewind_undo: Enum.map(j.rewind_undo, &committed_task/1),
       completion: completion(j.completed, j.result)
     }

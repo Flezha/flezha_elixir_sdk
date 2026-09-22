@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, StreamOperative}
+  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, StreamOperative, WorkflowOperative}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -51,6 +51,7 @@ defmodule Flezha.SDK.Topology do
             order: [],
             keyless?: false,
             persistence_enabled?: true,
+            sleep_when_idle?: false,
             compact_after_bytes: nil,
             effectively_once?: false,
             checkpoint: nil,
@@ -124,6 +125,7 @@ defmodule Flezha.SDK.Topology do
          order: Map.keys(acc.nodes),
          keyless?: keyless?(acc, node_mode),
          persistence_enabled?: StreamOperative.persistence_enabled?(module),
+         sleep_when_idle?: sleeps?(module, kind),
          compact_after_bytes: compact_after_bytes(acc),
          effectively_once?: acc.tier.effectively_once,
          checkpoint: acc.tier.checkpoint,
@@ -401,6 +403,7 @@ defmodule Flezha.SDK.Topology do
     names(acc, shape.channels) ++
       Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
+      sleep_facts(module, kind) ++
       kind_facts(module, kind, acc, mod_name(module)) ++
       cycles(acc, shape.routes) ++
       changeful_identity(acc)
@@ -580,6 +583,17 @@ defmodule Flezha.SDK.Topology do
   end
 
   defp check_shedding(is, _channel, _tier?), do: is
+
+  # A sleeping instance is evicted and restored from its durable state, so a
+  # class of either kind that keeps none cannot sleep.
+  defp sleep_facts(module, kind) do
+    if sleeps?(module, kind) and not StreamOperative.persistence_enabled?(module),
+      do: [{:SleepWithoutPersistence, mod_name(module)}],
+      else: []
+  end
+
+  defp sleeps?(module, :stream), do: StreamOperative.sleep_when_idle?(module)
+  defp sleeps?(module, :workflow), do: WorkflowOperative.knob(module, :sleep_when_idle)
 
   # Each kind is judged on its own settings, and a setting of the other kind
   # is refused by its own name rather than by the rule that assumes its kind.

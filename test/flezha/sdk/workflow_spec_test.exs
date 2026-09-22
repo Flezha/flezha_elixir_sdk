@@ -209,6 +209,56 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierStream)
   end
 
+  test "sleeping without persistence is refused for either kind, and both switches are declared" do
+    defmodule SleeplessStream do
+      use Flezha.SDK.StreamOperative,
+        factory_id: "sleepless_stream",
+        persistence_enabled: false,
+        sleep_when_idle: true
+
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule SleeplessWorkflow do
+      use Flezha.SDK.WorkflowOperative,
+        factory_id: "sleepless_workflow",
+        persistence_enabled: false,
+        sleep_when_idle: true
+
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule SleepingStream do
+      use Flezha.SDK.StreamOperative, factory_id: "sleeping_stream", sleep_when_idle: true
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule OptedOutWorkflow do
+      use Flezha.SDK.WorkflowOperative,
+        factory_id: "opted_out_workflow",
+        persistence_enabled: false
+
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    assert {:error, {:invalid_topology, [{:SleepWithoutPersistence, _}]}} =
+             Topology.build(SleeplessStream)
+
+    assert kind_refusals(SleeplessWorkflow) == [:SleepWithoutPersistence]
+
+    assert {:ok, sleeping} = Topology.build(SleepingStream)
+    assert %{"sleep_when_idle" => "true"} = declared = Flezha.SDK.Declarations.for(sleeping)
+    refute Map.has_key?(declared, "persistent")
+
+    assert {:ok, durable} = Spec.build(LinearWorkflow)
+    assert %{"sleep_when_idle" => "true"} = Flezha.SDK.Declarations.for(durable)
+
+    assert {:ok, opted_out} = Spec.build(OptedOutWorkflow)
+    declared = Flezha.SDK.Declarations.for(opted_out)
+    assert declared["persistent"] == "false"
+    refute Map.has_key?(declared, "sleep_when_idle")
+  end
+
   # --- structural refusals ---
 
   test "NoEntryChannel — tasklets with nothing to seed them" do

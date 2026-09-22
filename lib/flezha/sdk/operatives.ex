@@ -78,7 +78,8 @@ defmodule Flezha.SDK.Operatives do
         counters: s.counters,
         runner: self(),
         secondaries: s.secondaries,
-        credit: s.credit
+        credit: s.credit,
+        owed_inbox: add.inbox_tail_count || 0
       )
 
     registered(s, add, op_pid, topo)

@@ -89,7 +89,7 @@ defmodule Flezha.SDK.Workflow.Instance do
       spec: spec,
       inbox: :queue.new(),
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
-      park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:workflow_park_idle_ms),
+      park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:park_idle_ms),
       journal: journal,
       iter: if(journal, do: journal.iter, else: 0),
       compensation_done: MapSet.new()

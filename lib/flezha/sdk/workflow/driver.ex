@@ -463,12 +463,12 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   # An empty inbox is waited on as the reference waits: for the tail a
   # rehydrating bind still owes, else for the idle window, and the loop parks
-  # when the wait ends. A class that journals nothing cannot park, so it waits
-  # for an input or a stop.
+  # when the wait ends. A class that does not sleep waits for an input or a
+  # stop.
   defp await_input(%State{} = s) do
     ref = make_ref()
 
-    if journals?(s),
+    if s.spec.knobs.sleep_when_idle,
       do: Process.send_after(self(), {:park_idle, ref}, Instance.idle_ms(s.instance))
 
     %{s | idle: ref}

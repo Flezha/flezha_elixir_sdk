@@ -78,7 +78,7 @@ defmodule Flezha.SDK.Knob do
     # Unset, the socket directory is the first rung of the ladder every runtime
     # walks, which `flz_transport` resolves.
     {:socket_files_path, "FLEZHA_SOCKET_FILES_PATH", :path, nil},
-    {:workflow_park_idle_ms, "FLEZHA_WORKFLOW_PARK_IDLE_MS", :ms, 5_000}
+    {:park_idle_ms, "FLEZHA_PARK_IDLE_MS", :ms, 600_000}
   ]
 
   @by_name Map.new(@rows, fn {name, env, type, default} ->
