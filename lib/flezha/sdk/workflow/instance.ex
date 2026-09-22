@@ -18,11 +18,16 @@ defmodule Flezha.SDK.Workflow.Instance do
   defmodule Item do
     @moduledoc """
     One message through the entrance: the entry channel it named, its value as
-    that channel's parser made it, and its durable-inbox offset (`0` when
+    that channel's parser made it, and its input-log offset (`nil` when
     unjournaled).
     """
-    defstruct [:channel, :payload, offset: 0]
-    @type t :: %__MODULE__{channel: String.t(), payload: term(), offset: non_neg_integer()}
+    defstruct [:channel, :payload, :offset]
+
+    @type t :: %__MODULE__{
+            channel: String.t(),
+            payload: term(),
+            offset: non_neg_integer() | nil
+          }
   end
 
   defmodule Committed do
@@ -50,7 +55,7 @@ defmodule Flezha.SDK.Workflow.Instance do
               handoff: [],
               task_handoffs: %{},
               committed_tasks: [],
-              consumed_offset: 0,
+              consumed_offset: nil,
               rewind_undo: [],
               completion: nil
 
@@ -63,7 +68,7 @@ defmodule Flezha.SDK.Workflow.Instance do
             spec: nil,
             inbox: nil,
             owed_inbox: 0,
-            parked_offset: 0,
+            parked_offset: nil,
             park_idle_ms: nil,
             stage_cells: %{},
             journal: nil,
@@ -93,10 +98,10 @@ defmodule Flezha.SDK.Workflow.Instance do
 
   # --- inbox ---
 
-  @doc "Append one message on `channel`, at the durable-inbox offset its metadata carries."
+  @doc "Append one message on `channel`, at the input-log offset its metadata carries."
   @spec push_inbox(t(), String.t(), term(), map()) :: t()
   def push_inbox(%__MODULE__{} = i, channel, payload, metadata) do
-    item = %Item{channel: channel, payload: payload, offset: inbox_offset(metadata)}
+    item = %Item{channel: channel, payload: payload, offset: input_offset(metadata)}
     %{arrived(i) | inbox: :queue.in(item, i.inbox)}
   end
 
@@ -107,10 +112,13 @@ defmodule Flezha.SDK.Workflow.Instance do
   """
   @spec entry_parked(t(), map()) :: t()
   def entry_parked(%__MODULE__{} = i, metadata),
-    do: i |> arrived() |> note_parked(inbox_offset(metadata))
+    do: i |> arrived() |> note_parked(input_offset(metadata))
 
   @doc "A message consumed without a pass: the park record releases its offset."
-  @spec note_parked(t(), non_neg_integer()) :: t()
+  @spec note_parked(t(), non_neg_integer() | nil) :: t()
+  def note_parked(%__MODULE__{} = i, nil), do: i
+  def note_parked(%__MODULE__{parked_offset: nil} = i, offset), do: %{i | parked_offset: offset}
+
   def note_parked(%__MODULE__{} = i, offset),
     do: %{i | parked_offset: max(i.parked_offset, offset)}
 
@@ -137,12 +145,12 @@ defmodule Flezha.SDK.Workflow.Instance do
   # a rehydrating bind still owes.
   defp arrived(%__MODULE__{} = i), do: %{i | owed_inbox: max(i.owed_inbox - 1, 0)}
 
-  # The controller stamps a journaled input with its offset; an unjournaled one
-  # carries none and takes `0`.
-  defp inbox_offset(metadata) do
-    case Integer.parse(Map.get(metadata, "flz.inbox_offset", "")) do
+  # The controller stamps a journaled input with its input-log offset; an
+  # unjournaled one carries none.
+  defp input_offset(metadata) do
+    case Integer.parse(Map.get(metadata, "flz.offset", "")) do
       {offset, _rest} -> offset
-      :error -> 0
+      :error -> nil
     end
   end
 

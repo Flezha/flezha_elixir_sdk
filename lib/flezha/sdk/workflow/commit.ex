@@ -71,10 +71,11 @@ defmodule Flezha.SDK.Workflow.Commit do
   @doc """
   Ship `IterPark`: the loop found its inbox empty at a committed boundary and
   tears its run down WITHOUT a terminal frame, which is not an outcome. The
-  controller releases every inbox offset up to `consumed_offset`, the last
-  message the run parked unread.
+  controller releases every input-log offset up to `consumed_offset`, the last
+  message the run parked unread (`nil` when it parked none).
   """
-  @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: :ok
+  @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer() | nil) ::
+          :ok
   def park(runner, operative_id, iter, wake_deadline_ms, consumed_offset),
     do:
       notify(

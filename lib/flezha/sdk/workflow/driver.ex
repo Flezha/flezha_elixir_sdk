@@ -75,7 +75,8 @@ defmodule Flezha.SDK.Workflow.Driver do
       # the entry channel whose chain the pass runs; a carry-fed pass keeps
       # the one the loop's first message picked
       pass_channel: nil,
-      consumed_offset: 0,
+      # the input-log offset of the input this pass consumed, `nil` for none
+      consumed_offset: nil,
       iter: 0,
       cancel: nil,
       # task_idx => {cell_key, result}: each tasklet's completion this
@@ -473,7 +474,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       message_fed?(s) -> pop_message(s)
       s.spec.knobs.loop_mode == :once -> {:done, s}
       s.carry in [nil, []] -> {:done, s}
-      true -> {:carry, %{s | carry: nil}, s.carry}
+      true -> {:carry, %{s | carry: nil, consumed_offset: nil}, s.carry}
     end
   end
 

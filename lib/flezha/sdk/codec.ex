@@ -195,7 +195,7 @@ defmodule Flezha.SDK.Codec do
   @spec iter_commit_command(
           String.t(),
           non_neg_integer(),
-          non_neg_integer(),
+          non_neg_integer() | nil,
           [{non_neg_integer(), binary()}],
           boolean(),
           binary(),
@@ -224,10 +224,15 @@ defmodule Flezha.SDK.Codec do
 
   @doc """
   The `IterPark` command tuple for a loop that found its inbox empty, carrying
-  the highest inbox offset the run parked to the dead-letter queue unread.
+  the highest input-log offset the run parked to the dead-letter queue unread
+  (`nil` when none).
   """
-  @spec iter_park_command(String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) ::
-          {atom(), struct()}
+  @spec iter_park_command(
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer() | nil
+        ) :: {atom(), struct()}
   def iter_park_command(operative_id, iter, wake_deadline_ms, consumed_offset) do
     {:iter_park,
      %RunnerCommands.IterPark{

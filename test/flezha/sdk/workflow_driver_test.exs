@@ -480,6 +480,34 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{status: "ok"} = completion(messages)
   end
 
+  defmodule JournaledChainedLoop do
+    def factory_id, do: "journaled_chained_loop"
+    def loop_mode, do: :chained
+
+    def channels(c) do
+      c |> Channels.input("in") |> Channels.into(Countdown)
+    end
+  end
+
+  test "a chained loop commits its message's offset once, and no offset for a carry-fed pass" do
+    driver = start_driver(JournaledChainedLoop, operative_id: "wf-countdown")
+    ref = Process.monitor(driver)
+    Inbox.input(driver, "in", "2", %{"flz.offset" => "0"})
+    assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
+
+    offsets = for {:shipped, {:iter_commit, c}} <- drain(), do: c.consumed_offset
+    assert offsets == [0, nil, nil]
+  end
+
+  test "an input the controller did not journal commits no offset" do
+    driver = start_loop(ChatLoop, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "turn", %{})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: nil}}}, 5_000
+    Driver.stop_workflow(driver)
+    assert %{status: "cancelled"} = completion(drain())
+  end
+
   # --- every message enters through the stream's entrance ---
 
   defmodule TwoChains do
@@ -499,10 +527,10 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a message runs only the chain of the channel it names, and the join waits for that chain alone" do
     driver = start_loop(TwoChains, park_idle_ms: 60_000)
 
-    Inbox.input(driver, "b", "one", %{"flz.inbox_offset" => "1"})
-    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 1, entry_channel: "b"}}}, 5_000
-    Inbox.input(driver, "a", "two", %{"flz.inbox_offset" => "2"})
-    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 2, entry_channel: "a"}}}, 5_000
+    Inbox.input(driver, "b", "one", %{"flz.offset" => "0"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 0, entry_channel: "b"}}}, 5_000
+    Inbox.input(driver, "a", "two", %{"flz.offset" => "1"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 1, entry_channel: "a"}}}, 5_000
     Driver.stop_workflow(driver)
 
     messages = drain()
@@ -571,7 +599,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     driver =
       start_driver(EdgeStrict, operative_id: "wf-edge-strict", park_idle_ms: 0, owed_inbox: 1)
 
-    Inbox.input(driver, "in", "bad", %{"flz.inbox_offset" => "5"})
+    Inbox.input(driver, "in", "bad", %{"flz.offset" => "5"})
     assert_receive {:shipped, {:park_payload, park}}, 5_000
     assert park.channel == "in"
     assert park.error =~ "entry edge failed: not mappable"
@@ -582,7 +610,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     driver =
       start_driver(Strict, operative_id: "wf-strict-owed", park_idle_ms: 0, owed_inbox: 1)
 
-    Inbox.input(driver, "in", "bad", %{"flz.inbox_offset" => "4"})
+    Inbox.input(driver, "in", "bad", %{"flz.offset" => "4"})
     assert_receive {:shipped, {:park_payload, _park}}, 5_000
     assert_receive {:shipped, {:iter_park, %{iter: 0, consumed_offset: 4}}}, 5_000
   end
@@ -624,7 +652,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a per-input loop's first iteration consumes its first input and commits its offset" do
     driver = start_loop(ChatLoop, park_idle_ms: 60_000)
 
-    Inbox.input(driver, "in", "turn", %{"flz.inbox_offset" => "7"})
+    Inbox.input(driver, "in", "turn", %{"flz.offset" => "7"})
     assert_receive {:shipped, {:iter_commit, %{consumed_offset: 7}}}, 5_000
     Driver.stop_workflow(driver)
 
