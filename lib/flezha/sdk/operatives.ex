@@ -34,26 +34,51 @@ defmodule Flezha.SDK.Operatives do
 
     topo = Map.get(s.topologies, add.factory_id)
 
-    cond do
-      is_nil(topo) ->
-        {:error, "unknown factory #{add.factory_id}", s}
-
-      # The kind the controller placed under and the class registered under
-      # this id must agree: a mismatch would drive a stream topology through
-      # the workflow driver, or the reverse, and neither has the other's shape.
-      kind == "workflow" ->
-        start_workflow(s, add, topo, range)
-
-      match?(%Spec{}, topo) ->
-        {:error, "factory #{add.factory_id} is a workflow class; kind was #{inspect(kind)}", s}
-
-      KeyGroup.partitioned?(range) and topo.keyless? ->
-        {:error, "PartitionsWithoutKeyedTasklet: a partition_count >= 2 class needs a key_by", s}
-
-      true ->
-        start_stream(s, add, topo, range)
+    with :ok <- check_kind(topo, kind, add.factory_id),
+         :ok <- check_partitionable(topo, range, add.factory_id) do
+      case topo do
+        %Spec{} -> start_workflow(s, add, topo, range)
+        _stream -> start_stream(s, add, topo, range)
+      end
+    else
+      {:error, reason} -> {:error, reason, s}
     end
   end
+
+  # The kind the controller placed under and the class registered under this
+  # id must agree: a mismatch would drive a stream topology through the
+  # workflow driver, or the reverse, and neither has the other's shape.
+  defp check_kind(nil, _kind, factory_id), do: {:error, "unknown factory #{factory_id}"}
+  defp check_kind(%Spec{}, "workflow", _factory_id), do: :ok
+
+  defp check_kind(%Spec{}, kind, factory_id),
+    do: {:error, "factory #{factory_id} is a workflow class; kind was #{inspect(kind)}"}
+
+  defp check_kind(_stream, "workflow", factory_id),
+    do: {:error, "factory #{factory_id} is a stream class; kind was \"workflow\""}
+
+  defp check_kind(_stream, _kind, _factory_id), do: :ok
+
+  # A workflow that reads one message would reach one member and leave the
+  # rest waiting, whatever its keying, so its loop mode is refused first.
+  defp check_partitionable(topo, range, factory_id) do
+    cond do
+      not KeyGroup.partitioned?(range) ->
+        :ok
+
+      match?(%Spec{knobs: %{loop_mode: mode}} when mode != :per_input, topo) ->
+        {:error, KeyGroup.one_message_refusal(factory_id, topo.knobs.loop_mode, range.count)}
+
+      stream_topology(topo).keyless? ->
+        {:error, "PartitionsWithoutKeyedTasklet: a partition_count >= 2 class needs a key_by"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp stream_topology(%Spec{topology: topology}), do: topology
+  defp stream_topology(topology), do: topology
 
   @doc "Stop `oid` and forget it; an id this runner does not host changes nothing."
   @spec remove(map(), binary()) :: map()
@@ -102,9 +127,6 @@ defmodule Flezha.SDK.Operatives do
 
     registered(s, add, pid, spec)
   end
-
-  defp start_workflow(s, add, _topology, _range),
-    do: {:error, "factory #{add.factory_id} is a stream class; kind was \"workflow\"", s}
 
   # A started instance of either kind is registered, takes its `init_values`
   # as its tasklets' initial state, and answers its class's declarations.

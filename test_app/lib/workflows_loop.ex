@@ -206,6 +206,45 @@ defmodule ElixirRunner.WorkflowsLoop do
     end
   end
 
+  # A durable per-input loop keyed on its entry edge by the text before the
+  # first `:`, so one Cell counts one symbol's messages and emits
+  # `<symbol>:<count>`: the shape a partition group of workflow members takes.
+  defmodule KeyedLoopCount do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+
+    alias Flezha.SDK.Ctx
+
+    def name, do: "keyed_loop_count"
+    def init_state(_), do: 0
+    def apply_change(count, delta), do: count + delta
+
+    def run(input, count, ctx) do
+      count = Ctx.apply(ctx, count, 1)
+      Ctx.emit(ctx, ElixirRunner.Key.prefix(input) <> ":" <> Integer.to_string(count))
+      {:ok, count}
+    end
+  end
+
+  defmodule KeyedLoopWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "keyed_loop_workflow"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("trades")
+      |> key_by(&ElixirRunner.Key.prefix/1)
+      |> into(ElixirRunner.WorkflowsLoop.KeyedLoopCount)
+      |> sink("keyed_loop_workflow_out")
+    end
+  end
+
   # The same durable per-input loop minus its stateful first tasklet, so
   # nothing writes a Cell record and the controller ships no restore on a
   # rehydrating bind: the instance's task-journal reaches the driver only if it
@@ -330,6 +369,7 @@ defmodule ElixirRunner.WorkflowsLoop do
     [
       ChatLoopWorkflow,
       StatelessLoopWorkflow,
+      KeyedLoopWorkflow,
       ChatRewindWorkflow,
       ReplyBlockLoopWorkflow,
       BenchChain1,

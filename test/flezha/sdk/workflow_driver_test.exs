@@ -1,7 +1,8 @@
 defmodule Flezha.SDK.Workflow.DriverTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Codec, Commands, Counters, Ctx, Operative, Park, Spawn}
+  alias Flezha.SDK.{Channels, Codec, Commands, Counters, Ctx, Declarations, KeyGroup}
+  alias Flezha.SDK.{Operative, Operatives, Park, Spawn}
   alias Flezha.SDK.Operative.Inbox
   alias Flezha.SDK.Test.StubRunner
   alias Flezha.SDK.Proto.RunnerCommands
@@ -1398,5 +1399,92 @@ defmodule Flezha.SDK.Workflow.DriverTest do
 
     Inbox.input(driver, nil, "a", %{})
     assert %{status: "ok"} = completion(drain())
+  end
+
+  # --- partitions ---
+
+  defp entry_keyed(c),
+    do: c |> Channels.input("in") |> Channels.key_by(& &1) |> Channels.into(KeyedPlain)
+
+  defmodule EntryKeyedLoop do
+    def factory_id, do: "entry_keyed_loop"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def channels(c), do: Flezha.SDK.Workflow.DriverTest.entry_keyed_channels(c)
+  end
+
+  defmodule EntryKeyedOnce do
+    def factory_id, do: "entry_keyed_once"
+    def channels(c), do: Flezha.SDK.Workflow.DriverTest.entry_keyed_channels(c)
+  end
+
+  defmodule EntryKeyedChained do
+    def factory_id, do: "entry_keyed_chained"
+    def loop_mode, do: :chained
+    def persistence_enabled, do: false
+    def channels(c), do: Flezha.SDK.Workflow.DriverTest.entry_keyed_channels(c)
+  end
+
+  def entry_keyed_channels(c), do: entry_keyed(c)
+
+  defp partitioned_add(factory_id) do
+    %RunnerCommands.AddOperative{
+      operative_id: "p#p1",
+      factory_id: factory_id,
+      kind: "workflow",
+      partition_index: 1,
+      partition_count: 2,
+      key_group_from: 128,
+      key_group_to: 255
+    }
+  end
+
+  test "a partitioned bind refuses a one-message loop before a keyless one, and names the loop mode" do
+    topologies =
+      Map.new([EntryKeyedOnce, EntryKeyedChained, ChatLoop], fn module ->
+        assert {:ok, spec} = Spec.build(module)
+        {module.factory_id(), spec}
+      end)
+
+    s = %{topologies: topologies}
+
+    for {factory, mode} <- [{"entry_keyed_once", "once"}, {"entry_keyed_chained", "chained"}] do
+      assert {:error, "PartitionsWithoutPerInputLoop: class " <> _ = reason, ^s} =
+               Operatives.add(s, partitioned_add(factory))
+
+      assert reason =~ factory
+      assert reason =~ "(loop_mode #{mode})"
+      assert reason =~ "declare loop_mode per_input"
+      assert Declarations.for(topologies[factory])["loop_mode"] == mode
+    end
+
+    assert {:error, "PartitionsWithoutKeyedTasklet" <> _, ^s} =
+             Operatives.add(s, partitioned_add("chat_loop"))
+
+    assert Declarations.for(topologies["chat_loop"])["loop_mode"] == "per_input"
+  end
+
+  # "a" hashes to key group 100 and "BTC-USD" to 129, so partition 1 of 2
+  # owns the second and not the first.
+  test "a partition member parks a key it does not own and opens no pass" do
+    driver =
+      start_loop(EntryKeyedLoop, range: KeyGroup.decode(1, 2, 128, 255), park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "a", %{"flz.offset" => "3"})
+    assert_receive {:shipped, {:park_payload, %{error: error, channel: "in"}}}, 5_000
+    assert error =~ "key 'a' hashes to key group 100"
+    refute_received {:plain_ran, _}
+    refute_received {:shipped, {:task_commit, _}}
+
+    Inbox.input(driver, "in", "BTC-USD", %{"flz.offset" => "4"})
+    assert_receive {:plain_ran, "BTC-USD"}, 5_000
+    assert_receive {:shipped, {:iter_commit, %{iter: 0, consumed_offset: 4}}}, 5_000
+
+    minted = for {_node, keyed} <- :sys.get_state(driver).cells.cells, key <- Map.keys(keyed), do: key
+    assert minted == ["BTC-USD"]
+
+    Driver.stop_workflow(driver)
+    assert %{status: "cancelled"} = completion(drain())
   end
 end

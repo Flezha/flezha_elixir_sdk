@@ -165,7 +165,7 @@ defmodule ElixirRunner.SleepingCounterOp do
   def channels(c) do
     c
     |> input("input")
-    |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
+    |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(ElixirRunner.SleepingCounterTask)
     |> sink("totals")
   end

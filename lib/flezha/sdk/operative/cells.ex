@@ -120,10 +120,23 @@ defmodule Flezha.SDK.Operative.Cells do
         cells_of(c, node_ref, keys)
 
       :dynamic ->
-        case KeyGroup.admit(c.range, key || "") do
+        case admit(c, node_ref, key) do
           :ok -> cells_of(c, node_ref, [key])
           {:error, reason} -> {{:misroute, reason}, c}
         end
+    end
+  end
+
+  @doc """
+  Whether this member may mint a Cell of `node_ref` under `key`: a Dynamic
+  node's key must hash into the owned range; a Single or Static node's Cells
+  are declared, and an unowned declared one simply stays idle.
+  """
+  @spec admit(t(), reference(), String.t() | nil) :: :ok | {:error, String.t()}
+  def admit(%__MODULE__{topology: topo, range: range}, node_ref, key) do
+    case Map.fetch!(topo.node_mode, node_ref) do
+      :dynamic -> KeyGroup.admit(range, key || "")
+      _declared -> :ok
     end
   end
 

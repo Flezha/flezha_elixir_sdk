@@ -3,6 +3,13 @@
 # the persisted-state family is in factories_state.ex. Elixir SDK deviations,
 # each noted on its fixture: no serializer-panic isolation.
 
+defmodule ElixirRunner.Key do
+  @moduledoc false
+
+  @doc "The text before the first `:`, the key every keyed string fixture routes on."
+  def prefix(value), do: value |> to_string() |> String.split(":") |> hd()
+end
+
 # -- compare_filter ---------------------------------------------------------
 
 defmodule ElixirRunner.CompareFilterTask do
@@ -613,7 +620,7 @@ defmodule ElixirRunner.PartitionRelayOp do
 
     c
     |> input("in")
-    |> key_by(fn v -> v |> to_string() |> String.split(":") |> hd() end)
+    |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(ElixirRunner.PartitionRelayTask)
     |> keyed()
     |> sink("input")

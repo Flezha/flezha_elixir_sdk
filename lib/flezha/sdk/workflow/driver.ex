@@ -469,23 +469,16 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   # A message's pass: every root of its chain, each through its own entry
-  # edge. An edge whose transform rejects the message parks it under the
-  # channel, consumed without a pass, and the instance goes back to waiting.
+  # edge. An edge whose transform rejects the message, or a key this partition
+  # member does not own, parks it under the channel, consumed without a pass,
+  # and the instance goes back to waiting.
   defp enter_pass(%State{} = s, item) do
-    case entry_frontier(s, item) do
-      {:ok, frontier} ->
-        start_pass(s, item.channel, frontier)
-
+    with {:ok, frontier} <- entry_frontier(s, item),
+         :ok <- own_keys(s, frontier) do
+      start_pass(s, item.channel, frontier)
+    else
       {:rejected, reason} ->
-        Inbox.park_pre_dispatch(
-          s.runner,
-          s.operative_id,
-          item.channel,
-          item.channel,
-          "entry edge failed: " <> reason,
-          nil
-        )
-
+        Inbox.park_pre_dispatch(s.runner, s.operative_id, item.channel, item.channel, reason, nil)
         await_input(%{s | instance: Instance.note_parked(s.instance, item.offset)})
     end
   end
@@ -493,7 +486,19 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp entry_frontier(%State{} = s, item) do
     {:ok, frontier(s, item.channel, &through_edge(s, {:entry, item.channel}, &1, [item.payload]))}
   rescue
-    e -> {:rejected, Exception.message(e)}
+    e -> {:rejected, "entry edge failed: " <> Exception.message(e)}
+  end
+
+  # Before any Cell is minted, as the stream's router refuses a key.
+  defp own_keys(%State{cells: cells}, frontier) do
+    Enum.find_value(frontier, :ok, fn {root, batch} ->
+      Enum.find_value(batch, fn {_value, key} ->
+        case Cells.admit(cells, root, key) do
+          :ok -> nil
+          {:error, reason} -> {:rejected, reason}
+        end
+      end)
+    end)
   end
 
   # A pass's first frontier: every root of the chain that has a batch.

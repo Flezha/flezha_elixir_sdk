@@ -15,9 +15,10 @@ defmodule Flezha.SDK.Declarations do
   when declared, and both
   correction keys whenever a window is — an undeclared beyond-window fate
   reaches the controller as the default rather than as an absence, as it does
-  in every other SDK. A workflow class declares synchronous durability, the
-  compensable positions (a rewind may only unwind those) and the leaves, since
-  the operative is done when every leaf has committed; it carries no tier,
+  in every other SDK. A workflow class declares synchronous durability, its
+  loop mode (only a `per_input` loop partitions), the compensable positions (a
+  rewind may only unwind those) and the leaves, since the operative is done
+  when every leaf has committed; it carries no tier,
   which registration refuses on it. The cadence, the outputs posture and the
   delay stay SDK-side.
   """
@@ -50,6 +51,7 @@ defmodule Flezha.SDK.Declarations do
     %{}
     |> switches(spec.topology)
     |> put_when(spec.knobs.sync_durability, "durability", "sync_remote")
+    |> Map.put("loop_mode", Atom.to_string(spec.knobs.loop_mode))
     |> put_tasks("compensable_tasks", spec, &Tasklet.compensates?/1)
     |> put_tasks("leaf_tasks", spec, nil)
   end

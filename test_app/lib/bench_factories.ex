@@ -182,7 +182,7 @@ defmodule Flezha.Bench.DynamicCell do
     |> input("input")
     |> on_full(:drop_nothing)
     |> filter(fn s -> s != "drop" end)
-    |> key_by(fn s -> s |> to_string() |> String.split(":") |> hd() end)
+    |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(Flezha.Bench.DynamicTask)
     |> sink("kafka")
   end
