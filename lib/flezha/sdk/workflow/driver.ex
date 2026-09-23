@@ -18,7 +18,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   The reference drives a chain on a pool thread that blocks on each barrier.
   This one is event-driven, because a blocked BEAM process cannot answer the
   stop, the inbox push or the restore that must reach it while a stage is in
-  flight. Every wait is therefore a message: `{:stage_done, ref, pid}` from a
+  flight. Every wait is therefore a message: `{:stage_done, ref, pid, written}` from a
   Cell's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
   and for a message-fed pass with nothing queued, its next message or the idle
   window's `{:park_idle, ref}`.
@@ -40,6 +40,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   require Logger
 
   alias Flezha.SDK.{Cell, Knob}
+  alias Flezha.SDK.Cell.Records
   alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
@@ -58,9 +59,9 @@ defmodule Flezha.SDK.Workflow.Driver do
       collected: %{},
       # node_ref => the keys of the Cells its stage dispatched to
       ran: %{},
-      # node_ref => plugin output staged for this stage's commit, and the
-      # per-{stage, cell} ordinal each item takes.
-      outbox: %{items: %{}, seq: %{}},
+      # node_ref => cell identity => the effect records that Cell wrote for the
+      # stage, which its commit (or undo) names
+      written: %{},
       # node_ref => accumulating input batch until every producer committed
       pending: %{},
       # node_ref => producers still owed
@@ -209,7 +210,6 @@ defmodule Flezha.SDK.Workflow.Driver do
         sink_outputs(
           acc,
           node_ref,
-          cell_key,
           value,
           %{meta: meta, key: key, origin: origin},
           ordinal
@@ -283,10 +283,14 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
-  def handle_info({:stage_done, ref, _pid}, %State{} = s) do
+  def handle_info({:stage_done, ref, _pid, written}, %State{} = s) do
     case Map.pop(s.awaiting, ref) do
-      {nil, _} -> {:noreply, s}
-      {_node_ref, awaiting} -> settle(stage_settled(%{s | awaiting: awaiting}))
+      {nil, _} ->
+        {:noreply, s}
+
+      {node_ref, awaiting} ->
+        s = note_written(%{s | awaiting: awaiting}, node_ref, written)
+        settle(stage_settled(s))
     end
   end
 
@@ -319,43 +323,36 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
-  # A plugin-bound output of a workflow tasklet is STAGED, never shipped:
-  # nothing reaches a plugin until the controller has journalled the stage's
-  # commit and flushed the outbox behind it. That is the whole transactional
-  # guarantee, and it is why the driver holds what the stream router sends.
-  defp sink_outputs(%State{} = s, node_ref, cell_key, value, emit, ordinal) do
-    s.spec.topology.routes
-    |> Map.get({:node, node_ref}, [])
-    |> Enum.filter(&match?(%{to: {:sink, _}}, &1))
-    |> Enum.reduce(s, fn route, acc ->
-      stamp_with = if route.keyed, do: {acc.operative_id, acc.spec.topology.node_modules}
-      {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
-
-      # A class that journals nothing has no commit to stage into: its output
-      # goes straight to the wire, as a stream's does.
-      if journals?(acc),
-        do: stage_item(acc, node_ref, cell_key, metadata, bytes),
-        else: %{acc | cells: Cells.emit_output(acc.cells, metadata, bytes)}
-    end)
+  # A class that journals has its stage Cells capture their plugin output into
+  # their own effect records, released once the stage commits; one that
+  # journals nothing sends it straight to the wire, as a stream's is.
+  defp sink_outputs(%State{} = s, node_ref, value, emit, ordinal) do
+    if journals?(s) do
+      s
+    else
+      s.spec.topology.routes
+      |> Map.get({:node, node_ref}, [])
+      |> Enum.filter(&match?(%{to: {:sink, _}}, &1))
+      |> Enum.reduce(s, fn route, acc ->
+        stamp_with = if route.keyed, do: {acc.operative_id, acc.spec.topology.node_modules}
+        {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
+        %{acc | cells: Cells.emit_output(acc.cells, metadata, bytes)}
+      end)
+    end
   end
 
-  defp stage_item(%State{} = s, node_ref, cell_key, metadata, bytes) do
-    slot = {node_ref, cell_key}
+  # One Cell's records for a stage, as its barrier reported them. A stage can
+  # queue more than one barrier behind a Cell (a firing that joins it), so the
+  # ranges widen.
+  defp note_written(%State{} = s, _node_ref, nil), do: s
 
-    item = %{
-      cell_id: Cells.wire_identity(s.cells, node_ref, cell_key),
-      seq_in_task: get_in(s.outbox, [:seq, slot]) || 0,
-      channel: Map.fetch!(metadata, "channel"),
-      payload: bytes
-    }
+  defp note_written(%State{} = s, node_ref, %{cell_id: id} = written) do
+    stage =
+      s.written
+      |> Map.get(node_ref, %{})
+      |> Map.update(id, written, &Records.widen(&1, written))
 
-    %{
-      s
-      | outbox: %{
-          items: Map.update(s.outbox.items, node_ref, [item], &(&1 ++ [item])),
-          seq: Map.update(s.outbox.seq, slot, 1, &(&1 + 1))
-        }
-    }
+    %{s | written: Map.put(s.written, node_ref, stage)}
   end
 
   # The last committed iteration ended the instance and the crash landed before
@@ -632,7 +629,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       s
       | collected: %{},
         ran: %{},
-        outbox: %{items: %{}, seq: %{}},
+        written: %{},
         pending: %{},
         waiting: %{},
         completed: [],
@@ -707,9 +704,8 @@ defmodule Flezha.SDK.Workflow.Driver do
           operative_id: s.operative_id,
           task_idx: task_idx,
           iter: s.iter,
-          cells_ran: ran,
+          cells_ran: Commit.cells_ran(s.written, node_ref, ran),
           handoff: handoff(s, node_ref, batch),
-          outbox: Map.get(s.outbox.items, node_ref, []),
           compensating: s.unwind.status != nil,
           completes: asked != nil,
           result: result_of(asked),

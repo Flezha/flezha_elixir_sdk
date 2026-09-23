@@ -517,6 +517,23 @@ defmodule ElixirRunner.Workflows do
         |> Flezha.SDK.Channels.into(ElixirRunner.Workflows.KeyedFail)
   end
 
+  # A workflow output's identity: `commit_a` commits durable state AND emits
+  # once, keyed `k` with one metadata pair, on a keyed hybrid channel; the
+  # output rides its Cell's record and reaches the sink once the stage commits.
+  defmodule OutboxA do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "commit_a"
+    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+
+    def run(input, state, ctx) do
+      state = Ctx.apply(ctx, state, "commit_a")
+      :ok = Ctx.emit_keyed_with_meta(ctx, "k", input, %{"trace" => "t1"})
+      {:ok, state}
+    end
+  end
+
   defmodule OutboxBlockWorkflow do
     @moduledoc false
     @behaviour Flezha.SDK.WorkflowOperative
@@ -527,7 +544,8 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.CommitA)
+      |> into(ElixirRunner.Workflows.OutboxA)
+      |> keyed()
       |> sink_with("mid", fn s -> "a-out:" <> s end)
       |> into(ElixirRunner.Workflows.BlockB)
     end
@@ -546,6 +564,39 @@ defmodule ElixirRunner.Workflows do
       |> into(ElixirRunner.Workflows.UndoOutboxA)
       |> sink_with("mid", fn s -> "out:" <> s end)
       |> into(ElixirRunner.Workflows.UndoC)
+    end
+  end
+
+  # A failed stage delivers nothing. The entry's two values reach one
+  # `failed_stage` Cell in order: the first emits on a plugin channel, so the
+  # Cell's record carries an output; the second fails, so the stage never
+  # commits and no marker ever names that record.
+  defmodule FailedStage do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "failed_stage"
+    def init_state(_), do: nil
+    def run("b", _state, _ctx), do: {:error, {:non_retryable, "failed_stage fails on b"}}
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule FailedStageWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "failed_stage_workflow"
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Workflows.KeySplit)
+      |> into(ElixirRunner.Workflows.FailedStage)
+      |> sink_with("mid", fn s -> "lost:" <> s end)
     end
   end
 
@@ -792,6 +843,7 @@ defmodule ElixirRunner.Workflows do
       KeyedSagaWorkflow,
       OutboxBlockWorkflow,
       UndoOutboxWorkflow,
+      FailedStageWorkflow,
       BranchWorkflow,
       DiamondWorkflow,
       RetryWorkflow

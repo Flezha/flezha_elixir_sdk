@@ -429,23 +429,27 @@ defmodule Flezha.SDK.Operative.Cells do
       slots: c.slots,
       credit: c.credit,
       persistence_enabled: topo.persistence_enabled?,
-      tier: tier_facts(topo, node_ref),
+      tier: tier_facts(c, topo, node_ref),
       ctx_opts: [runner: c.runner] ++ ctx_opts(topo, node_ref, key)
     )
   end
 
-  # What a Cell of this node needs to know about the tier: whether it is on,
-  # the checkpoint policy, the sink routes it captures its own outputs through
-  # — the router delivers a tier class's emits to nodes only — and whether it
-  # has an inter-tasklet edge at all.
-  defp tier_facts(topo, node_ref) do
+  # What a Cell of this node needs to know about its records: whether it
+  # writes effect records (the tier, or a durable workflow, whose stage commit
+  # names them), the checkpoint policy, the sink routes it captures its own
+  # outputs through (the router delivers such a class's emits to nodes only),
+  # whether a record waits for an inter-tasklet edge (a workflow's edge value
+  # waits on its driver instead) and whether it is a workflow stage's Cell.
+  defp tier_facts(%__MODULE__{kind: kind}, topo, node_ref) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
+    stage? = kind == :workflow
 
     %{
-      on?: topo.effectively_once?,
+      on?: topo.effectively_once? or (stage? and topo.persistence_enabled?),
       checkpoint: topo.checkpoint,
       sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
-      edges?: Enum.any?(routes, &match?(%{to: {:node, _}}, &1)),
+      edges?: not stage? and Enum.any?(routes, &match?(%{to: {:node, _}}, &1)),
+      stage?: stage?,
       correction: topo.correction
     }
   end

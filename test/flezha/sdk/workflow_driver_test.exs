@@ -358,7 +358,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a stage commits the cell identities that ran" do
     messages = drive(LinearFlow, operative_id: "wf-ids")
     assert [first | _] = commits(messages)
-    assert [identity] = first.cells_ran
+    assert [%{cell_id: identity}] = first.cells_ran
     assert is_binary(identity)
   end
 
@@ -826,7 +826,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     Driver.stop_workflow(driver)
   end
 
-  # --- the transactional outbox ---
+  # --- a stage's plugin output ---
 
   defmodule HybridFlow do
     def factory_id, do: "hybrid_flow"
@@ -841,20 +841,25 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     end
   end
 
-  test "a hybrid channel stages its plugin output into the stage's commit" do
+  test "a hybrid channel's plugin output rides its Cell's record, which the commit names" do
     messages = drive(HybridFlow)
     assert [producer, consumer] = commits(messages)
 
-    assert [item] = producer.outbox
-    assert item.payload == "a-out:a:go"
-    assert item.channel == "mid"
-    assert item.seq_in_task == 0
+    assert [%{channels: ["mid"], first_seq: seq, seq: seq}] = producer.cells_ran
+    assert is_integer(seq)
 
     # The consumer still receives the value itself, not the sink's bytes: one
     # release reaches both the plugin and the next tasklet.
     assert consumer.handoff |> hd() |> Map.get(:payload) |> Resume.decode() == "j:a:go"
-    assert consumer.outbox == []
+    assert [%{channels: []}] = consumer.cells_ran
     assert %{status: "ok"} = completion(messages)
+  end
+
+  test "a stateless stage Cell of a journaling class restores from its records" do
+    driver = start_driver(HybridFlow, operative_id: "wf-stateless-restore")
+    assert {:ok, cell} = Operative.lookup(driver, "tagger", "")
+    assert {:ok, _terminal, false} = Flezha.SDK.Cell.restore(cell, <<>>, <<>>, <<>>, 0)
+    Driver.stop_workflow(driver)
   end
 
   test "nothing is staged for a class that journals nothing" do
@@ -1295,7 +1300,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert %{status: "ok"} = completion(messages)
     assert [_split, keyed] = commits(messages)
 
-    assert Enum.sort(keyed.cells_ran) ==
+    assert keyed.cells_ran |> Enum.map(& &1.cell_id) |> Enum.sort() ==
              Enum.map(~w(a b), &identity("wf-keyed", "keyed_undo", &1))
 
     assert keyed.handoff |> Enum.map(&Resume.decode(&1.payload)) |> Enum.sort() ==
@@ -1312,7 +1317,7 @@ defmodule Flezha.SDK.Workflow.DriverTest do
   test "a Cell that emitted nothing is recorded and undone; one that received nothing is neither" do
     messages = drive(SilentFlow, operative_id: "wf-silent")
     assert %{status: "error"} = completion(messages)
-    ran = for c <- commits(messages), not c.compensating, id <- c.cells_ran, do: id
+    ran = for c <- commits(messages), not c.compensating, %{cell_id: id} <- c.cells_ran, do: id
     assert identity("wf-silent", "silent", "a") in ran
     refute identity("wf-silent", "silent", "b") in ran
     assert for({:undone_key, "silent", key} <- messages, do: key) == ["a"]
@@ -1481,7 +1486,9 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert_receive {:plain_ran, "BTC-USD"}, 5_000
     assert_receive {:shipped, {:iter_commit, %{iter: 0, consumed_offset: 4}}}, 5_000
 
-    minted = for {_node, keyed} <- :sys.get_state(driver).cells.cells, key <- Map.keys(keyed), do: key
+    minted =
+      for {_node, keyed} <- :sys.get_state(driver).cells.cells, key <- Map.keys(keyed), do: key
+
     assert minted == ["BTC-USD"]
 
     Driver.stop_workflow(driver)

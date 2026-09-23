@@ -16,6 +16,20 @@ defmodule Flezha.SDK.Workflow.Commit do
 
   alias Flezha.SDK.Codec
 
+  @doc """
+  The Cells a stage (or its undo) ran, by identity, each with the effect
+  records it wrote there as its barriers reported them (`written`, per stage
+  and Cell); a Cell that wrote none is named with no records.
+  """
+  @spec cells_ran(map(), reference(), [binary()]) :: [map()]
+  def cells_ran(written, node_ref, identities) do
+    by_cell = Map.get(written, node_ref, %{})
+
+    Enum.map(identities, fn id ->
+      Map.get(by_cell, id, %{cell_id: id, first_seq: nil, seq: nil, channels: []})
+    end)
+  end
+
   @doc "Ship `TaskCommit` for one completed stage; the ack reaches `driver` as `{:barrier_ack, ref, result, error}`."
   @spec task(pid(), pid(), reference(), keyword()) :: tuple()
   def task(runner, driver, ref, fields) do
@@ -26,7 +40,6 @@ defmodule Flezha.SDK.Workflow.Commit do
         Keyword.fetch!(fields, :iter),
         Keyword.fetch!(fields, :cells_ran),
         Keyword.fetch!(fields, :handoff),
-        Keyword.get(fields, :outbox, []),
         Keyword.get(fields, :compensating, false),
         Keyword.get(fields, :completes, false),
         Keyword.get(fields, :result, <<>>),

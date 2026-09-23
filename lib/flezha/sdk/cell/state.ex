@@ -43,17 +43,21 @@ defmodule Flezha.SDK.Cell.State do
       gate: nil,
       held: []
     },
-    # One field again, for the same reason: whether the class declares the
-    # effectively-once tier, its checkpoint policy, the node's sink routes the
-    # Cell captures its outputs through, whether it has an inter-tasklet
-    # edge, the open interval, the consumed floor, the armed deadline, the
-    # records owed to an edge report, the declared correction policy and the
-    # replay slice buffered until its end marker.
+    # One field again, for the same reason: whether the Cell writes effect
+    # records (the effectively-once tier, or a durable workflow), its
+    # checkpoint policy, the node's sink routes the Cell captures its outputs
+    # through, whether it has an inter-tasklet edge, whether it is a workflow
+    # stage's Cell and the records it wrote since its stage's last barrier, the
+    # open interval, the consumed floor, the armed deadline, the records owed
+    # to an edge report, the declared correction policy and the replay slice
+    # buffered until its end marker.
     tier: %{
       on?: false,
       checkpoint: nil,
       sink_routes: [],
       edges?: false,
+      stage?: false,
+      written: nil,
       staged: %Flezha.SDK.Cell.Interval{},
       floor: -1,
       deadline: nil,

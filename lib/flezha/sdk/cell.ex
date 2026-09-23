@@ -112,7 +112,9 @@ defmodule Flezha.SDK.Cell do
 
   @doc """
   Enqueue a barrier behind whatever this Cell already holds: `{:stage_done,
-  ref, cell_pid}` reaches `reply_to` once the queue has drained past it.
+  ref, cell_pid, written}` reaches `reply_to` once the queue has drained past
+  it. `written` names the effect records a workflow stage's Cell wrote since
+  its last barrier (`%{cell_id, first_seq, seq, channels}`), `nil` when none.
   """
   def barrier(pid, ref, reply_to),
     do: enqueue_block(pid, %Barrier{ref: ref, reply_to: reply_to})
@@ -548,8 +550,8 @@ defmodule Flezha.SDK.Cell do
   defp admit(%State{} = s, %Undo{} = undo), do: dispatch(s, undo, nil)
 
   defp admit(%State{} = s, %Barrier{ref: ref, reply_to: pid}) do
-    send(pid, {:stage_done, ref, self()})
-    s
+    send(pid, {:stage_done, ref, self(), s.tier.written})
+    %{s | tier: %{s.tier | written: nil}}
   end
 
   # Defence in depth, and no test distinguishes it: the slice's order is already
@@ -664,7 +666,8 @@ defmodule Flezha.SDK.Cell do
   # Under the tier the invocation's whole effect is ONE record: its changes,
   # the outputs it captured itself, the offset it consumed and its timer ops,
   # so state, outputs and the offset can never tear. Only an inter-tasklet
-  # emit still leaves through the router.
+  # emit still leaves through the router; a workflow stage's Cell hands every
+  # emit to its driver, which holds the release for the stage's commit.
   defp settle_tier(%State{} = s, new_task_state, facts, offset) do
     {pending, ops, tally} = facts.timers
     Counters.inc_dispatches(s.counters)
@@ -673,7 +676,10 @@ defmodule Flezha.SDK.Cell do
 
     {s, report} = Tier.settle(s, facts, ops, offset)
     s = Clock.reflect(s, ops, tally)
-    if s.tier.edges?, do: flush_emits(s, facts.emits, handout_seq, offset, report)
+
+    if s.tier.edges? or s.tier.stage?,
+      do: flush_emits(s, facts.emits, handout_seq, offset, report)
+
     s
   end
 

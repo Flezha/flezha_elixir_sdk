@@ -157,11 +157,10 @@ defmodule Flezha.SDK.Codec do
           String.t(),
           non_neg_integer(),
           non_neg_integer(),
-          [binary()],
+          [map()],
           [
             {non_neg_integer(), binary()}
           ],
-          [map()],
           boolean(),
           boolean(),
           binary(),
@@ -173,7 +172,6 @@ defmodule Flezha.SDK.Codec do
         iter,
         cells_ran,
         handoff,
-        outbox,
         compensating,
         completes,
         result,
@@ -184,15 +182,23 @@ defmodule Flezha.SDK.Codec do
        operative_id: operative_id,
        task_idx: task_idx,
        iter: iter,
-       cells_ran: cells_ran,
+       cells_ran: Enum.map(cells_ran, &committed_cell/1),
        handoff: handoff_items(handoff),
-       outbox: Enum.map(outbox, &outbox_item/1),
        compensating: compensating,
        completes: completes,
        result: result,
        trigger: timer_trigger(trigger)
      }}
   end
+
+  # One Cell a stage ran, with the records it wrote there.
+  defp committed_cell(%{cell_id: id, first_seq: first, seq: last, channels: channels}),
+    do: %RunnerCommands.CommittedCell{
+      cell_id: id,
+      first_seq: first,
+      seq: last,
+      channels: channels
+    }
 
   # The firing a timer-fed pass's root stage names: its Cell's key, kind and
   # scheduled timestamp.
@@ -318,14 +324,6 @@ defmodule Flezha.SDK.Codec do
     end)
   end
 
-  defp outbox_item(%{cell_id: id, seq_in_task: seq, channel: channel, payload: payload}) do
-    %RunnerCommands.TaskOutboxItem{
-      cell_id: id,
-      seq_in_task: seq,
-      channel: channel,
-      payload: payload
-    }
-  end
 
   defp encode(message) do
     {:ok, iodata, _size} = Protox.encode(message)

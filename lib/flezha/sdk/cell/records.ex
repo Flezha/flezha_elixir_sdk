@@ -19,11 +19,13 @@ defmodule Flezha.SDK.Cell.Records do
   Rebuild the state from a `RestoreInitState`; `{:ok, state, terminal, migrated}`.
   The open interval is discarded — the Cell re-seats on a past in which none
   of it was applied — and the tier's consumed floor and the event-time
-  high-water come back off the restored effect records.
+  high-water come back off the restored effect records. A Cell restores when
+  it writes records at all: a stateless one that writes effect records (the
+  tier, a durable workflow's stage) folds them onto its initial state.
   """
   @spec restore(State.t(), binary(), binary(), binary(), non_neg_integer()) ::
           {:ok, State.t(), non_neg_integer(), boolean()} | {:error, String.t()}
-  def restore(%State{changeful?: true} = s, header, snapshot, log, hint) do
+  def restore(%State{persistent?: true} = s, header, snapshot, log, hint) do
     case Record.fold(s.module, s.cell_key, header, snapshot, log, hint) do
       {:ok, restored, terminal, migrated} ->
         timers = %{s.timers | pending: restored.timers, high_water: restored.high_water}
@@ -223,8 +225,38 @@ defmodule Flezha.SDK.Cell.Records do
   defp ship_effect(%State{} = s, record, dlq, hold_ref) do
     seq = s.change_seq
     frame = Record.effect_frame(s.identity, seq, effect_body(record, dlq), s.schema_version)
-    write_slot(hold_or_ship(%{s | change_seq: seq + 1}, seq, frame, hold_ref))
+    s = note_written(%{s | change_seq: seq + 1}, seq, record.outputs)
+    write_slot(hold_or_ship(s, seq, frame, hold_ref))
   end
+
+  # A workflow stage's Cell names the records it wrote at its next barrier, so
+  # the stage's commit names them in turn.
+  defp note_written(%State{tier: %{stage?: false}} = s, _seq, _outputs), do: s
+
+  defp note_written(%State{tier: tier} = s, seq, outputs) do
+    record = %{
+      cell_id: s.identity,
+      first_seq: seq,
+      seq: seq,
+      channels: outputs |> Enum.map(& &1.channel) |> Enum.uniq()
+    }
+
+    %{s | tier: %{tier | written: widen(tier.written, record)}}
+  end
+
+  @doc """
+  One Cell's records in a stage, `prior` (`nil` before the first) widened by
+  `written`: the range grows to cover both and each channel is named once.
+  """
+  def widen(nil, written), do: written
+
+  def widen(prior, written),
+    do: %{
+      prior
+      | first_seq: min(prior.first_seq, written.first_seq),
+        seq: max(prior.seq, written.seq),
+        channels: Enum.uniq(prior.channels ++ written.channels)
+    }
 
   # An invocation with no inter-tasklet output ships at once. One that has
   # them holds its RECORD until the router reports every push admitted, so an

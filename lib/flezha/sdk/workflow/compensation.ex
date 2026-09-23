@@ -75,8 +75,8 @@ defmodule Flezha.SDK.Workflow.Compensation do
 
   @doc """
   The group in flight has drained: journal each stage's undo the way its
-  forward run was journaled — a `TaskCommit` marked `compensating`, carrying
-  what the hook staged — then move on. The done marker each one records is
+  forward run was journaled (a `TaskCommit` marked `compensating`, naming the
+  records the hooks wrote), then move on. The done marker each one records is
   what makes a crash mid-rollback resume rather than repeat the undo.
   """
   @spec commit(struct()) :: {:unwinding, struct()} | {:done, struct()} | {:awaiting, struct()}
@@ -94,9 +94,8 @@ defmodule Flezha.SDK.Workflow.Compensation do
           operative_id: state.operative_id,
           task_idx: stage.task_idx,
           iter: Map.get(stage, :iter, state.iter),
-          cells_ran: stage.cells,
+          cells_ran: Commit.cells_ran(state.written, stage.node_ref, stage.cells),
           handoff: [],
-          outbox: Map.get(state.outbox.items, stage.node_ref, []),
           compensating: true
         )
 
@@ -187,14 +186,14 @@ defmodule Flezha.SDK.Workflow.Compensation do
     end
   end
 
-  # The stage's forward release and its staged plugin output are cleared
-  # first: the compensating commit that follows carries the UNDO's output,
-  # never a second copy of what the forward run already journaled.
+  # The stage's forward release and its forward records are cleared first: the
+  # compensating commit that follows names the UNDO's records, never the
+  # forward run's again.
   defp arm(state, stage) do
     %{
       state
       | collected: Map.put(state.collected, stage.node_ref, []),
-        outbox: put_in(state.outbox, [:items, stage.node_ref], []),
+        written: Map.delete(state.written, stage.node_ref),
         unwind: %{state.unwind | current: state.unwind.current ++ [stage]}
     }
   end
