@@ -36,6 +36,12 @@ defmodule ElixirRunner.Workflows.Gate do
     end
   end
 
+  @doc "Park at `point` when this runner was booted to hold there, until the release."
+  def hold_at(point) do
+    if System.get_env("FLEZHA_WORKFLOW_E2E_HOLD") == point, do: block_until_released()
+    :ok
+  end
+
   def branch_fail?, do: System.get_env(@branch_fail_env) != nil
 
   def armed_failures do
@@ -622,32 +628,115 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  # `workflow_timer_refused`: a tasklet that registers a timer inside a
-  # workflow. Timers do not fire there yet, so the ctx refuses naming
-  # `TimersUnavailable`, the tasklet fails with the refusal, and the instance
-  # ends in error rather than losing the timer.
-  defmodule TimerRefused do
+  # `timer_loop_workflow`: `in -> tick -> relay -> out`, a per-input loop whose
+  # `tick` arms a processing-time timer of the delay `after:<ms>` names and
+  # emits `armed:<at>`; its firing emits `fired:<at>` and opens a pass of its
+  # own. `slow:<ms>` holds `tick` that long, for a firing due mid-pass. On a
+  # runner booted with `FLEZHA_WORKFLOW_E2E_HOLD` the firing parks at the gate:
+  # `timer` inside `on_timer`, before `tick` commits; `relay` in `relay`, after.
+  defmodule Tick do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
-    def name, do: "workflow_timer_refused"
-    def init_state(_), do: nil
+    def name, do: "tick"
+    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
 
-    def run(_input, state, ctx) do
-      with {:ok, _at} <- Ctx.timer_after(ctx, 60_000), do: {:ok, state}
+    def run("after:" <> delay, state, ctx) do
+      {:ok, at} = Ctx.timer_after(ctx, String.to_integer(delay))
+      Ctx.emit(ctx, "armed:#{at}")
+      {:ok, Ctx.apply(ctx, state, "armed:#{at}")}
+    end
+
+    def run("slow:" <> pause = input, state, ctx) do
+      Process.sleep(String.to_integer(pause))
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+
+    def on_timer(fired_at, _kind, state, ctx) do
+      Gate.hold_at("timer")
+      Ctx.emit(ctx, "fired:#{fired_at}")
+      {:ok, state}
     end
   end
 
-  defmodule WorkflowTimerRefused do
+  defmodule Relay do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "relay"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      if String.starts_with?(input, "fired:"), do: Gate.hold_at("relay")
+      Ctx.emit(ctx, "relay:" <> input)
+      {:ok, state}
+    end
+  end
+
+  defmodule TimerLoopWorkflow do
     @moduledoc false
     @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "workflow_timer_refused"
+    def factory_id, do: "timer_loop_workflow"
+    def loop_mode, do: :per_input
+    def max_duration_ms, do: 600_000
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
-      |> input("input")
-      |> into(ElixirRunner.Workflows.TimerRefused)
+      |> input("in")
+      |> into(ElixirRunner.Workflows.Tick)
+      |> named("ticked")
+      |> into(ElixirRunner.Workflows.Relay)
+      |> sink("out")
+    end
+  end
+
+  # `event_timer_workflow`: an entry-fed tasklet whose clock is the message's
+  # leading event time; each message arms an event-time timer 100 later and
+  # emits `seen:<t>`, and the firing emits `fired:<at>`.
+  defmodule EventTick do
+    @moduledoc false
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "event_tick"
+    def clock, do: :event_time
+    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+
+    def event_time_of(input),
+      do: input |> String.split(":", parts: 2) |> hd() |> ElixirRunner.Numbers.int()
+
+    def run(_input, state, ctx) do
+      {:ok, at} = Ctx.timer_at_event_time(ctx, Ctx.now(ctx) + 100)
+      Ctx.emit(ctx, "seen:#{Ctx.now(ctx)}")
+      {:ok, Ctx.apply(ctx, state, "armed:#{at}")}
+    end
+
+    def on_timer(fired_at, _kind, state, ctx) do
+      Ctx.emit(ctx, "fired:#{fired_at}")
+      {:ok, state}
+    end
+  end
+
+  defmodule EventTimerWorkflow do
+    @moduledoc false
+    @behaviour Flezha.SDK.WorkflowOperative
+    def factory_id, do: "event_timer_workflow"
+    def loop_mode, do: :per_input
+    def max_duration_ms, do: 600_000
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Workflows.EventTick)
+      |> sink("out")
     end
   end
 
@@ -690,7 +779,8 @@ defmodule ElixirRunner.Workflows do
   def all do
     [
       EchoWorkflow,
-      WorkflowTimerRefused,
+      TimerLoopWorkflow,
+      EventTimerWorkflow,
       StaticCellWorkflow,
       TypedOnceWorkflow,
       CommitBlockWorkflow,

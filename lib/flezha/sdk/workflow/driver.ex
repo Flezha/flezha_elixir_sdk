@@ -1,7 +1,8 @@
 defmodule Flezha.SDK.Workflow.Driver do
   @moduledoc """
   One process per workflow instance: the stage driver. A pass walks the chain
-  of the entry channel its message arrived on, frontier by frontier: a tasklet
+  of the entry channel its message arrived on, or of the tasklet whose timer
+  fired, frontier by frontier: a tasklet
   becomes runnable once every producer feeding it in that chain has committed,
   so a fan-in is dispatched exactly once with the accumulated batch of this
   pass's producers. It commits each stage durably and ends by shipping
@@ -26,13 +27,19 @@ defmodule Flezha.SDK.Workflow.Driver do
   stream operative's frames take, and runs only the chain of the entry channel
   it arrived on; a chained loop's later passes re-enter the chain its first
   message picked.
+
+  The driver is the gate a stage Cell's due timer passes through: a firing
+  while the driver waits opens a pass at that tasklet; one whose stage is in
+  flight joins it; any other waits in the queue with the messages and is
+  served at the next boundary before the loop's own continuation. A served
+  firing's removal is written when its stage commits.
   """
 
   use GenServer
 
   require Logger
 
-  alias Flezha.SDK.Knob
+  alias Flezha.SDK.{Cell, Knob}
   alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
   alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
@@ -71,6 +78,9 @@ defmodule Flezha.SDK.Workflow.Driver do
       # the entry channel whose chain the pass runs; a carry-fed pass keeps
       # the one the loop's first message picked
       pass_channel: nil,
+      # the firing a timer-fed pass runs the tasklet chain of, with the carry
+      # it leaves as it stood; `nil` for a message- or carry-fed pass
+      origin: nil,
       # the input-log offset of the input this pass consumed, `nil` for none
       consumed_offset: nil,
       iter: 0,
@@ -250,7 +260,29 @@ defmodule Flezha.SDK.Workflow.Driver do
     end
   end
 
+  # A stage Cell's processing-time timer is due. It opens a pass at that
+  # tasklet when the driver waits with nothing queued, joins the tasklet's
+  # stage while it runs, and otherwise waits its turn behind what arrived
+  # first.
   @impl true
+  def handle_info({:firing_due, node_ref, cell_key, fire}, %State{} = s) do
+    firing = %Instance.Firing{node_ref: node_ref, cell_key: cell_key, fire: fire}
+
+    cond do
+      s.terminal != nil or Instance.queued?(s.instance, firing) ->
+        {:noreply, s}
+
+      s.idle != nil and Instance.idle?(s.instance) ->
+        settle(open_timer_pass(%{s | idle: nil}, firing))
+
+      joinable?(s, node_ref) ->
+        {:noreply, dispatch_firing(s, firing)}
+
+      true ->
+        {:noreply, %{s | instance: Instance.push_firing(s.instance, firing)}}
+    end
+  end
+
   def handle_info({:stage_done, ref, _pid}, %State{} = s) do
     case Map.pop(s.awaiting, ref) do
       {nil, _} -> {:noreply, s}
@@ -338,7 +370,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   # accumulate during ordinary forward progress too — so it is what decides
   # between finishing the unwind and running forward.
   defp resume_bound(%State{} = s) do
-    s = %{s | resume_owed: 0}
+    s = drop_committed_firings(%{s | resume_owed: 0})
 
     cond do
       Instance.any_compensation_done?(s.instance) -> unwind(s, "error", "resumed mid-rollback")
@@ -369,6 +401,17 @@ defmodule Flezha.SDK.Workflow.Driver do
   # one re-takes the message the controller re-forwards (waiting for it if it
   # has not landed yet), a carry-fed one re-enters the journaled chain.
   defp resume_mid_iteration(%State{} = s) do
+    case Resume.timer_root(s.instance) do
+      nil ->
+        resume_message_or_carry(s)
+
+      origin ->
+        start = Resume.start(s, origin, nil, &through_edge(s, &1, &2, &3))
+        resume_iteration(%{s | origin: origin}, start)
+    end
+  end
+
+  defp resume_message_or_carry(%State{} = s) do
     if message_fed?(s) do
       case pop_message(s) do
         {:message, s, item} ->
@@ -392,7 +435,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     s = %{
       fresh_iteration(s)
       | instance: instance,
-        pass_channel: start.channel,
+        pass_channel: start.channel || s.pass_channel,
         pending: start.pending,
         waiting: start.waiting,
         completed: start.completed,
@@ -409,6 +452,9 @@ defmodule Flezha.SDK.Workflow.Driver do
     case seed(s) do
       {:message, s, item} ->
         enter_pass(s, item)
+
+      {:firing, s, firing} ->
+        open_timer_pass(s, firing)
 
       {:carry, s, batch} ->
         channel = carried_channel(s)
@@ -459,7 +505,48 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   defp start_pass(%State{} = s, channel, frontier),
-    do: dispatch_frontier(%{fresh_iteration(s) | pass_channel: channel}, frontier)
+    do: dispatch_frontier(%{fresh_iteration(s) | pass_channel: channel, origin: nil}, frontier)
+
+  # A firing's pass: the one Cell whose timer fired, at its tasklet, whose
+  # chain the pass runs. The entry channel and consumed offset stay the last
+  # message-fed pass's, which its iteration commit names, and so does the
+  # carry a chained loop feeds on when this pass reaches no leaf.
+  defp open_timer_pass(%State{cancel: reason} = s, _firing) when reason != nil,
+    do: complete(s, "cancelled", "")
+
+  defp open_timer_pass(%State{} = s, %Instance.Firing{} = firing) do
+    s = %{
+      fresh_iteration(s)
+      | origin: %{firing: firing, carry: s.carry},
+        carry: nil,
+        frontier: [{firing.node_ref, []}],
+        next: [],
+        awaiting: %{}
+    }
+
+    s = dispatch_firing(s, firing)
+    if map_size(s.awaiting) == 0, do: stage_settled(s), else: s
+  end
+
+  # The firing on its Cell with a barrier behind it, counted with its stage.
+  defp dispatch_firing(%State{} = s, %Instance.Firing{node_ref: node_ref} = firing) do
+    {keys, awaiting, cells} =
+      Stage.fire(s.cells, node_ref, firing.cell_key, firing.fire, self())
+
+    %{
+      s
+      | cells: cells,
+        collected: Map.put_new(s.collected, node_ref, []),
+        ran: Map.update(s.ran, node_ref, keys, &Enum.uniq(&1 ++ keys)),
+        awaiting: Enum.into(awaiting, s.awaiting)
+    }
+  end
+
+  # A stage still waiting for its Cells can take a firing of its own tasklet.
+  defp joinable?(%State{unwind: %{status: nil}, cancel: nil} = s, node_ref),
+    do: Enum.any?(s.awaiting, fn {_ref, awaited} -> awaited == node_ref end)
+
+  defp joinable?(%State{}, _node_ref), do: false
 
   # An empty inbox is waited on as the reference waits: for the tail a
   # rehydrating bind still owes, else for the idle window, and the loop parks
@@ -479,12 +566,23 @@ defmodule Flezha.SDK.Workflow.Driver do
   # queued meaning wait; done for a `:once` class after its one pass; the
   # previous terminal batch for a handoff-chained loop, which ends on an
   # empty one.
+  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :once}}, iter: iter} = s) when iter > 0,
+    do: {:done, s}
+
   defp seed(%State{} = s) do
-    cond do
-      message_fed?(s) -> pop_message(s)
-      s.spec.knobs.loop_mode == :once -> {:done, s}
-      s.carry in [nil, []] -> {:done, s}
-      true -> {:carry, %{s | carry: nil, consumed_offset: nil}, s.carry}
+    case Instance.pop_trigger(s.instance, message_fed?(s)) do
+      {:ok, %Instance.Firing{} = firing, instance} ->
+        {:firing, %{s | instance: instance}, firing}
+
+      {:ok, item, instance} ->
+        {:message, %{s | instance: instance, consumed_offset: item.offset}, item}
+
+      {:empty, _instance} ->
+        cond do
+          message_fed?(s) -> :wait
+          s.carry in [nil, []] -> {:done, s}
+          true -> {:carry, %{s | carry: nil, consumed_offset: nil}, s.carry}
+        end
     end
   end
 
@@ -609,7 +707,8 @@ defmodule Flezha.SDK.Workflow.Driver do
           outbox: Map.get(s.outbox.items, node_ref, []),
           compensating: s.unwind.status != nil,
           completes: asked != nil,
-          result: result_of(asked)
+          result: result_of(asked),
+          trigger: trigger(s, node_ref)
         )
 
       arm(s, ref, :task, command)
@@ -665,6 +764,8 @@ defmodule Flezha.SDK.Workflow.Driver do
     do: complete(s, "ok", "", result_of(completion(s)))
 
   defp seal_iteration(%State{} = s) do
+    s = keep_carry(s)
+
     if journals?(s) do
       ref = make_ref()
 
@@ -710,7 +811,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     s = %{s | barrier: nil}
 
     case kind do
-      :task -> advance(s)
+      :task -> s |> release_firings() |> advance()
       :iter -> next_iteration(s)
       :comp -> unwind_step(s, &Compensation.commit/1)
     end
@@ -810,9 +911,57 @@ defmodule Flezha.SDK.Workflow.Driver do
   # last COMMITTED iteration, so a resume enters the one after it either way,
   # and the last message the run parked unread, which the inbox releases.
   defp park(%State{} = s) do
-    wake = s.spec.knobs.wake_after_ms || 0
+    wake = earliest_timer(s)
     Commit.park(s.runner, s.operative_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
     %{s | terminal: :parked}
+  end
+
+  # What a sleeper wakes at: the earliest processing-time timer any of its
+  # Cells holds, `0` for none. An event-time timer waits for an input, which
+  # wakes a sleeper anyway.
+  defp earliest_timer(%State{cells: cells}) do
+    cells
+    |> Cells.pids()
+    |> Enum.map(&Cell.earliest_timer/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(fn -> 0 end)
+  end
+
+  # The stage that served firings committed: each Cell it ran writes the
+  # removals it held.
+  defp release_firings(%State{frontier: [{node_ref, _batch} | _]} = s) do
+    for key <- Map.get(s.ran, node_ref, []),
+        pid = Cells.pid(s.cells, node_ref, key),
+        pid != nil,
+        do: Cell.release_firings(pid)
+
+    s
+  end
+
+  # The firing a timer-fed pass's root commit names; no other stage names one.
+  defp trigger(%State{origin: %{firing: %{node_ref: node_ref} = firing}}, node_ref),
+    do: Instance.Firing.trigger(firing)
+
+  defp trigger(%State{}, _node_ref), do: nil
+
+  # A timer-fed pass that released nothing at a leaf leaves a chained loop's
+  # carry as it stood, so it does not end the loop as an empty batch would.
+  defp keep_carry(%State{origin: %{carry: kept}, carry: carry} = s) when carry in [nil, []],
+    do: %{s | carry: kept}
+
+  defp keep_carry(%State{} = s), do: s
+
+  # A restored timer whose firing's stage the journal records committed fired
+  # before the crash: it is dropped from its Cell and from the queue.
+  defp drop_committed_firings(%State{} = s) do
+    fired = for {_iter, firing} <- Resume.committed_firings(s.instance), do: firing
+
+    for %Instance.Firing{fire: fire} = firing <- fired,
+        pid = Cells.pid(s.cells, firing.node_ref, firing.cell_key),
+        pid != nil,
+        do: Cell.drop_firings(pid, [{fire.kind, fire.at}])
+
+    %{s | instance: Instance.filter_firings(s.instance, &(&1 not in fired))}
   end
 
   # Only a run that reached its end with a completion carries a result: one that
@@ -853,9 +1002,14 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   # The producers of `child` a join waits for in this pass: those inside the
   # pass's chain.
-  defp chain_parents(%State{spec: spec, pass_channel: channel}, child),
-    do:
-      spec.dag.chains |> Map.fetch!(channel) |> Map.fetch!(:parents_in_chain) |> Map.get(child, 0)
+  defp chain_parents(%State{} = s, child),
+    do: s |> pass_chain() |> Map.fetch!(:parents_in_chain) |> Map.get(child, 0)
+
+  # The chain this pass runs: the fired tasklet's, or the entry channel's.
+  defp pass_chain(%State{origin: %{firing: %{node_ref: node_ref}}, spec: spec}),
+    do: Map.fetch!(spec.dag.from_node, node_ref)
+
+  defp pass_chain(%State{spec: spec} = s), do: Map.fetch!(spec.dag.chains, carried_channel(s))
 
   defp encode(value), do: Resume.encode(value)
 

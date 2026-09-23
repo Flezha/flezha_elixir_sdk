@@ -29,7 +29,8 @@ defmodule Flezha.SDK.Workflow.Commit do
         Keyword.get(fields, :outbox, []),
         Keyword.get(fields, :compensating, false),
         Keyword.get(fields, :completes, false),
-        Keyword.get(fields, :result, <<>>)
+        Keyword.get(fields, :result, <<>>),
+        Keyword.get(fields, :trigger)
       )
 
     barrier(runner, driver, ref, command)

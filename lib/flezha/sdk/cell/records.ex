@@ -267,11 +267,15 @@ defmodule Flezha.SDK.Cell.Records do
     {send_record(s, "cell_state_change", frame), seq + 1}
   end
 
-  defp restate_timers(%State{timers: %{pending: pending}} = s) do
-    if Timers.empty?(pending) do
+  # A firing whose removal a workflow stage still holds is pending until the
+  # stage commits, so the compaction re-states it too.
+  defp restate_timers(%State{timers: %{pending: pending, held: held}} = s) do
+    ops = Timers.register_ops(pending) ++ Enum.map(held, &%{&1 | register: true})
+
+    if ops == [] do
       s
     else
-      {s, seq} = ship_ops(s, s.change_seq, Timers.register_ops(pending))
+      {s, seq} = ship_ops(s, s.change_seq, ops)
       write_slot(%{s | change_seq: seq})
     end
   end

@@ -107,9 +107,22 @@ defmodule ElixirRunner.WorkflowsLoop do
     def init_state(_), do: %{turns: 0, last: ""}
     def apply_change(state, turn), do: %{state | turns: state.turns + 1, last: turn}
 
+    # With `FLEZHA_BENCH_WAKE_AFTER_MS` set each turn arms a timer that far
+    # out, whose firing sends the bench's wake marker, `wake:<fired_at>`.
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, input)
+
+      case System.get_env("FLEZHA_BENCH_WAKE_AFTER_MS") do
+        nil -> :ok
+        after_ms -> {:ok, _at} = Ctx.timer_after(ctx, String.to_integer(after_ms))
+      end
+
       Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+
+    def on_timer(fired_at, _kind, state, ctx) do
+      Ctx.emit(ctx, "wake:#{fired_at}")
       {:ok, state}
     end
   end
@@ -243,13 +256,6 @@ defmodule ElixirRunner.WorkflowsLoop do
     def self_terminating?, do: false
     # A soak outlives the chat loop's 600 s.
     def max_duration_ms, do: 24 * 3600 * 1000
-
-    def wake_after_ms do
-      case System.get_env("FLEZHA_BENCH_WAKE_AFTER_MS") do
-        nil -> nil
-        value -> String.to_integer(value)
-      end
-    end
 
     def channels(c) do
       import Flezha.SDK.Channels

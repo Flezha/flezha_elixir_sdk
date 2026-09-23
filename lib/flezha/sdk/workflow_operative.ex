@@ -21,7 +21,6 @@ defmodule Flezha.SDK.WorkflowOperative do
     :max_duration_ms,
     :self_terminating?,
     :loop_mode,
-    :wake_after_ms,
     :rollback_mode,
     :persistence_enabled,
     :sleep_when_idle,
@@ -100,12 +99,6 @@ defmodule Flezha.SDK.WorkflowOperative do
   @doc "Loop shape of a structured chain."
   @callback loop_mode() :: loop_mode()
 
-  @doc """
-  Durable wake deadline for a `:per_input` loop: how long after parking the
-  instance is rehydrated with an empty entry payload even with no input.
-  """
-  @callback wake_after_ms() :: pos_integer() | nil
-
   @doc "Saga rollback scope when the operative terminates abnormally after partial progress."
   @callback rollback_mode() :: rollback_mode()
 
@@ -114,7 +107,8 @@ defmodule Flezha.SDK.WorkflowOperative do
 
   @doc """
   Whether an instance waiting at a committed boundary for `FLEZHA_PARK_IDLE_MS`
-  sleeps: parks, is evicted and wakes on its next message. Defaults to the
+  sleeps: parks, is evicted and wakes on its next message or at the earliest
+  processing-time timer its tasklets registered. Defaults to the
   class's `persistence_enabled/0`; declaring it without persistence is refused
   as `SleepWithoutPersistence`.
   """
@@ -130,7 +124,6 @@ defmodule Flezha.SDK.WorkflowOperative do
                       max_duration_ms: 0,
                       self_terminating?: 0,
                       loop_mode: 0,
-                      wake_after_ms: 0,
                       rollback_mode: 0,
                       persistence_enabled: 0,
                       sleep_when_idle: 0,
@@ -140,7 +133,6 @@ defmodule Flezha.SDK.WorkflowOperative do
     max_duration_ms: nil,
     self_terminating?: true,
     loop_mode: :once,
-    wake_after_ms: nil,
     rollback_mode: :all_or_nothing,
     persistence_enabled: true,
     sync_durability: false

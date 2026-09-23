@@ -49,4 +49,24 @@ defmodule Flezha.SDK.Workflow.Stage do
 
     {reached, awaiting, cells}
   end
+
+  @doc """
+  Hand one due timer firing to the Cell of `node_ref` under `key` and queue a
+  barrier behind it, answering as `dispatch/4` does; nothing when that Cell is
+  gone, and its timers with it.
+  """
+  @spec fire(Cells.t(), reference(), String.t() | nil, struct(), pid()) ::
+          {[String.t() | nil], [{reference(), reference()}], Cells.t()}
+  def fire(%Cells{} = cells, node_ref, key, fire, reply_to) do
+    case Cells.pid(cells, node_ref, key) do
+      nil ->
+        {[], [], cells}
+
+      pid ->
+        ref = make_ref()
+        Cell.enqueue_block(pid, fire)
+        Cell.barrier(pid, ref, reply_to)
+        {[key], [{ref, node_ref}], cells}
+    end
+  end
 end

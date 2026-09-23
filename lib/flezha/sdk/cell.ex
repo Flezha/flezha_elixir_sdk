@@ -33,7 +33,10 @@ defmodule Flezha.SDK.Cell do
   input's event time advances the high-water past it, ahead of that input. A
   firing's ops and outputs ship as a dispatch's do, its removal committed
   even when it parks; a restore, a slot and an eviction re-arm, re-arm and
-  discard the armed set with the pending one.
+  discard the armed set with the pending one. A workflow stage's Cell hands a
+  due processing-time firing to its driver, which decides when it runs, and
+  when its class journals it holds a served firing's removal until the
+  driver releases it on the stage's commit.
   """
 
   use GenServer
@@ -45,6 +48,10 @@ defmodule Flezha.SDK.Cell do
 
   # The live read's two verdicts. Every other refusal is `Flezha.SDK.Call`'s.
   @read_verdict %{timeout: {:error, :busy}, other: {:error, :gone}}
+
+  # What a removal written outside a dispatch adds to the timer counters: the
+  # dispatch that served the firing already counted it.
+  @no_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
 
   # A due timer: on the queue beside the inputs, dispatched through the same
   # ladder with `on_timer/4` in place of `run/3`.
@@ -109,6 +116,17 @@ defmodule Flezha.SDK.Cell do
   """
   def barrier(pid, ref, reply_to),
     do: enqueue_block(pid, %Barrier{ref: ref, reply_to: reply_to})
+
+  @doc "The earliest processing-time timer pending on this Cell, or `nil`."
+  @spec earliest_timer(pid()) :: non_neg_integer() | nil
+  def earliest_timer(pid), do: Call.cell(pid, :earliest_timer, log: false, on_error: nil)
+
+  @doc "Drop restored firings whose stage the journal records committed, writing their removal."
+  @spec drop_firings(pid(), [{Timers.kind(), non_neg_integer()}]) :: :ok
+  def drop_firings(pid, fired), do: Call.cell(pid, {:drop_firings, fired}, on_error: :ok)
+
+  @doc "The stage that served this Cell's firings committed: write their held removals."
+  def release_firings(pid), do: send(pid, :release_firings)
 
   @doc "Enqueue under a drop policy — non-blocking."
   def enqueue_drop(pid, value, policy), do: GenServer.cast(pid, {:enqueue_drop, value, policy})
@@ -242,7 +260,7 @@ defmodule Flezha.SDK.Cell do
       # The static ctx facts: the node's, from the Operative, and the timer
       # policy this tasklet declares.
       ctx_opts: [timer_policy: Tasklet.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
-      timers: Clock.seed(module, slot),
+      timers: Clock.seed(module, slot, firing_gate(opts)),
       changeful?: changeful?,
       tier: tier,
       persistent?: persists?(changeful?, tier, opts),
@@ -255,6 +273,17 @@ defmodule Flezha.SDK.Cell do
 
     state = seed_tier(state, slot)
     {:ok, state |> Records.rebind(Keyword.get(opts, :secondaries, [])) |> Clock.rearm()}
+  end
+
+  # A workflow stage's Cell hands its due firings to the driver, which decides
+  # when each runs; one whose class journals holds a served firing's removal
+  # until the stage's commit.
+  defp firing_gate(opts) do
+    cond do
+      not Keyword.get(opts, :gate_firings, false) -> nil
+      Keyword.get(opts, :persistence_enabled, true) -> :held
+      true -> :settled
+    end
   end
 
   # Off the tier a record stream exists only to carry changes, so a changeless
@@ -308,6 +337,23 @@ defmodule Flezha.SDK.Cell do
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.task_state, s.change_seq}, s}
 
+  # What a sleeping workflow wakes at: the earliest processing-time timer.
+  def handle_call(:earliest_timer, _from, %State{} = s),
+    do: {:reply, List.first(Timers.all(s.timers.pending, :processing_time)), s}
+
+  # Firings whose stage the journal records committed, restored before their
+  # removal was written: they must not fire again.
+  def handle_call({:drop_firings, fired}, _from, %State{} = s) do
+    ops =
+      for {kind, at} <- fired,
+          Timers.contains?(s.timers.pending, kind, at),
+          do: Timers.cancel_op(kind, at)
+
+    pending = Timers.apply_all(s.timers.pending, ops)
+    s = %{s | timers: %{s.timers | pending: pending}}
+    {:reply, :ok, if(ops == [], do: s, else: ship_removals(s, ops))}
+  end
+
   def handle_call({:idle?, ttl_ms}, _from, %State{} = s),
     do: {:reply, holds_nothing?(s) and now_ms() - s.last_input_ms > ttl_ms, s}
 
@@ -360,6 +406,20 @@ defmodule Flezha.SDK.Cell do
   # processing-time timer due by now onto the queue, ascending, so the order
   # never depends on the order two same-millisecond messages arrive in; one
   # that finds no room comes back later rather than dropping.
+  # A workflow stage's Cell reports its firing to the driver instead: the
+  # driver decides whether it opens a pass, joins the running stage or waits,
+  # and hands it back through the queue.
+  def handle_info({:timer_due, at}, %State{timers: %{gate: gate}} = s) when gate != nil do
+    if Timers.contains?(s.timers.pending, :processing_time, at),
+      do:
+        Inbox.firing_due(s.operative, s.node_ref, s.cell_key, %Fire{
+          kind: :processing_time,
+          at: at
+        })
+
+    {:noreply, s}
+  end
+
   def handle_info({:timer_due, at}, %State{size: size, capacity: capacity} = s)
       when size >= capacity do
     # A due message that finds no room comes back later, never drops.
@@ -400,6 +460,11 @@ defmodule Flezha.SDK.Cell do
   # rather than flushing here, so it lands behind every member that preceded it.
   def handle_info(:end_replay_slice, %State{} = s),
     do: {:noreply, kick(enqueue(s, %Tier.SliceEnd{}))}
+
+  # The stage that served this Cell's firings committed: their removals are
+  # durable now.
+  def handle_info(:release_firings, %State{timers: %{held: held}} = s) when held != [],
+    do: {:noreply, ship_removals(%{s | timers: %{s.timers | held: []}}, held)}
 
   # Every inter-tasklet push of one invocation has been admitted: its record
   # may become durable now.
@@ -559,6 +624,7 @@ defmodule Flezha.SDK.Cell do
     try do
       case run_ladder(s, item, ctx_opts(s, item, replay), 1) do
         {:ok, new_task_state, facts} ->
+          {s, facts} = hold_removal(s, item, facts)
           s |> complete(new_task_state, facts, offset) |> request_completion(facts.completion)
 
         {:park, error, attempts} ->
@@ -611,6 +677,22 @@ defmodule Flezha.SDK.Cell do
     s
   end
 
+  # A workflow firing's removal is durable when the stage that served it
+  # commits, as a message leaves the input log at the commit that consumed it:
+  # it stays out of this dispatch's record until the driver's release.
+  defp hold_removal(%State{timers: %{gate: :held}} = s, %Fire{kind: kind, at: at}, facts) do
+    {pending, ops, tally} = facts.timers
+    {held, ops} = Enum.split_with(ops, &(&1 == Timers.cancel_op(kind, at)))
+    s = %{s | timers: %{s.timers | held: s.timers.held ++ held}}
+    {s, %{facts | timers: {pending, ops, tally}}}
+  end
+
+  defp hold_removal(%State{} = s, _item, facts), do: {s, facts}
+
+  # Removals written outside a dispatch: shipped as one record and disarmed.
+  defp ship_removals(%State{} = s, ops, tally \\ @no_tally),
+    do: s |> Records.ship([], ops) |> Clock.reflect(ops, tally)
+
   # A firing that exhausted its ladder still commits its removal, so a poison
   # timer parks once instead of firing for ever. Under the tier the removal
   # rides the park's own record instead, which is what makes it atomic.
@@ -618,7 +700,7 @@ defmodule Flezha.SDK.Cell do
 
   defp park_firing(%State{} = s, item) do
     {s, ops, tally} = firing_removal(s, item)
-    if ops == [], do: s, else: s |> Records.ship([], ops) |> Clock.reflect(ops, tally)
+    if ops == [], do: s, else: ship_removals(s, ops, tally)
   end
 
   # The op a parked firing commits: its own removal, op 0 of the session.
@@ -728,8 +810,11 @@ defmodule Flezha.SDK.Cell do
   defp clock_now(%State{} = s, value), do: Clock.now(s, value)
   # The invocation's timer session opens over the live pending set; a firing's
   # opens on its own removal. A replayed input's spawn requests issue nothing.
-  # The static facts come first, so a workflow stage's `timers: :unavailable`
-  # stands over the pending set.
+  # A `compensate` hook's context carries no timers: a rollback is no place to
+  # arm a deadline.
+  defp ctx_opts(%State{} = s, %Undo{}, _replay),
+    do: [timers: :unavailable] ++ s.ctx_opts ++ [replay: false]
+
   defp ctx_opts(%State{} = s, item, replay),
     do: s.ctx_opts ++ [timers: s.timers.pending, firing: firing(item), replay: replay != nil]
 
@@ -823,9 +908,9 @@ defmodule Flezha.SDK.Cell do
 
   defp format_error(reason) when is_binary(reason), do: reason
 
-  # The ctx's timer refusal inside a workflow, under the name every SDK gives it.
+  # The ctx's timer refusal in a `compensate` hook, under the name every SDK gives it.
   defp format_error(:timers_unavailable),
-    do: "TimersUnavailable: a workflow tasklet cannot register or cancel a timer"
+    do: "TimersUnavailable: a compensate hook cannot register or cancel a timer"
 
   defp format_error(reason), do: inspect(reason)
 end

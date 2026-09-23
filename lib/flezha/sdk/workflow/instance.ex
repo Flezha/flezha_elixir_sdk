@@ -1,8 +1,9 @@
 defmodule Flezha.SDK.Workflow.Instance do
   @moduledoc """
   One workflow instance's runtime state, as the driver process holds it: the
-  inbox every message-fed pass consumes, the compensation markers a saga
-  reads, and the committed task-journal the bind carried for a crash-resume.
+  queue of triggers every pass starts from (messages and timer firings, in
+  arrival order), the compensation markers a saga reads, and the committed
+  task-journal the bind carried for a crash-resume.
 
   It is a struct rather than a process. The reference carries a cancellation
   flag, a restore condition variable and a bounded channel here because its
@@ -28,6 +29,27 @@ defmodule Flezha.SDK.Workflow.Instance do
             payload: term(),
             offset: non_neg_integer() | nil
           }
+  end
+
+  defmodule Firing do
+    @moduledoc "A due timer of one Cell, waiting for its pass: the node, the Cell's key, the firing."
+    defstruct [:node_ref, :cell_key, :fire]
+
+    @type t :: %__MODULE__{node_ref: reference(), cell_key: String.t() | nil, fire: struct()}
+
+    @doc "The firing a journaled trigger names, on `node_ref`."
+    @spec from_trigger(reference() | nil, map()) :: t()
+    def from_trigger(node_ref, %{cell_key: key, kind: kind, at: at}),
+      do: %__MODULE__{
+        node_ref: node_ref,
+        cell_key: key,
+        fire: %Flezha.SDK.Cell.Fire{kind: kind, at: at}
+      }
+
+    @doc "The trigger a timer-fed pass's root commit names for this firing."
+    @spec trigger(t()) :: map()
+    def trigger(%__MODULE__{cell_key: key, fire: fire}),
+      do: %{cell_key: key, kind: fire.kind, at: fire.at}
   end
 
   defmodule Committed do
@@ -122,12 +144,47 @@ defmodule Flezha.SDK.Workflow.Instance do
   def note_parked(%__MODULE__{} = i, offset),
     do: %{i | parked_offset: max(i.parked_offset, offset)}
 
-  @doc "Take the next input, or `:empty`."
+  @doc "Queue a due timer firing behind whatever arrived before it."
+  @spec push_firing(t(), Firing.t()) :: t()
+  def push_firing(%__MODULE__{} = i, %Firing{} = firing),
+    do: %{i | inbox: :queue.in(firing, i.inbox)}
+
+  @doc "Whether this exact firing already waits in the queue."
+  @spec queued?(t(), Firing.t()) :: boolean()
+  def queued?(%__MODULE__{inbox: inbox}, %Firing{} = firing), do: :queue.member(firing, inbox)
+
+  @doc "Whether nothing waits for a pass."
+  @spec idle?(t()) :: boolean()
+  def idle?(%__MODULE__{inbox: inbox}), do: :queue.is_empty(inbox)
+
+  @doc "Drop the queued firings `keep?` refuses."
+  @spec filter_firings(t(), (Firing.t() -> boolean())) :: t()
+  def filter_firings(%__MODULE__{} = i, keep?) do
+    %{
+      i
+      | inbox: :queue.filter(fn item -> not is_struct(item, Firing) or keep?.(item) end, i.inbox)
+    }
+  end
+
+  @doc """
+  Take the first trigger this boundary may start, in arrival order: a firing
+  always, a message only where it seeds a pass (`messages?`); or `:empty`.
+  """
+  @spec pop_trigger(t(), boolean()) :: {:ok, Item.t() | Firing.t(), t()} | {:empty, t()}
+  def pop_trigger(%__MODULE__{} = i, messages?),
+    do: pop_first(i, &(messages? or is_struct(&1, Firing)))
+
+  @doc """
+  Take the first message, leaving any firing queued: a pass the crash
+  interrupted resumes over its re-forwarded message before anything else runs.
+  """
   @spec pop_inbox(t()) :: {:ok, Item.t(), t()} | {:empty, t()}
-  def pop_inbox(%__MODULE__{} = i) do
-    case :queue.out(i.inbox) do
-      {{:value, item}, rest} -> {:ok, item, %{i | inbox: rest}}
-      {:empty, _} -> {:empty, i}
+  def pop_inbox(%__MODULE__{} = i), do: pop_first(i, &is_struct(&1, Item))
+
+  defp pop_first(%__MODULE__{} = i, eligible?) do
+    case Enum.split_while(:queue.to_list(i.inbox), &(not eligible?.(&1))) do
+      {_before, []} -> {:empty, i}
+      {before, [trigger | rest]} -> {:ok, trigger, %{i | inbox: :queue.from_list(before ++ rest)}}
     end
   end
 

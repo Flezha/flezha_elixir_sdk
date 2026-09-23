@@ -164,7 +164,8 @@ defmodule Flezha.SDK.Codec do
           [map()],
           boolean(),
           boolean(),
-          binary()
+          binary(),
+          map() | nil
         ) :: {atom(), struct()}
   def task_commit_command(
         operative_id,
@@ -175,7 +176,8 @@ defmodule Flezha.SDK.Codec do
         outbox,
         compensating,
         completes,
-        result
+        result,
+        trigger \\ nil
       ) do
     {:task_commit,
      %RunnerCommands.TaskCommit{
@@ -187,9 +189,21 @@ defmodule Flezha.SDK.Codec do
        outbox: Enum.map(outbox, &outbox_item/1),
        compensating: compensating,
        completes: completes,
-       result: result
+       result: result,
+       trigger: timer_trigger(trigger)
      }}
   end
+
+  # The firing a timer-fed pass's root stage names: its Cell's key, kind and
+  # scheduled timestamp.
+  defp timer_trigger(nil), do: nil
+
+  defp timer_trigger(%{cell_key: key, kind: kind, at: at}),
+    do: %RunnerCommands.TimerTrigger{
+      cell_key: key || "",
+      event_time: kind == :event_time,
+      scheduled_at: at
+    }
 
   @doc "The `IterCommit` command tuple for one finished iteration."
   @spec iter_commit_command(
@@ -282,7 +296,17 @@ defmodule Flezha.SDK.Codec do
       task_idx: p.task_idx,
       iter: p.iter,
       cells_ran: p.cells_ran,
-      completion: completion(p.completes, p.result)
+      completion: completion(p.completes, p.result),
+      trigger: journaled_trigger(p.trigger)
+    }
+
+  defp journaled_trigger(nil), do: nil
+
+  defp journaled_trigger(%RunnerCommands.TimerTrigger{} = t),
+    do: %{
+      cell_key: if(t.cell_key == "", do: nil, else: t.cell_key),
+      kind: if(t.event_time, do: :event_time, else: :processing_time),
+      at: t.scheduled_at
     }
 
   defp completion(true, result), do: result

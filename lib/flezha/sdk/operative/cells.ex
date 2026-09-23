@@ -80,6 +80,11 @@ defmodule Flezha.SDK.Operative.Cells do
     })
   end
 
+  @doc "The live Cell of `node_ref` under `key`, or `nil`."
+  @spec pid(t(), reference(), String.t() | nil) :: pid() | nil
+  def pid(%__MODULE__{cells: cells}, node_ref, key),
+    do: cells |> Map.get(node_ref, %{}) |> Map.get(key)
+
   @doc "Every live Cell's pid."
   @spec pids(t()) :: [pid()]
   def pids(%__MODULE__{cells: cells}),
@@ -402,8 +407,9 @@ defmodule Flezha.SDK.Operative.Cells do
       retry_max: ladder.retry_max,
       retry_backoff_ms: ladder.retry_backoff_ms,
       # A workflow answers an exhausted ladder by unwinding, not by shedding
-      # the input to the dead-letter queue.
+      # the input to the dead-letter queue, and decides when a due firing runs.
       park_on_exhaustion: c.kind == :stream,
+      gate_firings: c.kind == :workflow,
       counters: c.counters,
       hold_cap: c.hold_cap,
       secondaries: c.secondaries,
@@ -411,14 +417,9 @@ defmodule Flezha.SDK.Operative.Cells do
       credit: c.credit,
       persistence_enabled: topo.persistence_enabled?,
       tier: tier_facts(topo, node_ref),
-      ctx_opts: [runner: c.runner] ++ timers(c.kind) ++ ctx_opts(topo, node_ref, key)
+      ctx_opts: [runner: c.runner] ++ ctx_opts(topo, node_ref, key)
     )
   end
-
-  # Timers do not fire inside a workflow yet: every timer call answers
-  # `{:error, :timers_unavailable}` and arms nothing.
-  defp timers(:workflow), do: [timers: :unavailable]
-  defp timers(:stream), do: []
 
   # What a Cell of this node needs to know about the tier: whether it is on,
   # the checkpoint policy, the sink routes it captures its own outputs through

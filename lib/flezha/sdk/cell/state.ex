@@ -31,9 +31,18 @@ defmodule Flezha.SDK.Cell.State do
     :credit,
     ctx_opts: [],
     # One field, so the struct stays a flat map: the pending set, the declared
-    # clock, the BEAM timer refs armed for processing time, and the event-time
-    # high-water.
-    timers: %{pending: %Flezha.SDK.Timers{}, clock: :wall, refs: %{}, high_water: nil},
+    # clock, the BEAM timer refs armed for processing time, the event-time
+    # high-water, and for a workflow stage's Cell the gate its due firings pass
+    # through (`:settled`, or `:held` when the removal waits for the stage's
+    # commit) with the removals held.
+    timers: %{
+      pending: %Flezha.SDK.Timers{},
+      clock: :wall,
+      refs: %{},
+      high_water: nil,
+      gate: nil,
+      held: []
+    },
     # One field again, for the same reason: whether the class declares the
     # effectively-once tier, its checkpoint policy, the node's sink routes the
     # Cell captures its outputs through, whether it has an inter-tasklet

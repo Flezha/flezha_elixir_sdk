@@ -33,36 +33,73 @@ defmodule Flezha.SDK.Workflow.Resume do
 
   @doc """
   Whether the journal the bind carried says a pass was in flight: a root of
-  some chain committed inside the resume iteration.
+  some chain committed inside the resume iteration, an entry channel's or the
+  tasklet whose timer opened it.
   """
   @spec mid_iteration?(Instance.t()) :: boolean()
   def mid_iteration?(%Instance{journal: nil}), do: false
 
-  def mid_iteration?(%Instance{journal: journal, spec: spec}) do
+  def mid_iteration?(%Instance{journal: journal, spec: spec} = instance) do
     roots =
       for {_channel, chain} <- spec.dag.chains,
           root <- chain.roots,
           do: Map.fetch!(spec.dag.pos, root)
 
-    Enum.any?(journal.committed_task_idxs, &(&1 in roots))
+    timer_root(instance) != nil or Enum.any?(journal.committed_task_idxs, &(&1 in roots))
   end
 
   @doc """
-  The frontier a journal re-opens for the pass on `channel`: `%{channel:,
-  ready: [{node_ref, batch}], pending:, waiting:, completed:, completions:}`.
-  An uncommitted root re-runs over `message`, the one the controller
-  re-forwarded, through its entry edge, or over the journaled carry when the
-  pass is carry-fed; a join counts only the producers in this chain.
+  The origin of the in-flight pass when a timer firing opened it: its root
+  committed naming the firing. The carry it leaves as it stood is the last
+  committed iteration's terminal batch.
+  """
+  @spec timer_root(Instance.t()) :: map() | nil
+  def timer_root(%Instance{journal: nil}), do: nil
+
+  def timer_root(%Instance{journal: journal} = instance) do
+    Enum.find_value(committed_firings(instance), fn
+      {iter, firing} when iter == journal.iter -> %{firing: firing, carry: carry(journal)}
+      _earlier -> nil
+    end)
+  end
+
+  @doc """
+  Every firing the journal records a committed root stage for, with the
+  iteration it opened: none of them may fire again.
+  """
+  @spec committed_firings(Instance.t()) :: [{non_neg_integer(), Instance.Firing.t()}]
+  def committed_firings(%Instance{journal: nil}), do: []
+
+  def committed_firings(%Instance{journal: journal, spec: spec}) do
+    for %{iter: iter, task_idx: task_idx, trigger: %{} = trigger} <- journal.committed_tasks do
+      node_ref = Enum.find_value(spec.dag.pos, fn {ref, idx} -> if idx == task_idx, do: ref end)
+      {iter, Instance.Firing.from_trigger(node_ref, trigger)}
+    end
+  end
+
+  @doc """
+  The frontier a journal re-opens for the pass on `channel`, or on the chain
+  of the tasklet whose timer opened it: `%{channel:, ready: [{node_ref,
+  batch}], pending:, waiting:, completed:, completions:}`, `channel` `nil` for
+  a timer's. An uncommitted root re-runs over `message`, the one the
+  controller re-forwarded, through its entry edge, or over the journaled carry
+  when the pass is carry-fed; a join counts only the producers in this chain.
   """
   @spec start(
           struct(),
-          String.t(),
+          String.t() | map(),
           Instance.Item.t() | nil,
           (term(), reference(), [term()] -> [{term(), String.t() | nil}])
         ) :: map()
-  def start(%{instance: %Instance{journal: journal}} = state, channel, message, through_edge) do
+  def start(%{instance: %Instance{journal: journal}} = state, origin, message, through_edge) do
     dag = state.spec.dag
-    chain = Map.fetch!(dag.chains, channel)
+
+    {channel, chain} =
+      case origin do
+        %{firing: firing} -> {nil, Map.fetch!(dag.from_node, firing.node_ref)}
+        channel -> {channel, Map.fetch!(dag.chains, channel)}
+      end
+
     committed = MapSet.new(journal.committed_task_idxs)
 
     dag.order

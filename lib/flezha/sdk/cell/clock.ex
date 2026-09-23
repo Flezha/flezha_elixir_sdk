@@ -14,15 +14,20 @@ defmodule Flezha.SDK.Cell.Clock do
   alias Flezha.SDK.{Counters, Tasklet, Timers}
   alias Flezha.SDK.Cell.State
 
-  @doc "The `timers` map a fresh Cell starts from, over what its slot held."
-  @spec seed(module(), map()) :: map()
-  def seed(module, held) do
+  @doc """
+  The `timers` map a fresh Cell starts from, over what its slot held, with the
+  gate a workflow stage's due firings pass through.
+  """
+  @spec seed(module(), map(), :settled | :held | nil) :: map()
+  def seed(module, held, gate) do
     %{
       pending: held.timers,
       clock: of(module),
       on_timer?: Tasklet.on_timer?(module),
       refs: %{},
-      high_water: nil
+      high_water: nil,
+      gate: gate,
+      held: []
     }
   end
 

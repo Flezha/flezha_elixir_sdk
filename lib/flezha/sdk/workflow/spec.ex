@@ -44,7 +44,8 @@ defmodule Flezha.SDK.Workflow.Spec do
   is the compensation order. `chains` holds, per entry channel name, the
   nodes it feeds (`roots`), every node reachable from them (`members`), each
   member's count of producers inside the chain (what a join waits for in a
-  pass on that channel), and the chain's `leaves`.
+  pass on that channel), and the chain's `leaves`; `from_node` holds the same
+  per tasklet, rooted at it, which a pass its timer firing opened runs.
   """
   @type chain :: %{
           roots: [reference()],
@@ -58,7 +59,8 @@ defmodule Flezha.SDK.Workflow.Spec do
           parents: %{reference() => [reference()]},
           children: %{reference() => [reference()]},
           leaves: [reference()],
-          chains: %{String.t() => chain()}
+          chains: %{String.t() => chain()},
+          from_node: %{reference() => chain()}
         }
 
   @doc """
@@ -159,12 +161,15 @@ defmodule Flezha.SDK.Workflow.Spec do
 
     walk
     |> Map.take([:order, :pos, :parents, :children])
-    |> Map.merge(%{leaves: leaves, chains: entry_chains(topo, walk, leaves)})
+    |> Map.merge(%{
+      leaves: leaves,
+      chains: entry_chains(topo, walk, leaves),
+      from_node: Map.new(walk.order, &{&1, chain(walk, [&1], leaves)})
+    })
   end
 
   # One chain per entry channel, in declaration order: the tasklets the
-  # channel feeds, everything reachable from them, each member's producers
-  # inside the chain, and the graph's leaves it reaches.
+  # channel feeds.
   defp entry_chains(topo, walk, leaves) do
     for channel <- topo.entry_order, into: %{} do
       roots =
@@ -172,18 +177,22 @@ defmodule Flezha.SDK.Workflow.Spec do
         |> Enum.uniq()
         |> Enum.sort_by(&Map.fetch!(topo.node_seq, &1))
 
-      members = reachable(walk.children, roots, MapSet.new())
-
-      parents_in_chain =
-        Map.new(members, fn ref ->
-          {ref, Enum.count(Map.fetch!(walk.parents, ref), &MapSet.member?(members, &1))}
-        end)
-
-      leaves = Enum.filter(leaves, &MapSet.member?(members, &1))
-
-      {channel,
-       %{roots: roots, members: members, parents_in_chain: parents_in_chain, leaves: leaves}}
+      {channel, chain(walk, roots, leaves)}
     end
+  end
+
+  # The chain `roots` start: everything reachable from them, each member's
+  # producers inside the chain, and the graph's leaves it reaches.
+  defp chain(walk, roots, leaves) do
+    members = reachable(walk.children, roots, MapSet.new())
+
+    parents_in_chain =
+      Map.new(members, fn ref ->
+        {ref, Enum.count(Map.fetch!(walk.parents, ref), &MapSet.member?(members, &1))}
+      end)
+
+    leaves = Enum.filter(leaves, &MapSet.member?(members, &1))
+    %{roots: roots, members: members, parents_in_chain: parents_in_chain, leaves: leaves}
   end
 
   defp reachable(_children, [], seen), do: seen

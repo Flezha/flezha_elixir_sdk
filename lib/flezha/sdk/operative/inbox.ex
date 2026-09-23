@@ -37,6 +37,13 @@ defmodule Flezha.SDK.Operative.Inbox do
     do: GenServer.cast(pid, {:emitted, node_ref, cell_key, emits, handout_seq, offset, report})
 
   @doc """
+  A workflow stage's Cell has a processing-time timer due: the driver decides
+  whether its firing opens a pass, joins the running stage or waits its turn.
+  """
+  def firing_due(pid, node_ref, cell_key, fire),
+    do: send(pid, {:firing_due, node_ref, cell_key, fire})
+
+  @doc """
   A Cell's invocation called `Flezha.SDK.Ctx.complete/2`. Sent after its
   emits and before its stage barrier answers, so the driver holds it by the
   time the stage settles.

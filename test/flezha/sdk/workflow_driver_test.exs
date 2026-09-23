@@ -183,31 +183,90 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     end
   end
 
-  # Tries every timer call and reports what the ctx answered, then fails with
-  # the refusal, as a tasklet reading the answer does.
-  defmodule TimerStep do
+  # `after:<ms>` arms a timer that far out and emits `armed:<at>`;
+  # `after-slow:<ms>` does the same, marked for the relay to linger on;
+  # `hold:<ms>` holds the stage that long. A firing emits `fired:<at>`.
+  defmodule Tick do
     @behaviour Flezha.SDK.Tasklet
-    def name, do: "timer_step"
+    def name, do: "tick"
     def init_state(_), do: nil
 
-    def run(_input, state, ctx) do
-      answers = [
-        Ctx.timer_after(ctx, 60_000),
-        Ctx.timer_at_event_time(ctx, 5),
-        Ctx.cancel_processing_time_timer(ctx, 60_000),
-        Ctx.cancel_event_time_timer(ctx, 5)
-      ]
+    def run("hold:" <> ms = input, state, ctx) do
+      Process.sleep(String.to_integer(ms))
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
 
-      send(:workflow_driver_test_collector, {:timer_answers, answers})
-      with {:ok, _at} <- hd(answers), do: {:ok, state}
+    def run("after-slow:" <> ms, state, ctx) do
+      Ctx.emit(ctx, "armed-slow:#{arm(ctx, String.to_integer(ms))}")
+      {:ok, state}
+    end
+
+    def run("after:" <> ms, state, ctx) do
+      Ctx.emit(ctx, "armed:#{arm(ctx, String.to_integer(ms))}")
+      {:ok, state}
+    end
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+
+    def on_timer(at, _kind, state, ctx) do
+      Ctx.emit(ctx, "fired:#{at}")
+      {:ok, state}
+    end
+
+    defp arm(ctx, ms) do
+      {:ok, at} = Ctx.timer_after(ctx, ms)
+      send(:workflow_driver_test_collector, {:armed, at})
+      at
     end
   end
 
-  defmodule TimerFlow do
-    def factory_id, do: "timer_flow"
+  defmodule Relay do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "relay"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      if String.starts_with?(input, "armed-slow"), do: Process.sleep(150)
+      Ctx.emit(ctx, "relay:" <> input)
+      {:ok, state}
+    end
+  end
+
+  defmodule TimerLoop do
+    def factory_id, do: "timer_loop"
+    def loop_mode, do: :per_input
 
     def channels(c) do
-      c |> Channels.input("in") |> Channels.retry_max(1) |> Channels.into(TimerStep)
+      c |> Channels.input("in") |> Channels.into(Tick) |> Channels.into(Relay)
+    end
+  end
+
+  defmodule Forward do
+    @behaviour Flezha.SDK.Tasklet
+    def name, do: "forward"
+    def init_state(_), do: nil
+
+    def run(input, state, ctx) do
+      Ctx.emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  # `tick` behind the entry channel's root.
+  defmodule LateTimerLoop do
+    def factory_id, do: "late_timer_loop"
+    def loop_mode, do: :per_input
+
+    def channels(c) do
+      c
+      |> Channels.input("in")
+      |> Channels.into(Forward)
+      |> Channels.into(Tick)
+      |> Channels.into(Relay)
     end
   end
 
@@ -356,14 +415,6 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     assert Enum.count(messages, &(&1 == :attempt)) == 2
     assert %{status: "error", error: error} = completion(messages)
     assert error =~ "flaky"
-  end
-
-  test "a workflow tasklet cannot arm a timer: every timer call is refused and the run ends naming it" do
-    messages = drive(TimerFlow)
-
-    assert {:timer_answers, List.duplicate({:error, :timers_unavailable}, 4)} in messages
-    assert %{status: "error", error: error} = completion(messages)
-    assert error =~ "timer_step: TimersUnavailable"
   end
 
   test "a failure runs every declared compensate hook in reverse order" do
@@ -668,6 +719,110 @@ defmodule Flezha.SDK.Workflow.DriverTest do
     after
       200 -> Enum.reverse(acc)
     end
+  end
+
+  # --- timers ---
+
+  defp handoff_of(commit), do: Enum.map(commit.handoff, &Resume.decode(&1.payload))
+
+  defp await_commit(task_idx) do
+    assert_receive {:shipped, {:task_commit, %{task_idx: ^task_idx} = commit}}, 5_000
+    commit
+  end
+
+  test "A timer inside a workflow tasklet fires: a firing names the chain it starts" do
+    driver = start_loop(TimerLoop, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "after:30", %{})
+    assert_receive {:armed, at}, 5_000
+    assert %{trigger: nil} = await_commit(0)
+    assert handoff_of(await_commit(1)) == ["relay:armed:#{at}"]
+    assert_receive {:shipped, {:iter_commit, %{iter: 0}}}, 5_000
+
+    # With nothing sent, the firing opens a pass at `tick` and its commit names it.
+    root = await_commit(0)
+    assert %RunnerCommands.TimerTrigger{scheduled_at: ^at, event_time: false} = root.trigger
+    assert handoff_of(root) == ["fired:#{at}"]
+    assert %{trigger: nil} = relay = await_commit(1)
+    assert handoff_of(relay) == ["relay:fired:#{at}"]
+    assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
+    Driver.stop_workflow(driver)
+  end
+
+  test "A firing opens its pass at the tasklet that set it, past the entry channel's root" do
+    driver = start_loop(LateTimerLoop, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "after:30", %{})
+    assert_receive {:armed, at}, 5_000
+    for idx <- 0..2, do: await_commit(idx)
+    assert_receive {:shipped, {:iter_commit, %{iter: 0}}}, 5_000
+
+    root = await_commit(1)
+    assert %RunnerCommands.TimerTrigger{scheduled_at: ^at} = root.trigger
+    assert handoff_of(await_commit(2)) == ["relay:fired:#{at}"]
+    assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
+    refute_received {:shipped, {:task_commit, %{task_idx: 0, iter: 1}}}
+    Driver.stop_workflow(driver)
+  end
+
+  test "A firing during a pass waits for the boundary, ahead of a message that arrived later" do
+    driver = start_loop(TimerLoop, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "after-slow:30", %{})
+    assert_receive {:armed, at}, 5_000
+    # Due while `relay` lingers; the message comes after it is due.
+    Process.sleep(80)
+    Inbox.input(driver, "in", "later", %{})
+
+    ticks = for _ <- 1..3, do: handoff_of(await_commit(0))
+    assert ticks == [["armed-slow:#{at}"], ["fired:#{at}"], ["later"]]
+    Driver.stop_workflow(driver)
+  end
+
+  test "A firing joins its own stage while that stage runs" do
+    driver = start_loop(TimerLoop, park_idle_ms: 60_000)
+
+    # The timer comes due while `tick` holds the next message's pass.
+    Inbox.input(driver, "in", "after:60", %{})
+    Inbox.input(driver, "in", "hold:250", %{})
+    assert_receive {:armed, at}, 5_000
+    assert handoff_of(await_commit(0)) == ["armed:#{at}"]
+    held = await_commit(0)
+    assert held.trigger == nil
+    assert handoff_of(held) == ["hold:250", "fired:#{at}"]
+    assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
+    refute_receive {:shipped, {:task_commit, %{task_idx: 0}}}, 300
+    Driver.stop_workflow(driver)
+  end
+
+  test "The park names the earliest timer" do
+    driver = start_loop(TimerLoop, park_idle_ms: 300)
+
+    Inbox.input(driver, "in", "after:90000", %{})
+    assert_receive {:armed, later}, 5_000
+    Inbox.input(driver, "in", "after:60000", %{})
+    assert_receive {:armed, earlier}, 5_000
+    assert earlier < later
+    assert_receive {:shipped, {:iter_park, park}}, 5_000
+    assert park.wake_deadline_ms == earlier
+  end
+
+  test "a resume after a timer-fed pass's root committed runs the timer's chain and does not fire again" do
+    trigger = %{cell_key: nil, kind: :processing_time, at: 123}
+
+    journal = [
+      iter: 1,
+      entry_channel: "in",
+      committed_task_idxs: [0],
+      task_handoffs: %{0 => [{0, Resume.encode("fired:123")}]},
+      committed_tasks: [%{task_idx: 0, iter: 1, cells_ran: [], completion: nil, trigger: trigger}]
+    ]
+
+    driver = start_loop(TimerLoop, park_idle_ms: 60_000, journal: journal)
+    assert handoff_of(await_commit(1)) == ["relay:fired:123"]
+    assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
+    refute_received {:shipped, {:task_commit, %{task_idx: 0}}}
+    Driver.stop_workflow(driver)
   end
 
   # --- the transactional outbox ---

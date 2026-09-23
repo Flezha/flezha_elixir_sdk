@@ -147,12 +147,16 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert TunedWorkflow.factory_id() == "tuned_workflow"
     assert TunedWorkflow.loop_mode() == :chained
     assert TunedWorkflow.rollback_mode() == :keep_progress
-    refute function_exported?(TunedWorkflow, :wake_after_ms, 0)
     refute function_exported?(TunedWorkflow, :max_duration_ms, 0)
   end
 
-  test "a retired workflow retry option fails to compile, as any unknown option does" do
-    for option <- ["retry_attempts: 5", "retry_backoff_ms: 20", "barrier_retry_attempts: 3"] do
+  test "a retired workflow option fails to compile, as any unknown option does" do
+    for option <- [
+          "retry_attempts: 5",
+          "retry_backoff_ms: 20",
+          "barrier_retry_attempts: 3",
+          "wake_after_ms: 5000"
+        ] do
       error =
         refused("""
         use Flezha.SDK.WorkflowOperative, factory_id: "w", #{option}
