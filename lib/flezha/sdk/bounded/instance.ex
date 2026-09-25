@@ -1,6 +1,6 @@
-defmodule Flezha.SDK.Workflow.Instance do
+defmodule Flezha.SDK.Bounded.Instance do
   @moduledoc """
-  One workflow instance's runtime state, as the driver process holds it: the
+  One bounded instance's runtime state, as the driver process holds it: the
   queue of triggers every pass starts from (messages and timer firings, in
   arrival order), the compensation markers a saga reads, and the committed
   task-journal the bind carried for a crash-resume.
@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Workflow.Instance do
   """
 
   alias Flezha.SDK.Knob
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Bounded.Spec
 
   defmodule Item do
     @moduledoc """

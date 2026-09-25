@@ -5,7 +5,7 @@ defmodule Flezha.SDK.Admin do
 
   No tasklet has to be running and the application holds no credential of its
   own: the controller judges every call as the identity the connection already
-  established, so nothing an unattended process holds expires. An operator
+  established, so nothing an unattended process holds expires. A user
   grants a namespace's applications the authority once and revokes it the same
   way, and a revocation takes effect on the next call:
 
@@ -24,39 +24,39 @@ defmodule Flezha.SDK.Admin do
   @type runner :: Flezha.SDK.t() | pid() | atom()
 
   @doc """
-  Start an operative of `factory_id`, on the specification `flz operative start`
+  Start an operator of `factory_id`, on the specification `flz operator start`
   takes: `id:`, `init_values:` and `opts:`, each optional. Answers the
   id it runs under, the generated one when no `id:` was given, and whether this
   call started it or found a live instance already holding the id.
 
-  Without `id:` every call starts a new operative, so a start retried after a
+  Without `id:` every call starts a new operator, so a start retried after a
   lost answer starts a second one, and a second stream runs until it is stopped.
   Pass `id:` when the start may be retried.
   """
-  @spec start_operative(runner(), String.t(), keyword()) ::
+  @spec start_operator(runner(), String.t(), keyword()) ::
           {:ok, %{id: String.t(), outcome: :started | :already_running}} | {:error, term()}
-  def start_operative(runner, factory_id, opts \\ []) do
+  def start_operator(runner, factory_id, opts \\ []) do
     fields =
       %{"factory_id" => factory_id}
       |> put_given("id", Keyword.get(opts, :id))
       |> put_given("init_values", Keyword.get(opts, :init_values))
       |> put_given("opts", Keyword.get(opts, :opts))
 
-    with {:ok, answer} <- call(runner, "Operative.start", [fields]), do: started(answer)
+    with {:ok, answer} <- call(runner, "Operator.start", [fields]), do: started(answer)
   end
 
-  @doc "Stop an operative, or the whole partition group it names."
-  @spec stop_operative(runner(), String.t()) :: {:ok, term()} | {:error, term()}
-  def stop_operative(runner, operative_id),
-    do: call(runner, "Operative.stop", [operative_id])
+  @doc "Stop an operator, or the whole partition group it names."
+  @spec stop_operator(runner(), String.t()) :: {:ok, term()} | {:error, term()}
+  def stop_operator(runner, operator_id),
+    do: call(runner, "Operator.stop", [operator_id])
 
   @doc """
-  Inject a message into an operative's input stream, blocking for the delivery
+  Inject a message into an operator's input stream, blocking for the delivery
   verdict. `channel` may be empty for none.
   """
   @spec send_to(runner(), String.t(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def send_to(runner, operative_id, message, channel \\ ""),
-    do: call(runner, "Operative.send", [operative_id, message, channel])
+  def send_to(runner, operator_id, message, channel \\ ""),
+    do: call(runner, "Operator.send", [operator_id, message, channel])
 
   @doc "Enable a plugin, built from the fields `flz plugin enable` takes."
   @spec enable_plugin(runner(), String.t(), map()) :: {:ok, term()} | {:error, term()}
@@ -68,9 +68,9 @@ defmodule Flezha.SDK.Admin do
   def disable_plugin(runner, plugin_id),
     do: call(runner, "PluginManager.disable", [plugin_id])
 
-  @doc "The operative ids running in this namespace."
-  @spec list_operatives(runner()) :: {:ok, term()} | {:error, term()}
-  def list_operatives(runner), do: call(runner, "Operative.list_operatives", [])
+  @doc "The operator ids running in this namespace."
+  @spec list_operators(runner()) :: {:ok, term()} | {:error, term()}
+  def list_operators(runner), do: call(runner, "Operator.list_operators", [])
 
   @doc "The plugins enabled on the controller node answering this call."
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
@@ -78,8 +78,8 @@ defmodule Flezha.SDK.Admin do
 
   @doc "One cell's live state, and the change sequence it was read at."
   @spec cell_state(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def cell_state(runner, operative_id, cell_key),
-    do: call(runner, "Operative.cell_state", [operative_id, cell_key])
+  def cell_state(runner, operator_id, cell_key),
+    do: call(runner, "Operator.cell_state", [operator_id, cell_key])
 
   @doc """
   Any published function, by name.

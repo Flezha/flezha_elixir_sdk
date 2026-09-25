@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Workflow.Resume do
+defmodule Flezha.SDK.Bounded.Resume do
   @moduledoc """
   Where a resumed iteration starts. The invariant is that a resumed chain sees
   exactly what the live one did: every uncommitted node re-seeds from each
@@ -18,7 +18,7 @@ defmodule Flezha.SDK.Workflow.Resume do
   that reach a plugin.
   """
 
-  alias Flezha.SDK.Workflow.Instance
+  alias Flezha.SDK.Bounded.Instance
 
   @doc "Serialize one inter-tasklet value for the journal."
   @spec encode(term()) :: binary()

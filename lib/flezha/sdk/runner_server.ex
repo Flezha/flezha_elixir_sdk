@@ -11,8 +11,8 @@ defmodule Flezha.SDK.RunnerServer do
   nothing reconnects, and the process stays, so a `:permanent` supervisor has
   nothing to restart into a second registration. The persistence family — restore, compaction, the live
   read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
-  off this loop, operatives start and stop through `Flezha.SDK.Operatives`, and
-  a graceful stop ships every operative's state before the connection closes.
+  off this loop, operators start and stop through `Flezha.SDK.Operators`, and
+  a graceful stop ships every operator's state before the connection closes.
   A caller waiting on a controller reply is kept in
   `Flezha.SDK.RunnerServer.Waiters` until the reply settles it.
   """
@@ -31,7 +31,7 @@ defmodule Flezha.SDK.RunnerServer do
     Hold,
     Jitter,
     Knob,
-    Operatives,
+    Operators,
     Park,
     PersistentId,
     Spawn,
@@ -39,7 +39,7 @@ defmodule Flezha.SDK.RunnerServer do
   }
 
   alias Flezha.SDK.RunnerServer.Waiters
-  alias Flezha.SDK.Workflow.Driver
+  alias Flezha.SDK.Bounded.Driver
 
   @name __MODULE__
   # What a server that will not answer tells its caller.
@@ -57,7 +57,7 @@ defmodule Flezha.SDK.RunnerServer do
     :credit_grant
   ]
   # Exit status of a terminally-disconnected runner. Any non-zero value makes
-  # the orchestrator restart the process; a distinct one lets an operator tell
+  # the orchestrator restart the process; a distinct one lets a user tell
   # "the controller proved me wedged" apart from a crash. Matches
   # `flz_core::shutdown::TERMINAL_EXIT_CODE`.
   @terminal_exit_status 70
@@ -79,7 +79,7 @@ defmodule Flezha.SDK.RunnerServer do
       factories: [],
       primaries: [],
       secondaries: [],
-      operatives: %{},
+      operators: %{},
       parks: %{},
       waiters: %{},
       held: nil,
@@ -108,10 +108,10 @@ defmodule Flezha.SDK.RunnerServer do
   Run one administration verb against the controller's published consumer
   surface, as the identity this connection proved (see `Flezha.SDK.Admin`).
 
-  A cast rather than a call: the controller may have to start an operative
+  A cast rather than a call: the controller may have to start an operator
   before it can answer, and the runner must keep serving while it does. The
   reply reaches the caller through `Flezha.SDK.RunnerServer.Waiters`, as a
-  workflow commit's ack does.
+  bounded operator commit's ack does.
   """
   @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
           {:ok, String.t()} | {:error, term()}
@@ -160,7 +160,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # Everything the runner owns before it connects: its identity, the registry
-  # and counters its Operatives share, and the credit window linked here.
+  # and counters its Operators share, and the credit window linked here.
   defp initial_state(opts) do
     namespace = Keyword.fetch!(opts, :namespace)
     factories = Keyword.fetch!(opts, :factories)
@@ -172,14 +172,14 @@ defmodule Flezha.SDK.RunnerServer do
       namespace: namespace,
       transport: Keyword.fetch!(opts, :transport),
       stable_id: stable_id,
-      registry: :ets.new(:flezha_sdk_operatives, [:public, :set, {:read_concurrency, true}]),
+      registry: :ets.new(:flezha_sdk_operators, [:public, :set, {:read_concurrency, true}]),
       counters: counters,
       credit: credit,
       topologies: Keyword.fetch!(opts, :topologies),
       factories: factories,
       payload: handshake_payload(namespace, factories, stable_id),
       # One hold per wire this process writes to: the secondaries carry the
-      # workflow driver's writes, the parks and the heartbeat, the control
+      # bounded driver's writes, the parks and the heartbeat, the control
       # channel carries the commands. A hold that dies with the wire it was
       # meant for is not a hold, so both outlive every reconnect.
       held: Hold.new(counters: counters),
@@ -207,14 +207,14 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_call({:remove, module}, _from, %State{} = s) do
     fid = module.factory_id()
-    live = Enum.count(s.operatives, fn {_oid, {_pid, f}} -> f == fid end)
+    live = Enum.count(s.operators, fn {_oid, {_pid, f}} -> f == fid end)
 
     cond do
       not Map.has_key?(s.topologies, fid) ->
         {:reply, {:error, {:not_defined, fid}}, s}
 
       live > 0 ->
-        {:reply, {:error, {:operative_type_in_use, fid, live}}, s}
+        {:reply, {:error, {:operator_type_in_use, fid, live}}, s}
 
       true ->
         s = %{
@@ -338,8 +338,8 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
-  # The two casts a workflow driver sends upward, both built by
-  # `Flezha.SDK.Workflow.Commit` so the driver never names this module.
+  # The two casts a bounded driver sends upward, both built by
+  # `Flezha.SDK.Bounded.Commit` so the driver never names this module.
   def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
     reference_id = "wf-" <> Integer.to_string(System.unique_integer([:positive]))
     ship_request(s, reference_id, command)
@@ -368,7 +368,7 @@ defmodule Flezha.SDK.RunnerServer do
   # write is.
   def handle_cast({:spawn, caller, %Spawn{} = spawn, payload, if_running}, %State{} = s) do
     %Spawn{reference_id: id, instance_id: instance_id, factory_id: factory_id} = spawn
-    command = Codec.spawn_workflow_request_command(instance_id, factory_id, payload, if_running)
+    command = Codec.spawn_bounded_request_command(instance_id, factory_id, payload, if_running)
 
     if s.control_handle != nil and ship_request(s, id, command) == :ok do
       Process.send_after(self(), {:spawn_deadline, id}, spawn.deadline, abs: true)
@@ -402,7 +402,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # A graceful stop — the supervisor's shutdown, `Flezha.SDK.close/1`, a
-  # `RunnerDisconnect` — ships every operative's state before the connection
+  # `RunnerDisconnect` — ships every operator's state before the connection
   # goes, so a reconnect-resume is loss-free.
   @impl true
   def terminate(_reason, %State{} = s) do
@@ -417,7 +417,7 @@ defmodule Flezha.SDK.RunnerServer do
 
   One function rather than a map built inside the timer clause, because the
   cross-SDK gate has to be able to read the key set: a key the controller
-  mirrors and this SDK omits leaves an operator surface blank for one runtime
+  mirrors and this SDK omits leaves an operations surface blank for one runtime
   and correct for the other six.
   """
   @spec heartbeat_metadata(Counters.t()) :: %{String.t() => String.t()}
@@ -468,10 +468,10 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  defp dispatch({:add_operative, add}, ref, s) do
-    case Operatives.add(s, add) do
+  defp dispatch({:add_operator, add}, ref, s) do
+    case Operators.add(s, add) do
       {:ok, s, metadata} ->
-        reply(s, ref, "success", [], Codec.encode_add_operative_response(metadata))
+        reply(s, ref, "success", [], Codec.encode_add_operator_response(metadata))
         {:noreply, s}
 
       {:error, reason, s} ->
@@ -480,8 +480,8 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  defp dispatch({:rem_operative, %{operative_id: oid}}, ref, s) do
-    reply_ok(Operatives.remove(s, oid), ref)
+  defp dispatch({:rem_operator, %{operator_id: oid}}, ref, s) do
+    reply_ok(Operators.remove(s, oid), ref)
   end
 
   defp dispatch({:ping, %{nonce: nonce}}, ref, s) do
@@ -489,10 +489,10 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  defp dispatch({:workflow_stop, %{operative_id: oid}}, ref, s) do
-    case Map.get(s.operatives, oid) do
-      {pid, _fid} -> Driver.stop_workflow(pid)
-      nil -> Logger.warning("[Flezha.SDK] WorkflowStop for unknown operative #{oid}")
+  defp dispatch({:bounded_stop, %{operator_id: oid}}, ref, s) do
+    case Map.get(s.operators, oid) do
+      {pid, _fid} -> Driver.stop_bounded(pid)
+      nil -> Logger.warning("[Flezha.SDK] BoundedStop for unknown operator #{oid}")
     end
 
     reply_ok(s, ref)
@@ -508,7 +508,7 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, error)
 
-  defp dispatch({:spawn_workflow_response, answer}, ref, s),
+  defp dispatch({:spawn_bounded_response, answer}, ref, s),
     do: settle(s, ref, {answer.outcome, answer.instance_id}, answer.error)
 
   # A terminal disconnect is the rung of the controller's convergence ladder
@@ -532,7 +532,7 @@ defmodule Flezha.SDK.RunnerServer do
       {:stop, :normal, %{s | disconnecting?: true}}
     else
       # `System.stop/1` runs the application shutdown — this server, its
-      # Operatives and their Cells — and then ends the VM with the status.
+      # Operators and their Cells — and then ends the VM with the status.
       # The server stays up until then: a stopped one is restarted by its
       # supervisor and re-registers the process the controller just ended.
       System.stop(@terminal_exit_status)
@@ -586,14 +586,14 @@ defmodule Flezha.SDK.RunnerServer do
             pid
           end)
 
-        # What this process held goes out before the operatives are told the
-        # wire is back, so a staged workflow output cannot be overtaken by the
-        # frames a resumed operative writes.
+        # What this process held goes out before the operators are told the
+        # wire is back, so a staged bounded output cannot be overtaken by the
+        # frames a resumed operator writes.
         s = %{s | primaries: readers, secondaries: secondaries}
         s = %{s | held: s |> wire() |> Hold.replay()}
 
-        # Push the fresh secondaries to any operatives that survived a reconnect.
-        Enum.each(s.operatives, fn {_oid, {pid, _f}} ->
+        # Push the fresh secondaries to any operators that survived a reconnect.
+        Enum.each(s.operators, fn {_oid, {pid, _f}} ->
           if Process.alive?(pid), do: send(pid, {:secondaries, secondaries})
         end)
 
@@ -610,7 +610,7 @@ defmodule Flezha.SDK.RunnerServer do
     %{s | primaries: [], secondaries: []}
   end
 
-  # --- the workflow driver's writes ---
+  # --- the bounded driver's writes ---
 
   # The driver has no wire of its own: it casts its records here, so a frame
   # no stream will take is held here too and replayed on the next bound one.

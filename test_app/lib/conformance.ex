@@ -99,9 +99,9 @@ end
 
 defmodule ElixirRunner.Conformance.Row do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
 
-  # The stream class every interpreted row of that kind registers: the steps it
+  # The unbounded class every interpreted row of that kind registers: the steps it
   # declares are the row the interpreter is driving, so the class flags a row
   # reads off its module come from the same context.
   def factory_id, do: ElixirRunner.Conformance.context().topology
@@ -111,13 +111,13 @@ defmodule ElixirRunner.Conformance.Row do
   def sleep_when_idle, do: ElixirRunner.Conformance.context().sleep_when_idle
 end
 
-defmodule ElixirRunner.Conformance.WorkflowRow do
+defmodule ElixirRunner.Conformance.BoundedRow do
   @moduledoc false
-  @behaviour Flezha.SDK.WorkflowOperative
+  @behaviour Flezha.SDK.BoundedOperator
 
-  # The workflow class a `class.workflow` row registers, the same steps on the
-  # same builder: what it writes that a workflow does not carry is judged by
-  # the workflow's own registration.
+  # The bounded class a `class.bounded` row registers, the same steps on the
+  # same builder: what it writes that a bounded operator does not carry is judged by
+  # the bounded operator's own registration.
   def factory_id, do: ElixirRunner.Conformance.context().topology
   def channels(c), do: ElixirRunner.Conformance.declare(c)
   def persistence_enabled, do: ElixirRunner.Conformance.context().persistent
@@ -126,13 +126,13 @@ defmodule ElixirRunner.Conformance.WorkflowRow do
     do: ElixirRunner.Conformance.context().sleep_when_idle or persistence_enabled()
 end
 
-# The refusal table's `shorthand_duplicate_id` pair: a stream short form and a
-# workflow short form under one factory id, which is what proves the two kinds
+# The refusal table's `shorthand_duplicate_id` pair: an unbounded short form and a
+# bounded short form under one factory id, which is what proves the two kinds
 # share one namespace. Nothing but that row registers them.
 
-defmodule ElixirRunner.ShorthandDupStream do
+defmodule ElixirRunner.ShorthandDupUnbounded do
   @moduledoc false
-  use Flezha.SDK.StreamOperative, factory_id: "plain", sink: "out"
+  use Flezha.SDK.UnboundedOperator, factory_id: "plain", sink: "out"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -140,9 +140,9 @@ defmodule ElixirRunner.ShorthandDupStream do
   end
 end
 
-defmodule ElixirRunner.ShorthandDupWorkflow do
+defmodule ElixirRunner.ShorthandDupBounded do
   @moduledoc false
-  use Flezha.SDK.WorkflowOperative, factory_id: "plain", sink: "twin_sink"
+  use Flezha.SDK.BoundedOperator, factory_id: "plain", sink: "twin_sink"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -154,8 +154,8 @@ defmodule ElixirRunner.Conformance do
   @moduledoc """
   The Elixir arm of the refusal table: every row of
   `test/fixtures/reference_topologies.txt` driven through
-  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2`, on a
-  stream class, or on a workflow class for a row that writes `class.workflow`.
+  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2`, on an
+  unbounded class, or on a bounded class for a row that writes `class.bounded`.
 
   Two entry points, both in `ElixirRunner.Application`:
 
@@ -172,9 +172,9 @@ defmodule ElixirRunner.Conformance do
   `persistence_enabled/0` and `sleep_when_idle/0`.
   """
 
-  alias ElixirRunner.Conformance.{Row, WorkflowRow}
+  alias ElixirRunner.Conformance.{Row, BoundedRow}
   alias Flezha.SDK.Channels
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Bounded.Spec
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
@@ -187,7 +187,7 @@ defmodule ElixirRunner.Conformance do
   # fixtures, whose derived lines are the seven-column table at the top.
   @cited %{
     "hybrid_channel" => ElixirRunner.HybridChannelOp,
-    "commit_block_chain" => ElixirRunner.Workflows.TierCommitBlockWorkflow
+    "commit_block_chain" => ElixirRunner.Bounded.TierCommitBlockBounded
   }
 
   @default_mailbox_capacity 1024
@@ -245,7 +245,7 @@ defmodule ElixirRunner.Conformance do
   end
 
   # The row's class through the registration a runner makes, which reads its
-  # kind and judges it as that kind; nothing connects. A workflow's verdict
+  # kind and judges it as that kind; nothing connects. A bounded operator's verdict
   # carries its topology inside its spec.
   defp registered(module) do
     case "conformance" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(module) do
@@ -309,7 +309,7 @@ defmodule ElixirRunner.Conformance do
   defp class_of(row) do
     cond do
       cited = @cited[row.topology] -> cited
-      "class.workflow" in steps(row) -> WorkflowRow
+      "class.bounded" in steps(row) -> BoundedRow
       true -> Row
     end
   end
@@ -369,8 +369,8 @@ defmodule ElixirRunner.Conformance do
     handle =
       "conformance_shorthand"
       |> Flezha.SDK.create_runner()
-      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupStream)
-      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupWorkflow)
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupUnbounded)
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupBounded)
 
     case handle do
       %Flezha.SDK{} -> :ok
@@ -389,14 +389,14 @@ defmodule ElixirRunner.Conformance do
 
       _pair ->
         case drive_duplicate() do
-          :ok -> die("#{row.topology}: the runner accepted a second operative under one id")
+          :ok -> die("#{row.topology}: the runner accepted a second operator under one id")
           {:error, name} -> die("#{row.topology}: #{name}")
         end
     end
   end
 
   # The refusal names, read off the verdict as data: a refusal is a tagged
-  # tuple whose tag IS the reference's name. A workflow carries a refusal its
+  # tuple whose tag IS the reference's name. A bounded operator carries a refusal its
   # topology raised as `{:Topology, issue}`, which names the issue.
   defp names(issues), do: Enum.map(issues, &name/1)
 
@@ -534,7 +534,7 @@ defmodule ElixirRunner.Conformance do
     do: raise("the fixture spells a link this interpreter does not map: #{other}")
 
   # The kind is the class module's, which `class_of/1` chose from this flag.
-  defp class_flag("workflow", _value, acc), do: acc
+  defp class_flag("bounded", _value, acc), do: acc
   defp class_flag("persistent", _value, acc), do: acc
   defp class_flag("sync_durability", _value, acc), do: acc
   defp class_flag("sleep_when_idle", _value, acc), do: acc

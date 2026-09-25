@@ -8,8 +8,8 @@ defmodule Flezha.SDK.Park do
   postcard-encoding seam (`Flezha.SDK.Wire`) for the `park_payload` frame, and
   `ship/4`, the one hop a park takes towards the runner that owns its ack.
 
-  `ship/4`'s `{:park, …}` is answered by `Flezha.SDK.Operative.handle_cast/2`
-  when the destination is an operative, and by
+  `ship/4`'s `{:park, …}` is answered by `Flezha.SDK.Operator.handle_cast/2`
+  when the destination is an operator, and by
   `Flezha.SDK.RunnerServer.handle_cast/2` when it is the runner.
   """
 
@@ -38,13 +38,13 @@ defmodule Flezha.SDK.Park do
 
   @doc """
   The on-wire identity of the Cell a park belongs to — the triple the
-  controller keys its DLQ row by (`operative_class`, `tasklet_id`,
+  controller keys its DLQ row by (`operator_class`, `tasklet_id`,
   `cell_key`). A pre-dispatch park (entry parse, partition mis-route) has no
   Cell yet and parks under an empty key.
   """
   @spec identity(binary(), binary(), binary() | nil) :: binary()
-  def identity(operative_id, tasklet_id, cell_key) do
-    Wire.encode_cell_id(operative_id, tasklet_id, cell_key || "")
+  def identity(operator_id, tasklet_id, cell_key) do
+    Wire.encode_cell_id(operator_id, tasklet_id, cell_key || "")
   end
 
   @spec recoverable_payload(term()) :: binary() | nil
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Park do
   end
 
   @doc """
-  Hand a park to `to` — a Cell's operative, or an operative's runner. One hop
+  Hand a park to `to` — a Cell's operator, or an operator's runner. One hop
   per level; the runner owns the ack loop.
   """
   @spec ship(GenServer.server(), pid(), binary(), map()) :: :ok

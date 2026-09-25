@@ -127,8 +127,8 @@ defmodule Flezha.SDK.State do
     fields = Module.get_attribute(env.module, :flezha_state_fields, []) |> Enum.reverse()
     changes = Module.get_attribute(env.module, :flezha_changes, [])
     block? = Module.get_attribute(env.module, :flezha_state_block, false)
-    # A short-form operative module carries the block for the tasklet the
-    # operative generates, so there the callbacks implement no behaviour.
+    # A short-form operator module carries the block for the tasklet the
+    # operator generates, so there the callbacks implement no behaviour.
     impl = Flezha.SDK.Tasklet in Module.get_attribute(env.module, :behaviour, [])
 
     if block? or changes != [] do

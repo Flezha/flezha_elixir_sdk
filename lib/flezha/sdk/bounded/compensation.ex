@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Workflow.Compensation do
+defmodule Flezha.SDK.Bounded.Compensation do
   @moduledoc """
   The saga unwind: when a run ends abnormally after partial progress, every
   Cell whose tasklet completed forward runs its `compensate/3` hook, and
@@ -25,8 +25,8 @@ defmodule Flezha.SDK.Workflow.Compensation do
   require Logger
 
   alias Flezha.SDK.{Cell, Record, Tasklet, Wire}
-  alias Flezha.SDK.Operative.Cells
-  alias Flezha.SDK.Workflow.{Commit, Instance}
+  alias Flezha.SDK.Operator.Cells
+  alias Flezha.SDK.Bounded.{Commit, Instance}
 
   @doc """
   Begin the unwind of `state`, or answer `:nothing_to_undo` when the class
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Workflow.Compensation do
 
       command =
         Commit.task(state.runner, self(), ref,
-          operative_id: state.operative_id,
+          operator_id: state.operator_id,
           task_idx: stage.task_idx,
           iter: Map.get(stage, :iter, state.iter),
           cells_ran: Commit.cells_ran(state.written, stage.node_ref, stage.cells),
@@ -205,7 +205,7 @@ defmodule Flezha.SDK.Workflow.Compensation do
     stage.cells
     |> Enum.reject(&Instance.compensation_done?(state.instance, &1))
     |> Enum.reduce({[], state}, fn identity, {pids, state} ->
-      {:ok, {_operative, tasklet, key}} = Wire.decode_cell_id(identity)
+      {:ok, {_operator, tasklet, key}} = Wire.decode_cell_id(identity)
 
       case Cells.lookup(state.cells, tasklet, key, true) do
         {{:ok, pid}, cells} -> {pids ++ [pid], %{state | cells: cells}}
@@ -223,7 +223,7 @@ defmodule Flezha.SDK.Workflow.Compensation do
     Cell.compensate(pid, outputs)
     ref = make_ref()
     Cell.barrier(pid, ref, self())
-    Logger.debug("[Flezha.SDK] #{state.operative_id} compensating task #{stage.task_idx}")
+    Logger.debug("[Flezha.SDK] #{state.operator_id} compensating task #{stage.task_idx}")
     %{state | awaiting: Map.put(state.awaiting, ref, stage.node_ref)}
   end
 end

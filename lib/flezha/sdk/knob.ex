@@ -51,7 +51,7 @@ defmodule Flezha.SDK.Knob do
     {:reconnect_ring_capacity, "FLEZHA_RECONNECT_RING_CAPACITY", :positive_int, 1_024},
     {:runner_id_path, "FLEZHA_RUNNER_ID_PATH", :path, "/var/lib/flezha-runner/id"},
     # A call into one of the runner's own control processes: the RunnerServer, an
-    # Operative, a local run. None of them runs author code on the answering
+    # Operator, a local run. None of them runs author code on the answering
     # clause, so a wait here is a wedged process rather than a busy one.
     {:sdk_control_call_ms, nil, :ms, 5_000},
     # A call into a Cell that answers from its queue rather than its state.
@@ -65,7 +65,7 @@ defmodule Flezha.SDK.Knob do
     {:sdk_cell_snapshot_ms, nil, :ms, 25_000},
     {:sdk_idle_probe_ms, nil, :ms, 50},
     {:sdk_max_reap_interval_ms, nil, :ms, 30_000},
-    # How long a rehydrated per-input workflow loop waits for the inbox tail its
+    # How long a rehydrated per-input bounded loop waits for the inbox tail its
     # bind still owes before it may park: a park there would drop the tail.
     {:sdk_owed_inbox_wait_ms, nil, :ms, 60_000},
     {:sdk_serialize_wait_ms, nil, :ms, 5_000},
@@ -155,7 +155,7 @@ defmodule Flezha.SDK.Knob do
     end
   end
 
-  @doc "Sends of one workflow commit barrier, the first included, before the run fails."
+  @doc "Sends of one bounded commit barrier, the first included, before the run fails."
   # A re-send is the connection's business, not a class's, so nothing sets it;
   # in lockstep with the core's `BARRIER_RESEND_ATTEMPTS`.
   @spec barrier_resend_attempts() :: pos_integer()

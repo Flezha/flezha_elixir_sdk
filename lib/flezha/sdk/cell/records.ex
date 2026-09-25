@@ -21,7 +21,7 @@ defmodule Flezha.SDK.Cell.Records do
   of it was applied — and the tier's consumed floor and the event-time
   high-water come back off the restored effect records. A Cell restores when
   it writes records at all: a stateless one that writes effect records (the
-  tier, a durable workflow's stage) folds them onto its initial state.
+  tier, a durable bounded operator's stage) folds them onto its initial state.
   """
   @spec restore(State.t(), binary(), binary(), binary(), non_neg_integer()) ::
           {:ok, State.t(), non_neg_integer(), boolean()} | {:error, String.t()}
@@ -33,7 +33,7 @@ defmodule Flezha.SDK.Cell.Records do
         # past in which no buffered member was seen, and the controller
         # re-forwards the slice from the rewound watermark. What goes is
         # counted, because a discard no runtime reports is a discard an
-        # operator cannot tell from an idle Cell.
+        # user cannot tell from an idle Cell.
         Counters.add_restore_discarded_inputs(
           s.counters,
           Interval.inputs(s.tier.staged) + length(s.tier.slice)
@@ -100,13 +100,13 @@ defmodule Flezha.SDK.Cell.Records do
   # same process, and the slot goes so a successor starts from `init_state/1`
   # rather than from what this Cell last shipped. A hold that dies with the
   # process that owned it is not a hold, so what no stream would take — the
-  # records still held, then the delete — passes to the Operative, which
+  # records still held, then the delete — passes to the Operator, which
   # outlives this Cell and replays it on the next bound stream.
   @doc "What an eviction leaves behind: the delete when persistent, no slot, and no lost frame."
   @spec delete(State.t()) :: :ok
   def delete(%State{} = s) do
     {items, _empty} = Hold.drain(s.stream)
-    # The route goes with the Cell: the Operative writes what it takes over
+    # The route goes with the Cell: the Operator writes what it takes over
     # on the stream this identity chooses, never on the one this hold used.
     held = Enum.map(items, fn {key, body, meta, _route} -> {key, body, meta} end)
     hand_off(s, held ++ owed_delete(s, held))
@@ -229,7 +229,7 @@ defmodule Flezha.SDK.Cell.Records do
     write_slot(hold_or_ship(s, seq, frame, hold_ref))
   end
 
-  # A workflow stage's Cell names the records it wrote at its next barrier, so
+  # A bounded stage's Cell names the records it wrote at its next barrier, so
   # the stage's commit names them in turn.
   defp note_written(%State{tier: %{stage?: false}} = s, _seq, _outputs), do: s
 
@@ -299,7 +299,7 @@ defmodule Flezha.SDK.Cell.Records do
     {send_record(s, "cell_state_change", frame), seq + 1}
   end
 
-  # A firing whose removal a workflow stage still holds is pending until the
+  # A firing whose removal a bounded stage still holds is pending until the
   # stage commits, so the compaction re-states it too.
   defp restate_timers(%State{timers: %{pending: pending, held: held}} = s) do
     ops = Timers.register_ops(pending) ++ Enum.map(held, &%{&1 | register: true})
@@ -336,11 +336,11 @@ defmodule Flezha.SDK.Cell.Records do
 
   defp owed_delete(%State{} = s, _ahead), do: [{"delete_cell_state", s.identity, %{}}]
 
-  # The identity rides with the frames: the Operative writes them on the stream
+  # The identity rides with the frames: the Operator writes them on the stream
   # that identity chooses — the one a replacement Cell will bind to — so this
   # Cell's last frames stay ahead of its replacement's first.
   defp hand_off(%State{}, []), do: :ok
-  defp hand_off(%State{} = s, frames), do: send(s.operative, {:handed, s.identity, frames})
+  defp hand_off(%State{} = s, frames), do: send(s.operator, {:handed, s.identity, frames})
 
   # A replacement for a Cell killed untrappably continues from what its
   # predecessor last shipped; a first Cell starts from `init_state/1`. The

@@ -11,10 +11,10 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{Codec, RunnerServer, StreamOperative, Topology, WorkflowOperative}
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.{Codec, RunnerServer, UnboundedOperator, Topology, BoundedOperator}
+  alias Flezha.SDK.Bounded.Spec
 
-  @kinds [{StreamOperative, :stream}, {WorkflowOperative, :workflow}]
+  @kinds [{UnboundedOperator, :unbounded}, {BoundedOperator, :bounded}]
 
   @enforce_keys [:namespace]
   defstruct namespace: nil, transport: :native, classes: [], server: nil
@@ -42,10 +42,10 @@ defmodule Flezha.SDK do
   end
 
   @doc """
-  Declare an operative of either kind. Legal before and after `start/1`.
+  Declare an operator of either kind. Legal before and after `start/1`.
 
   The kind is read from the module, never named by the call; see
-  `operative_kind/1`. Both kinds write their graph in `channels/1`.
+  `operator_kind/1`. Both kinds write their graph in `channels/1`.
 
   Both kinds ride the same declared set, and the runner announces each
   entry's kind with its factory id, so the controller knows the kind before it
@@ -55,7 +55,7 @@ defmodule Flezha.SDK do
   def register_factory({:error, _} = e, _module), do: e
 
   def register_factory(%__MODULE__{} = h, module) do
-    with {:ok, kind} <- operative_kind(module),
+    with {:ok, kind} <- operator_kind(module),
          {:ok, class} <- build_class(kind, module),
          :ok <- not_duplicate(h, class.factory_id) do
       if h.server do
@@ -69,7 +69,7 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc "Remove a declared operative — the inverse of `register_factory/2`, taking what it took."
+  @doc "Remove a declared operator — the inverse of `register_factory/2`, taking what it took."
   @spec unregister_factory(result(), module()) :: result()
   def unregister_factory({:error, _} = e, _module), do: e
 
@@ -182,7 +182,7 @@ defmodule Flezha.SDK do
       id: Keyword.get(opts, :id, __MODULE__),
       start: {__MODULE__, :start_link, [opts]},
       restart: Keyword.get(opts, :restart, :permanent),
-      # A graceful stop serialises every operative and waits for the
+      # A graceful stop serialises every operator and waits for the
       # controller's acks; the budget covers both inside a container's grace
       # period.
       shutdown: Keyword.get(opts, :shutdown, 10_000),
@@ -197,7 +197,7 @@ defmodule Flezha.SDK do
 
     handle =
       Enum.reduce(
-        Keyword.get(opts, :operatives, []),
+        Keyword.get(opts, :operators, []),
         create_runner(namespace, transport: transport),
         fn module, acc -> register_factory(acc, module) end
       )
@@ -211,19 +211,19 @@ defmodule Flezha.SDK do
   @doc """
   The kind `module` declares, read from its `@behaviour`, which the `use`
   macros set and a hand-written module writes:
-  `Flezha.SDK.StreamOperative` is a stream, `Flezha.SDK.WorkflowOperative` a
-  workflow. A module declaring both is `{:AmbiguousOperativeKind, module}` and
-  one declaring neither `{:UnknownOperativeKind, module}`, the contract's names
+  `Flezha.SDK.UnboundedOperator` is an unbounded operator, `Flezha.SDK.BoundedOperator` a
+  bounded operator. A module declaring both is `{:AmbiguousOperatorKind, module}` and
+  one declaring neither `{:UnknownOperatorKind, module}`, the contract's names
   (`docs/sdk/authoring_contract.md` §5.1).
   """
-  @spec operative_kind(module()) :: {:ok, :stream | :workflow} | {:error, {atom(), module()}}
-  def operative_kind(module) do
+  @spec operator_kind(module()) :: {:ok, :unbounded | :bounded} | {:error, {atom(), module()}}
+  def operator_kind(module) do
     declared = if Code.ensure_loaded?(module), do: behaviours(module), else: []
 
     case for({behaviour, kind} <- @kinds, behaviour in declared, do: kind) do
       [kind] -> {:ok, kind}
-      [] -> {:error, {:UnknownOperativeKind, module}}
-      _both -> {:error, {:AmbiguousOperativeKind, module}}
+      [] -> {:error, {:UnknownOperatorKind, module}}
+      _both -> {:error, {:AmbiguousOperatorKind, module}}
     end
   end
 
@@ -232,8 +232,8 @@ defmodule Flezha.SDK do
   defp behaviours(module),
     do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
-  defp build_class(:stream, module), do: Topology.build(module)
-  defp build_class(:workflow, module), do: Spec.build(module)
+  defp build_class(:unbounded, module), do: Topology.build(module)
+  defp build_class(:bounded, module), do: Spec.build(module)
 
   defp not_duplicate(%__MODULE__{classes: classes}, fid) do
     if Enum.any?(classes, fn {_m, t} -> t.factory_id == fid end),

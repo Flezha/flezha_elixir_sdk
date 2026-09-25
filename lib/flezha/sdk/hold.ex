@@ -23,7 +23,7 @@ defmodule Flezha.SDK.Hold do
   replaying it after a rebind is worse than losing it. Its verdict is evidence
   instead, on the same flood ladder the shared core's heartbeat feeds.
 
-  The hold is also the Operative's evicted-key trace, which uses `push/2` and
+  The hold is also the Operator's evicted-key trace, which uses `push/2` and
   `member?/2` alone: what a shed *means* is the caller's, and a forgotten
   eviction trace is not a refused frame.
   """
@@ -38,7 +38,7 @@ defmodule Flezha.SDK.Hold do
 
   @typedoc """
   What a writer names: a payload id, a `control_command` and its `Command`
-  variant, or an operative output whose payload id is the operative id.
+  variant, or an operator output whose payload id is the operator id.
   """
   @type key :: String.t() | {String.t(), atom()} | {:output, String.t()}
 
@@ -79,18 +79,18 @@ defmodule Flezha.SDK.Hold do
   }
 
   # The `Command` variant a `control_command` carries. A shutdown state ship is
-  # the operative's final state and is durable; every other variant is a
+  # the operator's final state and is durable; every other variant is a
   # request or a reply whose reconnect re-issues it, or whose caller is told the
   # write was refused, as an admin request's is.
   @command_classes %{
     runner_shutdown_notification: :durable,
     update_factories: :control,
     admin_request: :control,
-    spawn_workflow_request: :control,
+    spawn_bounded_request: :control,
     task_commit: :control,
     iter_commit: :control,
     iter_park: :control,
-    workflow_completed: :control,
+    bounded_completed: :control,
     response: :control
   }
 
@@ -141,7 +141,7 @@ defmodule Flezha.SDK.Hold do
   @doc """
   Which of `secondaries` a key's frames go on. One stream per key, so every
   writer of them picks the same one and their order on the wire is the order
-  they were written: a Cell and the Operative replaying what that Cell
+  they were written: a Cell and the Operator replaying what that Cell
   handed on when it stopped agree by computing this, never by comparing notes.
   """
   @spec secondary_for([term(), ...], term()) :: term()
@@ -150,7 +150,7 @@ defmodule Flezha.SDK.Hold do
 
   @doc "The guarantee class `key` declares; `:error` when the table has no row."
   @spec class(key()) :: {:ok, class()} | :error
-  def class({:output, _operative_id}), do: {:ok, :output}
+  def class({:output, _operator_id}), do: {:ok, :output}
 
   def class({"control_command", variant}) when is_atom(variant),
     do: Map.fetch(@command_classes, variant)
@@ -233,7 +233,7 @@ defmodule Flezha.SDK.Hold do
   # --- the classes ---
 
   # The payload id `key` writes under.
-  defp payload_id({:output, operative_id}), do: operative_id
+  defp payload_id({:output, operator_id}), do: operator_id
   defp payload_id({payload_id, _variant}), do: payload_id
   defp payload_id(payload_id) when is_binary(payload_id), do: payload_id
 

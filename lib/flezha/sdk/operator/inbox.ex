@@ -1,17 +1,17 @@
-defmodule Flezha.SDK.Operative.Inbox do
+defmodule Flezha.SDK.Operator.Inbox do
   @moduledoc """
-  The messages an operative is sent from below: a raw frame off a bound
+  The messages an operator is sent from below: a raw frame off a bound
   primary stream, the values a Cell produced for its node's outputs, and a
-  workflow tasklet's request to end its instance. They live beside the
-  operative rather than on it so that a `DataStream` or a `Cell` reaching
+  bounded tasklet's request to end its instance. They live beside the
+  operator rather than on it so that a `DataStream` or a `Cell` reaching
   upward names this module and not the router itself.
 
-  The first two are answered by `Flezha.SDK.Operative.handle_cast/2`, all three
-  by `Flezha.SDK.Workflow.Driver.handle_cast/2`.
+  The first two are answered by `Flezha.SDK.Operator.handle_cast/2`, all three
+  by `Flezha.SDK.Bounded.Driver.handle_cast/2`.
 
   The entrance is here too: how a raw frame becomes a value on an entry
-  channel (`enter/5`) is one rule for both kinds, so a workflow's message is
-  resolved, parsed and parked exactly where a stream's frame is.
+  channel (`enter/5`) is one rule for both kinds, so a bounded operator's message is
+  resolved, parsed and parked exactly where an unbounded operator's frame is.
   """
 
   alias Flezha.SDK.Park
@@ -37,7 +37,7 @@ defmodule Flezha.SDK.Operative.Inbox do
     do: GenServer.cast(pid, {:emitted, node_ref, cell_key, emits, handout_seq, offset, report})
 
   @doc """
-  A workflow stage's Cell has a processing-time timer due: the driver decides
+  A bounded stage's Cell has a processing-time timer due: the driver decides
   whether its firing opens a pass, joins the running stage or waits its turn.
   """
   def firing_due(pid, node_ref, cell_key, fire),
@@ -65,16 +65,16 @@ defmodule Flezha.SDK.Operative.Inbox do
   One frame through the entrance: `{:ok, channel, value}` once the name
   resolved and the channel's parser read the bytes, or `:parked` when the
   frame named a channel `topo` does not declare or the parser rejected it,
-  parked under that name, on `runner`, with `operative_id`'s identity.
+  parked under that name, on `runner`, with `operator_id`'s identity.
   """
   @spec enter(pid(), String.t(), Flezha.SDK.Topology.t(), String.t() | nil, binary()) ::
           {:ok, String.t(), term()} | :parked
-  def enter(runner, operative_id, topo, channel, message) do
+  def enter(runner, operator_id, topo, channel, message) do
     case resolve_channel(topo, channel) do
       {:unresolved, requested} ->
         park_pre_dispatch(
           runner,
-          operative_id,
+          operator_id,
           @unresolved_tasklet_id,
           requested,
           unresolved_entry_error(topo, requested),
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Operative.Inbox do
           {:error, reason} ->
             park_pre_dispatch(
               runner,
-              operative_id,
+              operator_id,
               channel,
               channel,
               "entry parse failed: #{inspect(reason)}",
@@ -103,7 +103,7 @@ defmodule Flezha.SDK.Operative.Inbox do
     end
   end
 
-  # A name the operative declares resolves to it; a name it does not is
+  # A name the operator declares resolves to it; a name it does not is
   # unresolved, and parks under the name it asked for rather than reaching
   # whichever entry channel happens to be first. A frame naming no channel
   # takes the first DECLARED entry — the source-plugin default, and the order
@@ -142,16 +142,16 @@ defmodule Flezha.SDK.Operative.Inbox do
   end
 
   # Why the frame did not enter: the name it asked for against the set the
-  # operative declares, or that it declares none at all. `flz_core`'s
+  # operator declares, or that it declares none at all. `flz_core`'s
   # `unresolved_entry_error` answers in the same words, over the same sorted
-  # set, so an operator reading a DLQ row cannot tell which core wrote it.
+  # set, so a user reading a DLQ row cannot tell which core wrote it.
   defp unresolved_entry_error(topo, requested) do
     case Enum.sort(topo.entry_order) do
       [] ->
-        "the operative declares no entry channel"
+        "the operator declares no entry channel"
 
       declared ->
-        "no entry channel `#{requested}`; the operative declares: #{Enum.join(declared, ", ")}"
+        "no entry channel `#{requested}`; the operator declares: #{Enum.join(declared, ", ")}"
     end
   end
 
@@ -164,13 +164,13 @@ defmodule Flezha.SDK.Operative.Inbox do
   DIRECTORY under the dead-letter root, so it is always a value this side
   chose. `channel` is the row's attribution and may be a name off the wire.
   """
-  def park_pre_dispatch(runner, operative_id, tasklet_id, channel, error, payload) do
-    park_id = "#{operative_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
+  def park_pre_dispatch(runner, operator_id, tasklet_id, channel, error, payload) do
+    park_id = "#{operator_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
 
     Park.ship(
       runner,
       self(),
-      Park.identity(operative_id, tasklet_id, ""),
+      Park.identity(operator_id, tasklet_id, ""),
       Park.body(park_id, channel, error, 1, payload)
     )
 

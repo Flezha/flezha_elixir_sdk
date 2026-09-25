@@ -1,15 +1,15 @@
-defmodule Flezha.SDK.Workflow.Driver do
+defmodule Flezha.SDK.Bounded.Driver do
   @moduledoc """
-  One process per workflow instance: the stage driver. A pass walks the chain
+  One process per bounded instance: the stage driver. A pass walks the chain
   of the entry channel its message arrived on, or of the tasklet whose timer
   fired, frontier by frontier: a tasklet
   becomes runnable once every producer feeding it in that chain has committed,
   so a fan-in is dispatched exactly once with the accumulated batch of this
   pass's producers. It commits each stage durably and ends by shipping
-  `WorkflowCompleted`.
+  `BoundedCompleted`.
 
   It presents the same contract to an `Flezha.SDK.Cell` that
-  `Flezha.SDK.Operative` does: a Cell casts its emits to its `operative`
+  `Flezha.SDK.Operator` does: a Cell casts its emits to its `operator`
   pid and knows nothing else about it. So every Cell mechanism — the state,
   the records, the retry ladder — is reused as it stands, and what is written
   here is only what a *bounded* run adds: the frontier, the barrier and the
@@ -23,8 +23,8 @@ defmodule Flezha.SDK.Workflow.Driver do
   and for a message-fed pass with nothing queued, its next message or the idle
   window's `{:park_idle, ref}`.
 
-  A message enters through the same `Flezha.SDK.Operative.Inbox.enter/5` the
-  stream operative's frames take, and runs only the chain of the entry channel
+  A message enters through the same `Flezha.SDK.Operator.Inbox.enter/5` the
+  unbounded operator's frames take, and runs only the chain of the entry channel
   it arrived on; a chained loop's later passes re-enter the chain its first
   message picked.
 
@@ -41,17 +41,17 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   alias Flezha.SDK.{Cell, Knob}
   alias Flezha.SDK.Cell.Records
-  alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
-  alias Flezha.SDK.Workflow.{Commit, Compensation, Instance, Resume, Spec, Stage}
+  alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
+  alias Flezha.SDK.Bounded.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
   defmodule State do
     @moduledoc false
     defstruct [
       :instance,
       :spec,
-      :operative_id,
+      :operator_id,
       :runner,
-      # the stream operative's Cell set, minted per mode and swept between passes
+      # the unbounded operator's Cell set, minted per mode and swept between passes
       :cells,
       # the stage barrier refs this frontier still owes
       awaiting: %{},
@@ -106,7 +106,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc "Cooperative external stop: the run unwinds and completes as `cancelled`."
-  def stop_workflow(pid), do: send(pid, :workflow_stop)
+  def stop_bounded(pid), do: send(pid, :bounded_stop)
 
   @doc "Send one message on the first declared entry channel."
   def push_inbox(pid, payload), do: GenServer.cast(pid, {:input, nil, payload, %{}})
@@ -116,28 +116,28 @@ defmodule Flezha.SDK.Workflow.Driver do
   @impl true
   def init(opts) do
     spec = Keyword.fetch!(opts, :spec)
-    operative_id = Keyword.fetch!(opts, :operative_id)
+    operator_id = Keyword.fetch!(opts, :operator_id)
     journal = journal(opts)
 
     # Cells are minted before anything runs, so a `RestoreInitState` frame
-    # arriving right after the `AddOperative` ack always finds a declared one
+    # arriving right after the `AddOperator` ack always finds a declared one
     # registered; a keyed one the frame names is minted by its lookup.
     cells =
       opts
-      |> Keyword.take([:operative_id, :range, :counters, :runner, :secondaries, :credit])
-      |> Keyword.merge(topology: spec.topology, kind: :workflow)
+      |> Keyword.take([:operator_id, :range, :counters, :runner, :secondaries, :credit])
+      |> Keyword.merge(topology: spec.topology, kind: :bounded)
       |> Cells.new()
       |> Cells.schedule_reap()
 
     state = %State{
       instance:
-        Instance.new(operative_id, spec,
+        Instance.new(operator_id, spec,
           journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
           park_idle_ms: Keyword.get(opts, :park_idle_ms)
         ),
       spec: spec,
-      operative_id: operative_id,
+      operator_id: operator_id,
       pass_channel: journaled_channel(spec, journal),
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
@@ -161,10 +161,10 @@ defmodule Flezha.SDK.Workflow.Driver do
     if s.resume_owed > 0, do: settle(s), else: settle(resume_bound(s))
   end
 
-  # The calls the controller's persistence commands make on an operative,
-  # answered exactly as `Flezha.SDK.Operative` answers them, through the same
-  # Cell set: a restore, a compaction and a live read reach a workflow
-  # instance through the same `Flezha.SDK.Commands` path a stream one does.
+  # The calls the controller's persistence commands make on an operator,
+  # answered exactly as `Flezha.SDK.Operator` answers them, through the same
+  # Cell set: a restore, a compaction and a live read reach a bounded operator
+  # instance through the same `Flezha.SDK.Commands` path an unbounded one does.
   @impl true
   def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{} = s) do
     {reply, cells} = Cells.lookup(s.cells, tasklet, key, materialise?)
@@ -196,7 +196,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   # A Cell finished one invocation. Its outputs are collected for the stage
-  # rather than routed: a workflow hands a batch on at the barrier, not per
+  # rather than routed: a bounded operator hands a batch on at the barrier, not per
   # value, so the whole stage's release is what the journal records.
   @impl true
   def handle_cast({:emitted, node_ref, cell_key, emits, seq, _offset, report}, %State{} = s) do
@@ -228,12 +228,12 @@ defmodule Flezha.SDK.Workflow.Driver do
     do: settle(fail(s, node_ref, error))
 
   # A message off the bound data stream, through the same entrance a stream
-  # operative's frame takes: an undeclared name or a parser refusal parks it,
+  # operator's frame takes: an undeclared name or a parser refusal parks it,
   # consumed without a pass, and a driver waiting for a message waits a fresh
   # idle window. A readable one waits in the inbox for the next message-fed
   # pass; a driver waiting for one starts that pass now.
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
-    case Inbox.enter(s.runner, s.operative_id, s.spec.topology, channel, message) do
+    case Inbox.enter(s.runner, s.operator_id, s.spec.topology, channel, message) do
       {:ok, channel, value} ->
         s = %{s | instance: Instance.push_inbox(s.instance, channel, value, metadata)}
         if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
@@ -301,7 +301,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   # A stop and the duration cap are cooperative: the run unwinds at its next
   # step. A loop waiting for input has no next step and nothing to unwind.
-  def handle_info(stop, %State{} = s) when stop in [:workflow_stop, :max_duration] do
+  def handle_info(stop, %State{} = s) when stop in [:bounded_stop, :max_duration] do
     s = %{s | cancel: :cancelled}
     if s.idle, do: settle(complete(%{s | idle: nil}, "cancelled", "")), else: {:noreply, s}
   end
@@ -325,7 +325,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   # A class that journals has its stage Cells capture their plugin output into
   # their own effect records, released once the stage commits; one that
-  # journals nothing sends it straight to the wire, as a stream's is.
+  # journals nothing sends it straight to the wire, as an unbounded operator's is.
   defp sink_outputs(%State{} = s, node_ref, value, emit, ordinal) do
     if journals?(s) do
       s
@@ -334,7 +334,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       |> Map.get({:node, node_ref}, [])
       |> Enum.filter(&match?(%{to: {:sink, _}}, &1))
       |> Enum.reduce(s, fn route, acc ->
-        stamp_with = if route.keyed, do: {acc.operative_id, acc.spec.topology.node_modules}
+        stamp_with = if route.keyed, do: {acc.operator_id, acc.spec.topology.node_modules}
         {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
         %{acc | cells: Cells.emit_output(acc.cells, metadata, bytes)}
       end)
@@ -475,7 +475,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       start_pass(s, item.channel, frontier)
     else
       {:rejected, reason} ->
-        Inbox.park_pre_dispatch(s.runner, s.operative_id, item.channel, item.channel, reason, nil)
+        Inbox.park_pre_dispatch(s.runner, s.operator_id, item.channel, item.channel, reason, nil)
         await_input(%{s | instance: Instance.note_parked(s.instance, item.offset)})
     end
   end
@@ -486,7 +486,7 @@ defmodule Flezha.SDK.Workflow.Driver do
     e -> {:rejected, "entry edge failed: " <> Exception.message(e)}
   end
 
-  # Before any Cell is minted, as the stream's router refuses a key.
+  # Before any Cell is minted, as the unbounded operator's router refuses a key.
   defp own_keys(%State{cells: cells}, frontier) do
     Enum.find_value(frontier, :ok, fn {root, batch} ->
       Enum.find_value(batch, fn {_value, key} ->
@@ -701,7 +701,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
       command =
         Commit.task(s.runner, self(), ref,
-          operative_id: s.operative_id,
+          operator_id: s.operator_id,
           task_idx: task_idx,
           iter: s.iter,
           cells_ran: Commit.cells_ran(s.written, node_ref, ran),
@@ -772,7 +772,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
       command =
         Commit.iter(s.runner, self(), ref,
-          operative_id: s.operative_id,
+          operator_id: s.operator_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
           entry_channel: s.pass_channel,
@@ -823,7 +823,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
     if barrier.attempt < attempts do
       Logger.warning(
-        "[Flezha.SDK] #{s.operative_id} barrier attempt #{barrier.attempt}/#{attempts} " <>
+        "[Flezha.SDK] #{s.operator_id} barrier attempt #{barrier.attempt}/#{attempts} " <>
           "refused: #{error}; re-sending"
       )
 
@@ -833,7 +833,7 @@ defmodule Flezha.SDK.Workflow.Driver do
       Commit.resend(s.runner, self(), barrier.ref, barrier.command)
       %{s | barrier: %{barrier | attempt: barrier.attempt + 1}}
     else
-      Logger.warning("[Flezha.SDK] #{s.operative_id} barrier gave up: #{error}")
+      Logger.warning("[Flezha.SDK] #{s.operator_id} barrier gave up: #{error}")
       give_up(%{s | barrier: nil}, error)
     end
   end
@@ -848,7 +848,7 @@ defmodule Flezha.SDK.Workflow.Driver do
 
   defp fail(%State{unwind: %{status: st}} = s, node_ref, error) when st != nil do
     Logger.warning(
-      "[Flezha.SDK] #{s.operative_id} compensate hook on #{Spec.tasklet_name(s.spec, node_ref)} " <>
+      "[Flezha.SDK] #{s.operator_id} compensate hook on #{Spec.tasklet_name(s.spec, node_ref)} " <>
         "failed: #{error}; the rest of the plan still runs"
     )
 
@@ -907,13 +907,13 @@ defmodule Flezha.SDK.Workflow.Driver do
   end
 
   # A park is not a terminal outcome: the instance tears its run down WITHOUT
-  # a `WorkflowCompleted`, and the controller keeps it suspended until an
+  # a `BoundedCompleted`, and the controller keeps it suspended until an
   # inbox append or the wake deadline rehydrates it. The park record names the
   # last COMMITTED iteration, so a resume enters the one after it either way,
   # and the last message the run parked unread, which the inbox releases.
   defp park(%State{} = s) do
     wake = earliest_timer(s)
-    Commit.park(s.runner, s.operative_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
+    Commit.park(s.runner, s.operator_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
     %{s | terminal: :parked}
   end
 
@@ -970,7 +970,7 @@ defmodule Flezha.SDK.Workflow.Driver do
   defp complete(s, status, error, result \\ <<>>)
 
   defp complete(%State{terminal: nil} = s, status, error, result) do
-    Commit.completed(s.runner, s.operative_id, status, error, result)
+    Commit.completed(s.runner, s.operator_id, status, error, result)
     %{s | terminal: {status, error}}
   end
 

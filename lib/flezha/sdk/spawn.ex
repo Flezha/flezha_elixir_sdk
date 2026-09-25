@@ -1,11 +1,11 @@
 defmodule Flezha.SDK.Spawn do
   @moduledoc """
-  Tasklet-requested spawn of a workflow instance: the request a tasklet
-  makes with `Flezha.SDK.Ctx.spawn_workflow/4`, the handle it gets back at
+  Tasklet-requested spawn of a bounded instance: the request a tasklet
+  makes with `Flezha.SDK.Ctx.spawn_bounded/4`, the handle it gets back at
   once, and what the controller's answer resolves to.
 
-  The request is a cast to the runner, which ships `SpawnWorkflowRequest` and
-  keeps the caller as a waiter until `SpawnWorkflowResponse` arrives or the
+  The request is a cast to the runner, which ships `SpawnBoundedRequest` and
+  keeps the caller as a waiter until `SpawnBoundedResponse` arrives or the
   request's deadline passes. The answer reaches the caller as a message, so a
   handle is read once, and only inside the invocation that made it: after
   `run/3` returns the Cell drops what arrives. A failure nobody read is
@@ -54,7 +54,7 @@ defmodule Flezha.SDK.Spawn do
           | {:error,
              {:already_running, String.t()}
              | {:factory_unknown, String.t()}
-             | {:factory_not_workflow, String.t()}
+             | {:factory_not_bounded, String.t()}
              | {:refused, String.t()}
              | :timeout
              | :unavailable}
@@ -66,7 +66,7 @@ defmodule Flezha.SDK.Spawn do
     {instance_id, if_running} = options!(opts)
 
     handle = %__MODULE__{
-      reference_id: "spawn-workflow-#{instance_id}-#{System.unique_integer([:positive])}",
+      reference_id: "spawn-bounded-#{instance_id}-#{System.unique_integer([:positive])}",
       instance_id: instance_id,
       factory_id: factory_id
     }
@@ -98,18 +98,18 @@ defmodule Flezha.SDK.Spawn do
 
       {nil, _policy} ->
         raise ArgumentError,
-              "spawn_workflow: `if_running` needs an `id`; without one every spawn starts a new instance"
+              "spawn_bounded: `if_running` needs an `id`; without one every spawn starts a new instance"
 
       {id, _policy} when not is_binary(id) or id == "" ->
         raise ArgumentError,
-              "spawn_workflow: `id` must be a non-empty string, got: #{inspect(id)}"
+              "spawn_bounded: `id` must be a non-empty string, got: #{inspect(id)}"
 
       {id, policy} when policy in [nil, :deliver, :error] ->
         {id, policy || :deliver}
 
       {_id, policy} ->
         raise ArgumentError,
-              "spawn_workflow: `if_running` must be :deliver or :error, got: #{inspect(policy)}"
+              "spawn_bounded: `if_running` must be :deliver or :error, got: #{inspect(policy)}"
     end
   end
 
@@ -148,7 +148,7 @@ defmodule Flezha.SDK.Spawn do
     with false <- spawn.claimed?,
          {:error, reason} <- interpret(spawn, reply, error) do
       Logger.warning(
-        "[Flezha.SDK] spawn_workflow(factory `#{spawn.factory_id}`, " <>
+        "[Flezha.SDK] spawn_bounded(factory `#{spawn.factory_id}`, " <>
           "id `#{spawn.instance_id}`) failed: " <> inspect(reason)
       )
     end
@@ -170,7 +170,7 @@ defmodule Flezha.SDK.Spawn do
 
   # As the reference maps a reply: an error is a refusal whatever the outcome
   # says, a success carries the id the controller resolved, `already_running`,
-  # `factory_unknown` and `factory_not_workflow` name the id they are about,
+  # `factory_unknown` and `factory_not_bounded` name the id they are about,
   # and a word this SDK does not know is a refusal naming it.
   defp interpret(_spawn, reply, _error) when reply in [:timeout, :unavailable],
     do: {:error, reply}
@@ -185,8 +185,8 @@ defmodule Flezha.SDK.Spawn do
   defp interpret(spawn, {"factory_unknown", _id}, _error),
     do: {:error, {:factory_unknown, spawn.factory_id}}
 
-  defp interpret(spawn, {"factory_not_workflow", _id}, _error),
-    do: {:error, {:factory_not_workflow, spawn.factory_id}}
+  defp interpret(spawn, {"factory_not_bounded", _id}, _error),
+    do: {:error, {:factory_not_bounded, spawn.factory_id}}
 
   defp interpret(_spawn, {other, _id}, _error),
     do: {:error, {:refused, "unknown outcome `#{other}`"}}

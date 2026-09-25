@@ -1,6 +1,6 @@
-defmodule Flezha.SDK.StreamOperative do
+defmodule Flezha.SDK.UnboundedOperator do
   @moduledoc """
-  A stream operative, declared with `use` (see `__using__/1`), which defines
+  An unbounded operator, declared with `use` (see `__using__/1`), which defines
   this behaviour's zero-arity callbacks from its options and imports the channel
   builder. The callbacks: a `factory_id/0` the controller places by, a
   `channels/1` the author writes, which authors the topology on the builder
@@ -19,9 +19,9 @@ defmodule Flezha.SDK.StreamOperative do
   @use_options [:description, :persistence_enabled, :sleep_when_idle]
 
   @doc """
-  Write a stream operative as a declaration rather than as one-line callbacks.
+  Write an unbounded operator as a declaration rather than as one-line callbacks.
 
-      use Flezha.SDK.StreamOperative, factory_id: "market"
+      use Flezha.SDK.UnboundedOperator, factory_id: "market"
 
       @impl true
       def channels(c) do
@@ -40,9 +40,9 @@ defmodule Flezha.SDK.StreamOperative do
   ## The §5 short form
 
   A module that writes its one tasklet's `run/3` instead of `channels/1` is
-  a whole single-tasklet operative:
+  a whole single-tasklet operator:
 
-      use Flezha.SDK.StreamOperative, factory_id: "upcase", sink: "out", input: "words"
+      use Flezha.SDK.UnboundedOperator, factory_id: "upcase", sink: "out", input: "words"
 
       def run(input, state, ctx) do
         emit(ctx, String.upcase(input))
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.StreamOperative do
   and writing neither is one naming both.
   """
   defmacro __using__(opts) do
-    Tasklet.__operative_using__(opts, @use_options, __MODULE__)
+    Tasklet.__operator_using__(opts, @use_options, __MODULE__)
   end
 
   @callback factory_id() :: String.t()

@@ -1,14 +1,14 @@
-defmodule Flezha.SDK.OperativeSleepTest do
+defmodule Flezha.SDK.OperatorSleepTest do
   @moduledoc """
-  A stream instance whose class sleeps ships `IterPark` at iteration `0` once
+  An unbounded instance whose class sleeps ships `IterPark` at iteration `0` once
   every Cell has been quiet for the idle window, and not while one still holds
   work or was active inside it; a class that does not sleep never does.
   """
   # Sets FLEZHA_PARK_IDLE_MS for the instances it starts.
   use ExUnit.Case, async: false
 
-  alias Flezha.SDK.{Channels, Counters, Operative, Topology}
-  alias Flezha.SDK.Operative.Inbox
+  alias Flezha.SDK.{Channels, Counters, Operator, Topology}
+  alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
 
   @window_ms 150
@@ -28,12 +28,12 @@ defmodule Flezha.SDK.OperativeSleepTest do
   end
 
   defmodule Sleeping do
-    use Flezha.SDK.StreamOperative, factory_id: "sleeping", sleep_when_idle: true
+    use Flezha.SDK.UnboundedOperator, factory_id: "sleeping", sleep_when_idle: true
     def channels(c), do: c |> input("in") |> key_by(& &1) |> into(Seen)
   end
 
   defmodule Awake do
-    use Flezha.SDK.StreamOperative, factory_id: "awake"
+    use Flezha.SDK.UnboundedOperator, factory_id: "awake"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Seen)
   end
 
@@ -53,8 +53,8 @@ defmodule Flezha.SDK.OperativeSleepTest do
     {:ok, runner} = StubRunner.start_link(test: self())
 
     {:ok, pid} =
-      Operative.start_link(
-        [operative_id: "op-#{inspect(module)}", topology: topology, counters: Counters.new()] ++
+      Operator.start_link(
+        [operator_id: "op-#{inspect(module)}", topology: topology, counters: Counters.new()] ++
           [runner: runner] ++ opts
       )
 
@@ -71,7 +71,7 @@ defmodule Flezha.SDK.OperativeSleepTest do
     refute_receive {:shipped, {:iter_park, _}}, 4 * @window_ms
   end
 
-  test "a Cell still running keeps the stream awake until it is done" do
+  test "a Cell still running keeps the operator awake until it is done" do
     started = System.monotonic_time(:millisecond)
     op = start(Sleeping)
     Inbox.input(op, "in", "slow", %{})
@@ -88,7 +88,7 @@ defmodule Flezha.SDK.OperativeSleepTest do
     assert_receive {:shipped, {:iter_park, %{iter: 0}}}, 5_000
   end
 
-  test "a stream that does not declare sleeping never ships IterPark" do
+  test "an unbounded operator that does not declare sleeping never ships IterPark" do
     op = start(Awake)
     Inbox.input(op, "in", "a", %{})
     refute_receive {:shipped, {:iter_park, _}}, 4 * @window_ms

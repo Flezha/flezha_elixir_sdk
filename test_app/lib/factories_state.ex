@@ -8,7 +8,7 @@
 # uncoalesced, as every veneer does: the fold is idempotent per `(interval, ts)`.
 # `schema_evolution_v1` / `_v2` are the same class either side of a deploy that
 # edits its own state type: both declare the tasklet `evolving_cart`, so an
-# operative started under v1 and restarted under v2 restores from the very WAL
+# operator started under v1 and restarted under v2 restores from the very WAL
 # v1 wrote. `session_timeout` is the worked timer shape: durable, so the e2e's
 # re-seat half folds its pending timer back out of the change log.
 # `checkpoint_store` / `checkpoint_batched_store` are the tier's two
@@ -39,7 +39,7 @@ end
 
 defmodule ElixirRunner.StoreInputOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "store_input"
 
   def channels(c) do
@@ -84,7 +84,7 @@ end
 
 defmodule ElixirRunner.StatefulCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "stateful_counter"
 
   def channels(c) do
@@ -120,7 +120,7 @@ end
 
 defmodule ElixirRunner.PersistenceOffCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "persistence_off_counter"
   def persistence_enabled, do: false
 
@@ -137,7 +137,7 @@ end
 
 # -- sleeping_counter -------------------------------------------------------
 
-# A stream that sleeps when idle: `key:delta` inputs fold into one total per
+# An unbounded operator that sleeps when idle: `key:delta` inputs fold into one total per
 # key, and every input emits `key=total` on the `totals` sink.
 defmodule ElixirRunner.SleepingCounterTask do
   @moduledoc false
@@ -160,7 +160,7 @@ end
 
 defmodule ElixirRunner.SleepingCounterOp do
   @moduledoc false
-  use Flezha.SDK.StreamOperative, factory_id: "sleeping_counter", sleep_when_idle: true
+  use Flezha.SDK.UnboundedOperator, factory_id: "sleeping_counter", sleep_when_idle: true
 
   def channels(c) do
     c
@@ -212,7 +212,7 @@ end
 
 defmodule ElixirRunner.CoalescingCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "coalescing_counter"
 
   def channels(c) do
@@ -249,7 +249,7 @@ end
 
 defmodule ElixirRunner.ResumeProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "resume_probe"
 
   def channels(c) do
@@ -315,7 +315,7 @@ end
 
 defmodule ElixirRunner.SchemaEvolutionV1Op do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "schema_evolution_v1"
 
   def channels(c) do
@@ -330,7 +330,7 @@ end
 
 defmodule ElixirRunner.SchemaEvolutionV2Op do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "schema_evolution_v2"
 
   def channels(c) do
@@ -387,7 +387,7 @@ end
 
 defmodule ElixirRunner.SessionTimeoutOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "session_timeout"
 
   def channels(c) do
@@ -434,7 +434,7 @@ end
 
 defmodule ElixirRunner.CheckpointStoreOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "checkpoint_store"
 
   def channels(c) do
@@ -452,7 +452,7 @@ end
 
 defmodule ElixirRunner.CheckpointBatchedOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "checkpoint_batched_store"
 
   def channels(c) do
@@ -524,7 +524,7 @@ end
 
 defmodule ElixirRunner.CandleOp do
   @moduledoc false
-  @behaviour Flezha.SDK.StreamOperative
+  @behaviour Flezha.SDK.UnboundedOperator
   def factory_id, do: "candle"
 
   def channels(c) do
@@ -541,7 +541,7 @@ defmodule ElixirRunner.CandleOp do
 end
 
 defmodule ElixirRunner.FactoriesState do
-  @moduledoc "The persisted-state factory operatives this standalone runner advertises."
+  @moduledoc "The persisted-state factory operators this standalone runner advertises."
 
   def all do
     [

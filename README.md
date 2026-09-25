@@ -1,7 +1,7 @@
 # flezha_sdk
 
 The Elixir SDK for Flezha. You write tasklets that handle one message at a
-time and operatives that declare how those tasklets are connected; a Flezha
+time and operators that declare how those tasklets are connected; a Flezha
 controller places them, keeps their state durable, retries failures and moves
 work when a host goes away.
 
@@ -22,7 +22,7 @@ Elixir 1.17 or later.
   transport (`Flezha.SDK.Connect`) at boot, and a runner started there with
   `transport: :native` reaches it without a socket.
 
-`Flezha.SDK.Local` runs an operative's declared graph in your own process with no
+`Flezha.SDK.Local` runs an operator's declared graph in your own process with no
 controller at all, holding state in memory only.
 
 ## The socket client

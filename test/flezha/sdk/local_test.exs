@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.LocalTest do
   @moduledoc """
-  The Elixir SDK's local mode: a user's own operative module, its declared
+  The Elixir SDK's local mode: a user's own operator module, its declared
   two-tasklet graph, and no controller anywhere. `Normalise`, `Tally` and
   `WordCount` below are the worked example in `docs/quickstart.md`, copied
   verbatim so the documented graph is the one that runs here.
@@ -11,7 +11,7 @@ defmodule Flezha.SDK.LocalTest do
   import ExUnit.CaptureIO, only: [with_io: 2]
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
-  alias Flezha.SDK.{Channels, Ctx, Local, Operative, Spawn}
+  alias Flezha.SDK.{Channels, Ctx, Local, Operator, Spawn}
 
   # --- a changeful tasklet, and one that asks for a spawn ---
 
@@ -31,7 +31,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule CounterOp do
     @moduledoc false
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "counter_op"
 
     def channels(c),
@@ -49,7 +49,7 @@ defmodule Flezha.SDK.LocalTest do
     def init_state(_), do: nil
 
     def run(instance_id, state, ctx) do
-      handle = Ctx.spawn_workflow(ctx, "worker", "payload", id: instance_id)
+      handle = Ctx.spawn_bounded(ctx, "worker", "payload", id: instance_id)
       Ctx.emit(ctx, inspect(Spawn.await(handle, 5_000)))
       {:ok, state}
     end
@@ -57,7 +57,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule SpawnerOp do
     @moduledoc false
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "spawner"
 
     def channels(c),
@@ -89,7 +89,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule WordCount do
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     alias Flezha.SDK.Channels
 
     def factory_id, do: "word_count"
@@ -111,7 +111,7 @@ defmodule Flezha.SDK.LocalTest do
   # --- classes and channels local mode has something to say about ---
 
   defmodule TieredOp do
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "local_tiered"
 
     def channels(c) do
@@ -125,12 +125,12 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule Job do
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "local_job"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
   end
 
-  # Asks to end its operative on `end`, which a stream never does. Reports every
+  # Asks to end its operator on `end`, which an unbounded operator never does. Reports every
   # invocation, so a retry would show.
   @closer_probe :local_mode_closer
 
@@ -148,7 +148,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule CloserOp do
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "local_closer"
 
     def channels(c),
@@ -156,7 +156,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule StrictOp do
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "local_strict"
 
     def channels(c) do
@@ -188,7 +188,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule HeldOp do
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
     def factory_id, do: "local_held"
 
     def channels(c) do
@@ -204,7 +204,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defp start_run(module) do
     # Every start writes the non-durability notice to stderr, by design and
-    # unconditionally: an operator running without a controller has to be told,
+    # unconditionally: a user running without a controller has to be told,
     # whatever the log level. It is captured here rather than silenced, so the
     # write still happens; the case that asserts it reads `Local.notice/0` and
     # the emit counter, neither of which reads this device.
@@ -267,7 +267,7 @@ defmodule Flezha.SDK.LocalTest do
     assert :ok = Local.run_until_idle(run, 5_000)
 
     {"tally", :dynamic, keyed} =
-      List.keyfind(Operative.cells(Local.operative(run)), "tally", 0)
+      List.keyfind(Operator.cells(Local.operator(run)), "tally", 0)
 
     assert keyed |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ~w(a b c)
   end
@@ -313,7 +313,7 @@ defmodule Flezha.SDK.LocalTest do
 
   # --- what local mode refuses ---
 
-  test "an unknown channel is refused, naming the channel and the operative" do
+  test "an unknown channel is refused, naming the channel and the operator" do
     run = start_run(WordCount)
 
     assert {:error, entry} = Local.feed(run, "lynes", "x")
@@ -327,8 +327,8 @@ defmodule Flezha.SDK.LocalTest do
     assert {:error, tier} = Local.start(TieredOp)
     assert tier =~ "effectively_once" and tier =~ "requires a controller"
 
-    assert {:error, workflow} = Local.start(Job)
-    assert workflow =~ "a workflow" and workflow =~ "requires a controller"
+    assert {:error, bounded} = Local.start(Job)
+    assert bounded =~ "a bounded operator" and bounded =~ "requires a controller"
   end
 
   test "a value released on a sink with no callback is reported by name and counted" do
@@ -358,7 +358,7 @@ defmodule Flezha.SDK.LocalTest do
     assert log =~ "unreadable"
   end
 
-  test "a stream tasklet asking to complete fails that input once, by name, and the stream runs on" do
+  test "an unbounded tasklet asking to complete fails that input once, by name, and the operator runs on" do
     Process.register(self(), @closer_probe)
     run = start_run(CloserOp)
     collect(run, "out")
@@ -370,12 +370,12 @@ defmodule Flezha.SDK.LocalTest do
         assert :ok = Local.run_until_idle(run, 5_000)
       end)
 
-    assert log =~ "parked an input on channel `in`: CompleteOutsideWorkflow"
+    assert log =~ "parked an input on channel `in`: CompleteOutsideBounded"
     # Not retried: the ladder would have run it again.
     assert [{:ran, "hi"}, {:ran, "end"}] == for({:ran, _} = m <- collect_ran(), do: m)
     # The failed input's emit is discarded with it; the one before it shipped.
     assert payloads() == ["hi"]
-    assert Process.alive?(Local.operative(run))
+    assert Process.alive?(Local.operator(run))
   end
 
   defp collect_ran(acc \\ []) do

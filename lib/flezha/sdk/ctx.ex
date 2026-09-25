@@ -29,7 +29,7 @@ defmodule Flezha.SDK.Ctx do
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
   once per invocation — and, inside a firing, the scheduled timestamp. Inside a
-  workflow's tasklet timers are unavailable until they fire there: the Cell
+  bounded operator's tasklet timers are unavailable until they fire there: the Cell
   hands `timers: :unavailable`, and the four timer calls answer
   `{:error, :timers_unavailable}` and arm nothing.
 
@@ -39,7 +39,7 @@ defmodule Flezha.SDK.Ctx do
   derived from the Cell's wire identity, the change seq the invocation
   started at and a per-invocation ordinal.
 
-  `spawn_workflow/4` asks the runner for a workflow instance and answers a
+  `spawn_bounded/4` asks the runner for a bounded instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
@@ -66,7 +66,7 @@ defmodule Flezha.SDK.Ctx do
 
   @zero_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
 
-  # FNV-1a-128, the constants `flz_core::operative::instance` fixes; the
+  # FNV-1a-128, the constants `flz_core::operator::instance` fixes; the
   # rendered id is a cross-language contract, so the three fixture vectors are
   # the only thing that may change it.
   @fnv128_offset_basis 0x6C62272E07BB014262B821756295C58D
@@ -82,7 +82,7 @@ defmodule Flezha.SDK.Ctx do
   `opts` carries the node's channel name, whether its sink is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
   (`key_required?`), the Cell's pending timers (`timers`, empty by default,
-  `:unavailable` inside a workflow),
+  `:unavailable` inside a bounded operator),
   the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
   runner a spawn request goes to (`runner`, nil for none) and whether the input
@@ -182,7 +182,7 @@ defmodule Flezha.SDK.Ctx do
   def cell_key(%__MODULE__{cell_key: k}), do: k
 
   @doc """
-  Request spawn-or-deliver of a workflow instance of `factory_id` in this
+  Request spawn-or-deliver of a bounded instance of `factory_id` in this
   runner's namespace, with `payload` as its first input. Answers a
   `Flezha.SDK.Spawn` handle without waiting, read with
   `Flezha.SDK.Spawn.await/2` or `Flezha.SDK.Spawn.try_result/1` inside this
@@ -199,24 +199,24 @@ defmodule Flezha.SDK.Ctx do
   resolves an empty id. Pass `id:` for at most one instance, or for the id on a
   replay.
   """
-  @spec spawn_workflow(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
-  def spawn_workflow(%__MODULE__{} = ctx, factory_id, payload, opts \\ []),
+  @spec spawn_bounded(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
+  def spawn_bounded(%__MODULE__{} = ctx, factory_id, payload, opts \\ []),
     do: Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts)
 
   @doc """
-  End the workflow instance this tasklet runs in, with `result` as the
+  End the bounded instance this tasklet runs in, with `result` as the
   result its completion reports. The rest of the iteration still runs and
   commits; once that commit is durable the instance ends instead of waiting
   for its next input, re-seeding a chained loop or parking. In a `:once`
-  workflow it only sets the result the pass ends with.
+  bounded operator it only sets the result the pass ends with.
 
   Called more than once in one iteration, the instance ends once, with the
   result of the tasklet latest in the chain's order and, within it, of the
   Cell whose key sorts last. A failing invocation discards its call as it
   discards its emits, and an iteration that fails discards the call with it.
 
-  A stream never completes: a stream tasklet calling this fails its input,
-  without a retry, with an error beginning `CompleteOutsideWorkflow`.
+  An unbounded operator never completes: an unbounded tasklet calling this fails its input,
+  without a retry, with an error beginning `CompleteOutsideBounded`.
   """
   @spec complete(t(), binary()) :: :ok
   def complete(%__MODULE__{ref: ref}, result) when is_binary(result) do

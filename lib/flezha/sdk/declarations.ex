@@ -1,32 +1,32 @@
 defmodule Flezha.SDK.Declarations do
   @moduledoc """
-  What a class tells the controller about itself in its `AddOperative` reply:
-  a map of string keys that becomes `AddOperativeResponse.metadata`, empty when
+  What a class tells the controller about itself in its `AddOperator` reply:
+  a map of string keys that becomes `AddOperatorResponse.metadata`, empty when
   the class declares nothing.
 
-  Both kinds live here, as they do in the reference's `operative_start.rs`,
+  Both kinds live here, as they do in the reference's `operator_start.rs`,
   because they answer one question and the controller decodes them all in one
   place of its own. A new declared fact is added here and there, and nowhere
   else — the SDK names no controller module, so the pair is kept by the
   reader rather than by a reference.
 
   Either kind declares its persistence switch when it is off and its sleep
-  setting when it is on. A stream class declares the tier and its granularity
+  setting when it is on. An unbounded class declares the tier and its granularity
   when declared, and both
   correction keys whenever a window is — an undeclared beyond-window fate
   reaches the controller as the default rather than as an absence, as it does
-  in every other SDK. A workflow class declares synchronous durability, its
+  in every other SDK. A bounded class declares synchronous durability, its
   loop mode (only a `per_input` loop partitions), the compensable positions (a
-  rewind may only unwind those) and the leaves, since the operative is done
+  rewind may only unwind those) and the leaves, since the operator is done
   when every leaf has committed; it carries no tier,
   which registration refuses on it. The cadence, the outputs posture and the
   delay stay SDK-side.
   """
 
   alias Flezha.SDK.{Tasklet, Topology}
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Bounded.Spec
 
-  @doc "The metadata `class` declares — a `Topology` or a workflow `Spec`."
+  @doc "The metadata `class` declares — a `Topology` or a bounded `Spec`."
   @spec for(Topology.t() | Spec.t()) :: %{String.t() => String.t()}
   def for(%Topology{} = topo) do
     keyed = if topo.keyless?, do: %{"keyed" => "false"}, else: %{}

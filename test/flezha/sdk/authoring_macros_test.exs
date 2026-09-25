@@ -68,11 +68,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert error.description =~ "max_entites"
   end
 
-  # A nested tasklet inherits the operative module's imports, so `use` has to
+  # A nested tasklet inherits the operator module's imports, so `use` has to
   # take `Channels.input/2` back before the tasklet's own `input/0` is read.
-  defmodule NestingOperative do
+  defmodule NestingOperator do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "nesting_operative"
+    use Flezha.SDK.UnboundedOperator, factory_id: "nesting_operator"
 
     defmodule Nested do
       @moduledoc false
@@ -89,9 +89,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a nested tasklet's own input/0 does not clash with the builder's" do
-    assert NestingOperative.Nested.input() == "the nested tasklet's own"
-    assert {:ok, topo} = Topology.build(NestingOperative)
-    assert entry_names(NestingOperative) == ["in"]
+    assert NestingOperator.Nested.input() == "the nested tasklet's own"
+    assert {:ok, topo} = Topology.build(NestingOperator)
+    assert entry_names(NestingOperator) == ["in"]
     assert sink_names(topo) == ["out"]
   end
 
@@ -109,12 +109,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule HandWrittenOperative do
+  defmodule HandWrittenOperator do
     @moduledoc false
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
 
     @impl true
-    def factory_id, do: "hand_written_operative"
+    def factory_id, do: "hand_written_operator"
 
     @impl true
     def channels(c) do
@@ -123,17 +123,17 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "the behaviour form registers exactly as before" do
-    assert {:ok, topo} = Topology.build(HandWrittenOperative)
-    assert topo.factory_id == "hand_written_operative"
+    assert {:ok, topo} = Topology.build(HandWrittenOperator)
+    assert topo.factory_id == "hand_written_operator"
     refute function_exported?(HandWritten, :mailbox_capacity, 0)
   end
 
-  # --- the operative macros -------------------------------------------------
+  # --- the operator macros -------------------------------------------------
 
-  defmodule TunedWorkflow do
+  defmodule TunedBounded do
     @moduledoc false
-    use Flezha.SDK.WorkflowOperative,
-      factory_id: "tuned_workflow",
+    use Flezha.SDK.BoundedOperator,
+      factory_id: "tuned_bounded",
       loop_mode: :chained,
       rollback_mode: :keep_progress
 
@@ -143,14 +143,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "an operative macro defines only the knobs written" do
-    assert TunedWorkflow.factory_id() == "tuned_workflow"
-    assert TunedWorkflow.loop_mode() == :chained
-    assert TunedWorkflow.rollback_mode() == :keep_progress
-    refute function_exported?(TunedWorkflow, :max_duration_ms, 0)
+  test "an operator macro defines only the knobs written" do
+    assert TunedBounded.factory_id() == "tuned_bounded"
+    assert TunedBounded.loop_mode() == :chained
+    assert TunedBounded.rollback_mode() == :keep_progress
+    refute function_exported?(TunedBounded, :max_duration_ms, 0)
   end
 
-  test "a retired workflow option fails to compile, as any unknown option does" do
+  test "a retired bounded option fails to compile, as any unknown option does" do
     for option <- [
           "retry_attempts: 5",
           "retry_backoff_ms: 20",
@@ -159,7 +159,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         ] do
       error =
         refused("""
-        use Flezha.SDK.WorkflowOperative, factory_id: "w", #{option}
+        use Flezha.SDK.BoundedOperator, factory_id: "w", #{option}
         def channels(c), do: c
         """)
 
@@ -172,7 +172,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     for {option, value} <- [{"loop_mode", ":forever"}, {"rollback_mode", ":undo_everything"}] do
       error =
         refused("""
-        use Flezha.SDK.WorkflowOperative, factory_id: "w", #{option}: #{value}
+        use Flezha.SDK.BoundedOperator, factory_id: "w", #{option}: #{value}
         def channels(c), do: c
         """)
 
@@ -180,10 +180,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "an operative macro refuses an unknown option and a missing factory_id" do
+  test "an operator macro refuses an unknown option and a missing factory_id" do
     unknown =
       refused("""
-      use Flezha.SDK.StreamOperative, factory_id: "x", persistance_enabled: false
+      use Flezha.SDK.UnboundedOperator, factory_id: "x", persistance_enabled: false
       def channels(_c), do: :ok
       """)
 
@@ -191,7 +191,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     missing =
       refused("""
-      use Flezha.SDK.StreamOperative, description: "no id"
+      use Flezha.SDK.UnboundedOperator, description: "no id"
       def channels(_c), do: :ok
       """)
 
@@ -202,7 +202,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByImport do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "merged_by_import"
+    use Flezha.SDK.UnboundedOperator, factory_id: "merged_by_import"
 
     @impl true
     def channels(c) do
@@ -221,7 +221,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByPrefix do
     @moduledoc false
-    @behaviour Flezha.SDK.StreamOperative
+    @behaviour Flezha.SDK.UnboundedOperator
 
     @impl true
     def factory_id, do: "merged_by_prefix"
@@ -347,7 +347,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Upcase do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "upcase", sink: "out"
+    use Flezha.SDK.UnboundedOperator, factory_id: "upcase", sink: "out"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -365,9 +365,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  defmodule UpcaseTwinOperative do
+  defmodule UpcaseTwinOperator do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "upcase_twin"
+    use Flezha.SDK.UnboundedOperator, factory_id: "upcase_twin"
 
     @impl true
     def channels(c), do: c |> input("input") |> into(UpcaseTwin) |> sink("out")
@@ -375,7 +375,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
+    use Flezha.SDK.BoundedOperator, factory_id: "place", sink: "placed", input: "order"
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -385,7 +385,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Chat do
     @moduledoc false
-    use Flezha.SDK.WorkflowOperative, factory_id: "chat", sink: "replies", loop_mode: :per_input
+    use Flezha.SDK.BoundedOperator, factory_id: "chat", sink: "replies", loop_mode: :per_input
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -395,7 +395,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Counter do
     @moduledoc false
-    use Flezha.SDK.StreamOperative, factory_id: "counter", input: "ticks", max_cells: 10
+    use Flezha.SDK.UnboundedOperator, factory_id: "counter", input: "ticks", max_cells: 10
 
     state do
       field(:seen, :list, default: [])
@@ -404,29 +404,29 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     def run(input, state, ctx), do: {:ok, push_seen(state, ctx, input)}
   end
 
-  test "an operative module with a run body is a whole stream operative" do
+  test "an operator module with a run body is a whole unbounded operator" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
 
     assert {:ok, short} = Topology.build(Upcase)
-    assert {:ok, hand} = Topology.build(UpcaseTwinOperative)
-    assert entry_names(Upcase) == entry_names(UpcaseTwinOperative)
+    assert {:ok, hand} = Topology.build(UpcaseTwinOperator)
+    assert entry_names(Upcase) == entry_names(UpcaseTwinOperator)
     assert sink_names(short) == sink_names(hand)
     assert route_shape(short) == route_shape(hand)
   end
 
-  test "an operative module with a run body is a whole workflow operative" do
+  test "an operator module with a run body is a whole bounded operator" do
     assert Place.factory_id() == "place"
     assert function_exported?(Place, :channels, 1)
 
-    assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Place)
+    assert {:ok, spec} = Flezha.SDK.Bounded.Spec.build(Place)
     assert spec.knobs.loop_mode == :once
     assert entry_names(Place) == ["order"]
   end
 
-  test "a short-form workflow declares its loop mode" do
+  test "a short-form bounded declares its loop mode" do
     assert Chat.loop_mode() == :per_input
-    assert {:ok, spec} = Flezha.SDK.Workflow.Spec.build(Chat)
+    assert {:ok, spec} = Flezha.SDK.Bounded.Spec.build(Chat)
     assert spec.knobs.loop_mode == :per_input
     assert entry_names(Chat) == ["input"]
   end
@@ -458,8 +458,8 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert %Flezha.SDK{classes: [{Upcase, stream}]} = Flezha.SDK.register_factory(runner, Upcase)
     assert stream.factory_id == "upcase"
 
-    assert %Flezha.SDK{classes: [{Place, workflow}]} = Flezha.SDK.register_factory(runner, Place)
-    assert workflow.factory_id == "place"
+    assert %Flezha.SDK{classes: [{Place, bounded}]} = Flezha.SDK.register_factory(runner, Place)
+    assert bounded.factory_id == "place"
   end
 
   test "register_factory and unregister_factory take a hand-written module of either kind" do
@@ -467,24 +467,24 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     declared =
       runner
-      |> Flezha.SDK.register_factory(UpcaseTwinOperative)
-      |> Flezha.SDK.register_factory(TunedWorkflow)
+      |> Flezha.SDK.register_factory(UpcaseTwinOperator)
+      |> Flezha.SDK.register_factory(TunedBounded)
 
     assert Enum.map(declared.classes, fn {_m, c} -> c.factory_id end) ==
-             ["upcase_twin", "tuned_workflow"]
+             ["upcase_twin", "tuned_bounded"]
 
-    left = Flezha.SDK.unregister_factory(declared, TunedWorkflow)
+    left = Flezha.SDK.unregister_factory(declared, TunedBounded)
     assert Enum.map(left.classes, fn {_m, c} -> c.factory_id end) == ["upcase_twin"]
 
-    assert {:error, {:not_defined, "tuned_workflow"}} =
-             Flezha.SDK.unregister_factory(left, TunedWorkflow)
+    assert {:error, {:not_defined, "tuned_bounded"}} =
+             Flezha.SDK.unregister_factory(left, TunedBounded)
   end
 
   # The kind is the behaviour, not the body's name: both kinds write `channels/1`.
-  defmodule HandWrittenWorkflow do
+  defmodule HandWrittenBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "hand_written_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "hand_written_bounded"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
@@ -498,22 +498,22 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "the kind is read from the behaviour a module declares" do
     runner = Flezha.SDK.create_runner("kind_ns")
 
-    assert %Flezha.SDK{classes: [{HandWrittenWorkflow, %Flezha.SDK.Workflow.Spec{}}]} =
-             Flezha.SDK.register_factory(runner, HandWrittenWorkflow)
+    assert %Flezha.SDK{classes: [{HandWrittenBounded, %Flezha.SDK.Bounded.Spec{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenBounded)
 
-    assert %Flezha.SDK{classes: [{HandWrittenOperative, %Topology{}}]} =
-             Flezha.SDK.register_factory(runner, HandWrittenOperative)
+    assert %Flezha.SDK{classes: [{HandWrittenOperator, %Topology{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenOperator)
   end
 
-  test "an operative of both kinds, or of neither, is refused at registration" do
+  test "an operator of both kinds, or of neither, is refused at registration" do
     # Compiled here, so the compiler's own note on two behaviours sharing a
     # callback stays with the shape this test refuses.
     {[{both_kinds, _bytecode}], _warnings} =
       with_io(:stderr, fn ->
         Code.compile_string("""
         defmodule Flezha.SDK.AuthoringMacrosTest.BothKinds do
-          @behaviour Flezha.SDK.StreamOperative
-          @behaviour Flezha.SDK.WorkflowOperative
+          @behaviour Flezha.SDK.UnboundedOperator
+          @behaviour Flezha.SDK.BoundedOperator
           def factory_id, do: "both_kinds"
           def channels(c), do: c
         end
@@ -522,10 +522,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     runner = Flezha.SDK.create_runner("kind_refusals_ns")
 
-    assert {:error, {:AmbiguousOperativeKind, ^both_kinds}} =
+    assert {:error, {:AmbiguousOperatorKind, ^both_kinds}} =
              Flezha.SDK.register_factory(runner, both_kinds)
 
-    assert {:error, {:UnknownOperativeKind, NeitherKind}} =
+    assert {:error, {:UnknownOperatorKind, NeitherKind}} =
              Flezha.SDK.register_factory(runner, NeitherKind)
   end
 
@@ -539,7 +539,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a run body beside a topology body does not compile" do
-    for macro <- ["StreamOperative", "WorkflowOperative"] do
+    for macro <- ["UnboundedOperator", "BoundedOperator"] do
       error =
         refused("""
         use Flezha.SDK.#{macro}, factory_id: "x", sink: "out"
@@ -552,13 +552,13 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "an operative with neither body does not compile, naming both" do
-    error = refused(~s|use Flezha.SDK.StreamOperative, factory_id: "x"|)
+  test "an operator with neither body does not compile, naming both" do
+    error = refused(~s|use Flezha.SDK.UnboundedOperator, factory_id: "x"|)
     assert error.description =~ "run/3" and error.description =~ "channels/1"
   end
 
-  test "an operative option on a tasklet does not compile, naming the operative macro" do
-    for option <- [~s|sink: "out"|, ~s|input: "ticks"|, "kind: :stream"] do
+  test "an operator option on a tasklet does not compile, naming the operator macro" do
+    for option <- [~s|sink: "out"|, ~s|input: "ticks"|, "kind: :unbounded"] do
       error =
         refused("""
         use Flezha.SDK.Tasklet, name: "p", #{option}
@@ -568,14 +568,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       [key | _] = String.split(option, ":")
 
       assert error.description =~ "`#{key}:`" and
-               error.description =~ "Flezha.SDK.StreamOperative"
+               error.description =~ "Flezha.SDK.UnboundedOperator"
     end
   end
 
-  test "a short form takes no class setting but a workflow's loop mode, and a full form no short-form option" do
+  test "a short form takes no class setting but a bounded operator's loop mode, and a full form no short-form option" do
     setting =
       refused("""
-      use Flezha.SDK.WorkflowOperative, factory_id: "x", loop_mode: :chained, max_duration_ms: 5_000
+      use Flezha.SDK.BoundedOperator, factory_id: "x", loop_mode: :chained, max_duration_ms: 5_000
       def run(_i, s, _c), do: {:ok, s}
       """)
 
@@ -584,7 +584,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     for option <- [~s|sink: "out"|, "max_cells: 10"] do
       stray =
         refused("""
-        use Flezha.SDK.StreamOperative, factory_id: "x", #{option}
+        use Flezha.SDK.UnboundedOperator, factory_id: "x", #{option}
         def channels(c), do: c
         """)
 

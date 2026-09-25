@@ -16,7 +16,7 @@
 #   scripts/ci.sh --core <dir|url> [--version 0.1.0]
 #
 # What this cannot see is the fifteen-capability vocabulary the controller
-# owns: persistence, effectively-once, correction, partitioning, workflows,
+# owns: persistence, effectively-once, correction, partitioning, bounded operators,
 # liveness, restarts. Those are end-to-end scenarios and they run in the core's
 # own tree, against the commit it pins this repository at, as does the in-node
 # `:native` transport.
@@ -63,6 +63,6 @@ step "smoke"
 # disconnect ends the runner non-zero on purpose, so the orchestrator that owns
 # it restarts it.
 exec .core/flz-fake-controller \
-  --factory do_nothing --operative echo-1 --channel input \
+  --factory do_nothing --operator echo-1 --channel input \
   --input alpha --input beta --timeout-ms 60000 \
   -- sh -c 'cd test_app && FLEZHA_TRANSPORT=uds exec mix run --no-halt --no-deps-check -- smoke'

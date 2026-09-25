@@ -14,8 +14,8 @@ defmodule Flezha.SDK.Cell.State do
   """
 
   defstruct [
-    :operative,
-    :operative_id,
+    :operator,
+    :operator_id,
     :node_ref,
     :node_name,
     :input_channel,
@@ -32,7 +32,7 @@ defmodule Flezha.SDK.Cell.State do
     ctx_opts: [],
     # One field, so the struct stays a flat map: the pending set, the declared
     # clock, the BEAM timer refs armed for processing time, the event-time
-    # high-water, and for a workflow stage's Cell the gate its due firings pass
+    # high-water, and for a bounded stage's Cell the gate its due firings pass
     # through (`:settled`, or `:held` when the removal waits for the stage's
     # commit) with the removals held.
     timers: %{
@@ -44,9 +44,9 @@ defmodule Flezha.SDK.Cell.State do
       held: []
     },
     # One field again, for the same reason: whether the Cell writes effect
-    # records (the effectively-once tier, or a durable workflow), its
+    # records (the effectively-once tier, or a durable bounded operator), its
     # checkpoint policy, the node's sink routes the Cell captures its outputs
-    # through, whether it has an inter-tasklet edge, whether it is a workflow
+    # through, whether it has an inter-tasklet edge, whether it is a bounded operator
     # stage's Cell and the records it wrote since its stage's last barrier, the
     # open interval, the consumed floor, the armed deadline, the records owed
     # to an edge report, the declared correction policy and the replay slice
@@ -81,14 +81,14 @@ defmodule Flezha.SDK.Cell.State do
     processing?: false,
     # One field, so the struct stays flat: whether a park holds the queue, the
     # ack-correlation id of the park that holds it and the next park's ordinal.
-    # `enabled?` is false for a workflow stage's Cell: an exhausted ladder
+    # `enabled?` is false for a bounded stage's Cell: an exhausted ladder
     # there fails the tasklet rather than parking the input to the DLQ.
     park: %{held?: false, id: nil, seq: 0, enabled?: true},
     waiters: :queue.new()
   ]
 
-  @doc "`<operative>/<node>/<key>` — the Cell's name in logs and park ids."
-  def label(%__MODULE__{operative_id: oid, node_name: name, cell_key: key}) do
+  @doc "`<operator>/<node>/<key>` — the Cell's name in logs and park ids."
+  def label(%__MODULE__{operator_id: oid, node_name: name, cell_key: key}) do
     "#{oid}/#{name || "node"}/#{key || "single"}"
   end
 end

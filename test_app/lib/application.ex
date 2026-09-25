@@ -42,7 +42,7 @@ defmodule ElixirRunner.Application do
     # The declared set is settled before the watcher is armed: a refusal-fixture
     # row that the check refuses exits non-zero here, and an already-closed
     # standard input would otherwise halt the VM with 0 first.
-    operatives = declared_set()
+    operators = declared_set()
     watch_stdin()
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
 
@@ -51,7 +51,7 @@ defmodule ElixirRunner.Application do
     children = [
       Flezha.SDK.child_spec(
         namespace: namespace,
-        operatives: operatives,
+        operators: operators,
         transport: transport
       )
     ]
@@ -67,7 +67,7 @@ defmodule ElixirRunner.Application do
         BenchFactories.all() ++
           ElixirRunner.Factories.all() ++
           ElixirRunner.Factories.shorthand() ++
-          ElixirRunner.Workflows.all() ++ ElixirRunner.WorkflowsLoop.all()
+          ElixirRunner.Bounded.all() ++ ElixirRunner.BoundedLoop.all()
 
       topology ->
         ElixirRunner.Conformance.boot_classes(topology)

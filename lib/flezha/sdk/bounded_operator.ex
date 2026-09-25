@@ -1,14 +1,14 @@
-defmodule Flezha.SDK.WorkflowOperative do
+defmodule Flezha.SDK.BoundedOperator do
   @moduledoc """
-  A workflow operative, declared with `use` (see `__using__/1`), which defines
+  A bounded operator, declared with `use` (see `__using__/1`), which defines
   this behaviour's zero-arity callbacks from its options and imports the channel
-  builder. The author writes `channels/1`, as a stream operative does: a DAG
+  builder. The author writes `channels/1`, as an unbounded operator does: a DAG
   of Tasklets, Channels and Cells authored on the same builder token. A
   tasklet ends its instance with `Flezha.SDK.Ctx.complete/2`.
 
   Every knob below is optional and reads its default through this module's
   reader functions, so a class states only what it departs from. The values are
-  frozen at registration: `Flezha.SDK.Workflow.Spec.build/1` reads them once,
+  frozen at registration: `Flezha.SDK.Bounded.Spec.build/1` reads them once,
   refuses the combinations that cannot run, and hands the driver a settled
   fact.
   """
@@ -34,9 +34,9 @@ defmodule Flezha.SDK.WorkflowOperative do
   ]
 
   @doc """
-  Write a workflow operative as a declaration rather than as one-line callbacks.
+  Write a bounded operator as a declaration rather than as one-line callbacks.
 
-      use Flezha.SDK.WorkflowOperative, factory_id: "checkout", loop_mode: :chained
+      use Flezha.SDK.BoundedOperator, factory_id: "checkout", loop_mode: :chained
 
       @impl true
       def channels(c) do
@@ -49,16 +49,16 @@ defmodule Flezha.SDK.WorkflowOperative do
   author writes. An unknown option is a `CompileError` naming it, and so is a
   `loop_mode` or `rollback_mode` outside the values their types name. A retry
   ladder is not a class setting: it is the edge's `retry_max/2` and
-  `retry_backoff_ms/2`, as on a stream.
+  `retry_backoff_ms/2`, as on an unbounded operator.
 
   `Flezha.SDK.Channels` is imported.
 
   A module that writes its one tasklet's `run/3` instead of `channels/1`
-  is the §5 short form, a `once` workflow that runs its tasklet on its first
+  is the §5 short form, a `once` bounded operator that runs its tasklet on its first
   message unless it writes `loop_mode:`, the one class setting a short form
-  takes; see `Flezha.SDK.StreamOperative.__using__/1`:
+  takes; see `Flezha.SDK.UnboundedOperator.__using__/1`:
 
-      use Flezha.SDK.WorkflowOperative, factory_id: "place", sink: "placed", input: "order"
+      use Flezha.SDK.BoundedOperator, factory_id: "place", sink: "placed", input: "order"
 
       def run(order, state, ctx) do
         emit(ctx, order)
@@ -66,7 +66,7 @@ defmodule Flezha.SDK.WorkflowOperative do
       end
   """
   defmacro __using__(opts),
-    do: Tasklet.__operative_using__(opts, @use_options, __MODULE__, @modes)
+    do: Tasklet.__operator_using__(opts, @use_options, __MODULE__, @modes)
 
   @type loop_mode :: :once | :per_input | :chained
   @type rollback_mode :: :all_or_nothing | :keep_progress
@@ -99,7 +99,7 @@ defmodule Flezha.SDK.WorkflowOperative do
   @doc "Loop shape of a structured chain."
   @callback loop_mode() :: loop_mode()
 
-  @doc "Saga rollback scope when the operative terminates abnormally after partial progress."
+  @doc "Saga rollback scope when the operator terminates abnormally after partial progress."
   @callback rollback_mode() :: rollback_mode()
 
   @doc "Class-level persistence toggle; `false` keeps the instance in memory only."

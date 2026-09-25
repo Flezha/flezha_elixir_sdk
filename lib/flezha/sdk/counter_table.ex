@@ -36,7 +36,7 @@ defmodule Flezha.SDK.CounterTable do
   and the surface that reads it in the same row.
 
   `defaults:` carries the fields every row of a table shares — the scope of an
-  operative table, the kind of a table that is all counts — so a row states only
+  operator table, the kind of a table that is all counts — so a row states only
   what is true of IT. A row that names a field wins over the default.
 
   `blocks:` reserves fixed-size regions after the counters for slots addressed

@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Commands do
   @moduledoc """
   The persistence-family commands the RunnerServer answers, and the shutdown
   notifications it ships — its zero-mutation half: every function reads the
-  server's state (the operatives, the control handle, the credit window) and
+  server's state (the operators, the control handle, the credit window) and
   answers through the reply seam it is handed; none writes the state. A
   command that needs a Cell's answer runs off the server's loop, so a fold
   or a serialisation never stalls the control channel; the credit commands
@@ -18,15 +18,15 @@ defmodule Flezha.SDK.Commands do
 
   require Logger
 
-  alias Flezha.SDK.{Call, Codec, Credit, Cell, Hold, Knob, Operative}
+  alias Flezha.SDK.{Call, Codec, Credit, Cell, Hold, Knob, Operator}
   alias Flezha.SDK.Wire
   # A serialise's wait for a mid-dispatch Cell, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
   @change_seq_key Wire.change_seq_key()
   @whole %{tasklet: nil, cell_key: nil}
   # One refusal, and each surface adds the prefix its siblings carry.
-  @router_silent "cell_busy: the operative did not answer"
-  @marker_silent "cell_busy: the operative did not take the restore"
+  @router_silent "cell_busy: the operator did not answer"
+  @marker_silent "cell_busy: the operator did not take the restore"
 
   @typedoc "How a command answers: status, errors, raw_data, the reply frame's metadata."
   @type respond :: (String.t(), [String.t()], binary(), map() -> any())
@@ -45,7 +45,7 @@ defmodule Flezha.SDK.Commands do
 
         # A router that did not answer is not a Cell that is not there: the
         # ack below would tell the Controller its state was covered.
-        {:error, :operative_busy} ->
+        {:error, :operator_busy} ->
           respond.("error", ["restore_init_state: " <> @router_silent], response(cmd, 0), %{})
 
         # No Cell to rebuild — a tasklet the class dropped, a key its cap
@@ -81,7 +81,7 @@ defmodule Flezha.SDK.Commands do
 
   def dispatch(:cell_state, cmd, respond, s) do
     off_loop(respond, fn ->
-      case state_json(s, cmd.operative_id, selector(cmd)) do
+      case state_json(s, cmd.operator_id, selector(cmd)) do
         {:ok, json, seq} -> respond.("success", [], json, seq_metadata(seq))
         {:error, reason} -> respond.("error", [reason], <<>>, %{})
       end
@@ -90,7 +90,7 @@ defmodule Flezha.SDK.Commands do
 
   def dispatch(:migration_serialization, cmd, respond, s) do
     off_loop(respond, fn ->
-      case state_json(s, cmd.operative_id, @whole) do
+      case state_json(s, cmd.operator_id, @whole) do
         {:ok, json, _seq} -> respond.("success", [], json, %{})
         {:error, reason} -> respond.("error", [reason], <<>>, %{})
       end
@@ -98,10 +98,10 @@ defmodule Flezha.SDK.Commands do
   end
 
   def dispatch(:cell_apply_state, cmd, respond, s),
-    do: apply_off_loop(s, cmd.operative_id, cmd.state_binary, respond)
+    do: apply_off_loop(s, cmd.operator_id, cmd.state_binary, respond)
 
   def dispatch(:migration_deserialization, cmd, respond, s),
-    do: apply_off_loop(s, cmd.operative_id, cmd.serialized_state, respond)
+    do: apply_off_loop(s, cmd.operator_id, cmd.serialized_state, respond)
 
   def dispatch(:credit_window_init, cmd, respond, s) do
     Credit.arm(s.credit, cmd.stream_id, cmd.window_bytes)
@@ -124,18 +124,18 @@ defmodule Flezha.SDK.Commands do
   end
 
   @doc """
-  The Decision-10 JSON of `operative_id`'s Cells narrowed by `selector`
+  The Decision-10 JSON of `operator_id`'s Cells narrowed by `selector`
   (`%{tasklet: name | nil, cell_key: key | nil}`), and the seq when
   exactly one Cell was read. A walk omits a Cell that does not answer; a
   read that names one Cell answers its failure.
   """
   @spec state_json(map(), String.t(), map()) ::
           {:ok, binary(), non_neg_integer() | nil} | {:error, String.t()}
-  def state_json(s, operative_id, selector) do
-    with {:ok, op} <- operative(s, operative_id),
+  def state_json(s, operator_id, selector) do
+    with {:ok, op} <- operator(s, operator_id),
          :ok <- check_selector(selector),
          {:ok, all} <- nodes(op),
-         {:ok, nodes} <- select_nodes(all, operative_id, selector.tasklet),
+         {:ok, nodes} <- select_nodes(all, operator_id, selector.tasklet),
          {:ok, top, seqs} <- collect(op, nodes, selector.cell_key),
          {:ok, json} <- to_json(top) do
       {:ok, json, single(seqs)}
@@ -143,35 +143,35 @@ defmodule Flezha.SDK.Commands do
   end
 
   @doc """
-  Apply a Decision-10 JSON object — `AddOperative.init_values`, a migration's
+  Apply a Decision-10 JSON object — `AddOperator.init_values`, a migration's
   state — to `op`'s Cells through each Tasklet's `state_from_json/1`: a
   Single node takes its value, a Static node its declared keys' values; a key
   that names no Tasklet or no declared Cell is logged and ignored.
   """
   @spec apply_json(pid(), String.t(), binary() | nil) :: :ok | {:error, String.t()}
-  def apply_json(_op, _operative_id, json) when json in [nil, ""], do: :ok
+  def apply_json(_op, _operator_id, json) when json in [nil, ""], do: :ok
 
-  def apply_json(op, operative_id, json) do
+  def apply_json(op, operator_id, json) do
     case Jason.decode(json) do
-      {:ok, %{} = top} -> with {:ok, nodes} <- nodes(op), do: apply_top(nodes, operative_id, top)
+      {:ok, %{} = top} -> with {:ok, nodes} <- nodes(op), do: apply_top(nodes, operator_id, top)
       {:ok, _other} -> {:error, "init_values: not a JSON object"}
       {:error, e} -> {:error, "init_values: #{Exception.message(e)}"}
     end
   end
 
   @doc """
-  Ship one `RunnerShutdownNotification` per live operative and wait at most
+  Ship one `RunnerShutdownNotification` per live operator and wait at most
   `ack_ms` for the acks — in the caller's process, the RunnerServer's, whose
-  mailbox the control frames reach. Operatives serialise in parallel under the
+  mailbox the control frames reach. Operators serialise in parallel under the
   serialise wait; a timed-out ack is logged and the exit proceeds.
   """
   @spec shutdown(map(), non_neg_integer()) :: :ok
   def shutdown(%{control_handle: nil}, _ack_ms), do: :ok
-  def shutdown(%{operatives: operatives}, _ack_ms) when map_size(operatives) == 0, do: :ok
+  def shutdown(%{operators: operators}, _ack_ms) when map_size(operators) == 0, do: :ok
 
-  def shutdown(%{control: control, control_handle: handle, operatives: operatives} = s, ack_ms) do
+  def shutdown(%{control: control, control_handle: handle, operators: operators} = s, ack_ms) do
     {pending, _hold} =
-      operatives
+      operators
       |> Map.keys()
       |> Enum.map(fn oid -> Task.async(fn -> {oid, state_json(s, oid, @whole)} end) end)
       |> Task.yield_many(Knob.get(:sdk_serialize_yield_ms))
@@ -203,25 +203,25 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  # The frame has landed, whether or not a Cell took it: the operative counts
-  # it toward a workflow's restore gate, so a frame no Cell takes never holds
+  # The frame has landed, whether or not a Cell took it: the operator counts
+  # it toward a bounded operator's restore gate, so a frame no Cell takes never holds
   # the gate, and takes the saga markers the controller persisted for the
   # Cell — `intent` that its tasklet completed forward and may need undo,
   # `done` that its compensation already ran. A call, not a cast: the driver
   # decides whether to resume an unwind when the last frame lands, and a
   # marker racing that decision would let a crash mid-rollback resume forward
-  # instead. An operative that will not take it fails the restore, so the
+  # instead. An operator that will not take it fails the restore, so the
   # Controller retries rather than resuming from a record that never landed.
   defp land(s, cmd, respond, {status, errors, raw}) do
     intent = Map.get(cmd, :has_compensation_intent, false)
     done = Map.get(cmd, :has_compensation_done, false)
 
     landed =
-      with {:ok, {operative_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
-           {:ok, op} <- operative(s, operative_id) do
+      with {:ok, {operator_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
+           {:ok, op} <- operator(s, operator_id) do
         Call.control(op, {:restore_landed, cmd.cell_id, intent, done}, {:error, @marker_silent})
       else
-        # No operative to count it: nothing waits on this frame.
+        # No operator to count it: nothing waits on this frame.
         _unaddressable -> :ok
       end
 
@@ -238,27 +238,27 @@ defmodule Flezha.SDK.Commands do
     do: Codec.encode_restore_response(cmd.cell_id, terminal, false)
 
   defp cell(s, cell_id, opts) do
-    with {:ok, {operative_id, tasklet, key}} <- Wire.decode_cell_id(cell_id),
-         {:ok, op} <- operative(s, operative_id) do
-      Operative.lookup(op, tasklet, blank_to_nil(key), opts)
+    with {:ok, {operator_id, tasklet, key}} <- Wire.decode_cell_id(cell_id),
+         {:ok, op} <- operator(s, operator_id) do
+      Operator.lookup(op, tasklet, blank_to_nil(key), opts)
     end
   end
 
   # --- the live read ---
 
-  defp operative(%{operatives: operatives}, operative_id) do
-    case Map.get(operatives, operative_id) do
+  defp operator(%{operators: operators}, operator_id) do
+    case Map.get(operators, operator_id) do
       {pid, _factory_id} -> {:ok, pid}
-      nil -> {:error, "StreamOperative instance with id #{operative_id} not found"}
+      nil -> {:error, "UnboundedOperator instance with id #{operator_id} not found"}
     end
   end
 
   # The router's nodes, or its refusal in the words the Controller matches as a
   # prefix. `[]` would be a lie: a walk that read it would report a live
-  # operative as empty.
+  # operator as empty.
   defp nodes(op) do
-    case Operative.cells(op) do
-      {:error, :operative_busy} -> {:error, @router_silent}
+    case Operator.cells(op) do
+      {:error, :operator_busy} -> {:error, @router_silent}
       nodes -> {:ok, nodes}
     end
   end
@@ -274,13 +274,12 @@ defmodule Flezha.SDK.Commands do
 
   defp check_selector(_selector), do: :ok
 
-  defp select_nodes(nodes, _operative_id, nil), do: {:ok, nodes}
+  defp select_nodes(nodes, _operator_id, nil), do: {:ok, nodes}
 
-  defp select_nodes(nodes, operative_id, tasklet) do
+  defp select_nodes(nodes, operator_id, tasklet) do
     case Enum.filter(nodes, fn {name, _mode, _cells} -> name == tasklet end) do
       [] ->
-        {:error,
-         "tasklet_not_found: operative `#{operative_id}` has no Tasklet named `#{tasklet}`"}
+        {:error, "tasklet_not_found: operator `#{operator_id}` has no Tasklet named `#{tasklet}`"}
 
       some ->
         {:ok, some}
@@ -355,9 +354,9 @@ defmodule Flezha.SDK.Commands do
   end
 
   # Evicted and never-existed serve the same absence; the diagnosis differs,
-  # and the Operative's trace is what tells them apart.
+  # and the Operator's trace is what tells them apart.
   defp missing(op, name, key) do
-    case Operative.lookup(op, name, key) do
+    case Operator.lookup(op, name, key) do
       {:error, :cell_evicted} ->
         "cell_evicted: Cell `#{key}` of tasklet `#{name}` was idle-evicted; eviction is " <>
           "destructive, so there is no durable value to serve"
@@ -382,10 +381,10 @@ defmodule Flezha.SDK.Commands do
 
   # --- the JSON apply ---
 
-  defp apply_off_loop(s, operative_id, json, respond) do
+  defp apply_off_loop(s, operator_id, json, respond) do
     off_loop(respond, fn ->
-      with {:ok, op} <- operative(s, operative_id),
-           :ok <- apply_json(op, operative_id, json) do
+      with {:ok, op} <- operator(s, operator_id),
+           :ok <- apply_json(op, operator_id, json) do
         respond.("success", [], <<>>, %{})
       else
         {:error, reason} -> respond.("error", [reason], <<>>, %{})
@@ -393,10 +392,10 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  defp apply_top(nodes, operative_id, top) do
+  defp apply_top(nodes, operator_id, top) do
     top
     |> Enum.flat_map(fn {name, value} ->
-      apply_node(List.keyfind(nodes, name, 0), operative_id, name, value)
+      apply_node(List.keyfind(nodes, name, 0), operator_id, name, value)
     end)
     |> case do
       [] -> :ok
@@ -404,18 +403,16 @@ defmodule Flezha.SDK.Commands do
     end
   end
 
-  defp apply_node(nil, operative_id, name, _value) do
-    Logger.info(
-      "[Flezha.SDK] init_values for #{operative_id} names no Tasklet `#{name}`; ignored"
-    )
+  defp apply_node(nil, operator_id, name, _value) do
+    Logger.info("[Flezha.SDK] init_values for #{operator_id} names no Tasklet `#{name}`; ignored")
 
     []
   end
 
-  defp apply_node({_name, :single, [{nil, pid} | _]}, _operative_id, name, value),
+  defp apply_node({_name, :single, [{nil, pid} | _]}, _operator_id, name, value),
     do: apply_one(pid, name, "", value)
 
-  defp apply_node({_name, :static, cells}, operative_id, name, %{} = by_key) do
+  defp apply_node({_name, :static, cells}, operator_id, name, %{} = by_key) do
     Enum.flat_map(by_key, fn {key, value} ->
       case List.keyfind(cells, key, 0) do
         {^key, pid} ->
@@ -423,7 +420,7 @@ defmodule Flezha.SDK.Commands do
 
         nil ->
           Logger.info(
-            "[Flezha.SDK] init_values for #{operative_id}: `#{name}` declares no Cell `#{key}`; ignored"
+            "[Flezha.SDK] init_values for #{operator_id}: `#{name}` declares no Cell `#{key}`; ignored"
           )
 
           []
@@ -431,9 +428,9 @@ defmodule Flezha.SDK.Commands do
     end)
   end
 
-  defp apply_node({_name, mode, _cells}, operative_id, name, _value) do
+  defp apply_node({_name, mode, _cells}, operator_id, name, _value) do
     Logger.info(
-      "[Flezha.SDK] init_values for #{operative_id}: `#{name}` (#{mode}) takes no seeded state; ignored"
+      "[Flezha.SDK] init_values for #{operator_id}: `#{name}` (#{mode}) takes no seeded state; ignored"
     )
 
     []
@@ -448,22 +445,22 @@ defmodule Flezha.SDK.Commands do
 
   # --- shutdown ---
 
-  # The operative's final state is what makes a reconnect-resume loss-free, so a
+  # The operator's final state is what makes a reconnect-resume loss-free, so a
   # refused write is held for the next bound stream, never printed and dropped.
   # Only what reached the wire is waited on: an ack cannot answer a held frame.
-  defp ship(hold, {:ok, {operative_id, {:ok, json, _seq}}}) do
-    ref = "shutdown-#{operative_id}-#{System.unique_integer([:positive])}"
-    command = Codec.shutdown_notification_command(operative_id, json)
+  defp ship(hold, {:ok, {operator_id, {:ok, json, _seq}}}) do
+    ref = "shutdown-#{operator_id}-#{System.unique_integer([:positive])}"
+    command = Codec.shutdown_notification_command(operator_id, json)
     frame = Codec.encode_request(ref, command)
 
     case Hold.write({"control_command", elem(command, 0)}, hold, {frame, %{}}) do
-      {:ok, hold} -> {[{ref, operative_id}], hold}
+      {:ok, hold} -> {[{ref, operator_id}], hold}
       {{:held, _reason}, hold} -> {[], hold}
     end
   end
 
-  defp ship(hold, {:ok, {operative_id, {:error, reason}}}) do
-    Logger.warning("[Flezha.SDK] shutdown could not serialize #{operative_id}: #{reason}")
+  defp ship(hold, {:ok, {operator_id, {:error, reason}}}) do
+    Logger.warning("[Flezha.SDK] shutdown could not serialize #{operator_id}: #{reason}")
     {[], hold}
   end
 

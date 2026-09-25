@@ -1,7 +1,7 @@
-# Twins of the rust_runner durable structured workflow fixtures
-# (test/apps/rust_runner/src/workflow.rs) under the same factory ids,
+# Twins of the rust_runner durable structured bounded fixtures
+# (test/apps/rust_runner/src/bounded.rs) under the same factory ids,
 # tasklet names, channel names and output bytes; the loop and bench family
-# is in workflows_loop.ex.
+# is in bounded_loop.ex.
 #
 # Elixir SDK notes, each the same for every fixture here:
 #
@@ -13,12 +13,12 @@
 #     fixtures that name an encoder do it to REWRITE the value, never to
 #     correct a default.
 
-defmodule ElixirRunner.Workflows.Gate do
+defmodule ElixirRunner.Bounded.Gate do
   @moduledoc false
 
-  @release_env "FLEZHA_WORKFLOW_E2E_RELEASE"
+  @release_env "FLEZHA_BOUNDED_E2E_RELEASE"
   @branch_fail_env "FLEZHA_BRANCH_FAIL"
-  @retry_fails_env "FLEZHA_WORKFLOW_RETRY_FAILS"
+  @retry_fails_env "FLEZHA_BOUNDED_RETRY_FAILS"
 
   @doc """
   Park this Cell until the release env is set. The harness kills the first
@@ -38,7 +38,7 @@ defmodule ElixirRunner.Workflows.Gate do
 
   @doc "Park at `point` when this runner was booted to hold there, until the release."
   def hold_at(point) do
-    if System.get_env("FLEZHA_WORKFLOW_E2E_HOLD") == point, do: block_until_released()
+    if System.get_env("FLEZHA_BOUNDED_E2E_HOLD") == point, do: block_until_released()
     :ok
   end
 
@@ -59,7 +59,7 @@ defmodule ElixirRunner.Workflows.Gate do
   end
 end
 
-defmodule ElixirRunner.Workflows.Seen do
+defmodule ElixirRunner.Bounded.Seen do
   @moduledoc false
 
   @doc """
@@ -73,7 +73,7 @@ defmodule ElixirRunner.Workflows.Seen do
     do: %{state | items: state.items |> List.insert_at(0, item) |> Enum.uniq() |> Enum.sort()}
 end
 
-defmodule ElixirRunner.Workflows.Step do
+defmodule ElixirRunner.Bounded.Step do
   @moduledoc false
 
   @doc """
@@ -106,8 +106,8 @@ defmodule ElixirRunner.Workflows.Step do
       alias Flezha.SDK.Ctx
 
       def name, do: unquote(name)
-      def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-      def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+      def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+      def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
       def run(input, state, ctx) do
         state = Ctx.apply(ctx, state, unquote(name))
@@ -134,11 +134,11 @@ defmodule ElixirRunner.Workflows.Step do
   end
 end
 
-defmodule ElixirRunner.Workflows do
+defmodule ElixirRunner.Bounded do
   @moduledoc false
-  import ElixirRunner.Workflows.Step
+  import ElixirRunner.Bounded.Step
 
-  alias ElixirRunner.Workflows.Gate
+  alias ElixirRunner.Bounded.Gate
   alias Flezha.SDK.Ctx
 
   # -- shared steps ---------------------------------------------------------
@@ -215,8 +215,8 @@ defmodule ElixirRunner.Workflows do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "tier_commit_a"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, "tier_commit_a")
@@ -231,8 +231,8 @@ defmodule ElixirRunner.Workflows do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "branch_c"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, "branch_c")
@@ -271,8 +271,8 @@ defmodule ElixirRunner.Workflows do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "diam_b2"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run(input, state, ctx) do
       Gate.block_until_released()
@@ -286,8 +286,8 @@ defmodule ElixirRunner.Workflows do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "diam_c"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, "diam_c")
@@ -308,7 +308,7 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  # Fails its first `FLEZHA_WORKFLOW_RETRY_FAILS` attempts, then emits the
+  # Fails its first `FLEZHA_BOUNDED_RETRY_FAILS` attempts, then emits the
   # attempt it succeeded on. A retry re-runs it in place, so a per-runner
   # counter is the whole ladder's view.
   defmodule RetryFlaky do
@@ -329,7 +329,7 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  # Echoes the first message, which a `:once` workflow's one pass runs on.
+  # Echoes the first message, which a `:once` bounded operator's one pass runs on.
   defmodule Echo do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
@@ -344,22 +344,22 @@ defmodule ElixirRunner.Workflows do
 
   # -- classes --------------------------------------------------------------
 
-  defmodule EchoWorkflow do
+  defmodule EchoBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "echo_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "echo_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.Echo)
+      |> into(ElixirRunner.Bounded.Echo)
       |> sink("out")
     end
   end
 
-  # `typed_once_workflow`: a `once` class whose entry channel `order` decodes
+  # `typed_once_bounded`: a `once` class whose entry channel `order` decodes
   # a JSON ticket; its one tasklet prints the text, emits it to its sink and
   # completes with it, so the pass runs on the payload it was spawned with.
   defmodule OncePlaced do
@@ -376,41 +376,41 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule TypedOnceWorkflow do
+  defmodule TypedOnceBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "typed_once_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "typed_once_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input_with("order", &Jason.decode/1)
-      |> into(ElixirRunner.Workflows.OncePlaced)
+      |> into(ElixirRunner.Bounded.OncePlaced)
       |> sink("placed")
     end
   end
 
-  defmodule CommitBlockWorkflow do
+  defmodule CommitBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "commit_block_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "commit_block_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.CommitA)
+      |> into(ElixirRunner.Bounded.CommitA)
       |> named("mid")
-      |> into(ElixirRunner.Workflows.BlockB)
+      |> into(ElixirRunner.Bounded.BlockB)
     end
   end
 
-  defmodule SyncDurableWorkflow do
+  defmodule SyncDurableBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "sync_durable_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "sync_durable_bounded"
     def sync_durability, do: true
 
     def channels(c) do
@@ -418,15 +418,15 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.CommitA)
+      |> into(ElixirRunner.Bounded.CommitA)
       |> named("mid")
-      |> into(ElixirRunner.Workflows.BlockB)
+      |> into(ElixirRunner.Bounded.BlockB)
     end
   end
 
-  defmodule OptOutCommitBlockWorkflow do
+  defmodule OptOutCommitBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "optout_commit_block"
     def persistence_enabled, do: false
 
@@ -435,45 +435,45 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.CommitA)
+      |> into(ElixirRunner.Bounded.CommitA)
       |> sink_with("mid", fn s -> "a-ran:" <> s end)
-      |> into(ElixirRunner.Workflows.BlockB)
+      |> into(ElixirRunner.Bounded.BlockB)
     end
   end
 
   # The hybrid mid-chain shape the conformance fixture's `commit_block_chain`
   # twin is transcribed from: A's channel reaches a plugin sink and feeds B.
-  defmodule TierCommitBlockWorkflow do
+  defmodule TierCommitBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "tier_commit_block_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "tier_commit_block_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.TierCommitA)
+      |> into(ElixirRunner.Bounded.TierCommitA)
       |> sink_with("mid", & &1)
-      |> into(ElixirRunner.Workflows.BlockB)
+      |> into(ElixirRunner.Bounded.BlockB)
     end
   end
 
-  defmodule SagaBlockWorkflow do
+  defmodule SagaBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "saga_block_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "saga_block_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.SagaA)
+      |> into(ElixirRunner.Bounded.SagaA)
       |> named("s1")
-      |> into(ElixirRunner.Workflows.SagaB)
+      |> into(ElixirRunner.Bounded.SagaB)
       |> named("s2")
-      |> into(ElixirRunner.Workflows.SagaC)
+      |> into(ElixirRunner.Bounded.SagaC)
     end
   end
 
@@ -486,46 +486,46 @@ defmodule ElixirRunner.Workflows do
 
     c
     |> input("in")
-    |> into(ElixirRunner.Workflows.KeySplit)
+    |> into(ElixirRunner.Bounded.KeySplit)
     |> named("keys")
     |> key_by(& &1)
-    |> into(ElixirRunner.Workflows.KeyedCommit)
+    |> into(ElixirRunner.Bounded.KeyedCommit)
     |> named("committed")
   end
 
-  defmodule KeyedBlockWorkflow do
+  defmodule KeyedBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "keyed_block_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "keyed_block_bounded"
 
     def channels(c),
       do:
         c
-        |> ElixirRunner.Workflows.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Workflows.BlockB)
+        |> ElixirRunner.Bounded.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Bounded.BlockB)
   end
 
-  defmodule KeyedSagaWorkflow do
+  defmodule KeyedSagaBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "keyed_saga_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "keyed_saga_bounded"
 
     def channels(c),
       do:
         c
-        |> ElixirRunner.Workflows.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Workflows.KeyedFail)
+        |> ElixirRunner.Bounded.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Bounded.KeyedFail)
   end
 
-  # A workflow output's identity: `commit_a` commits durable state AND emits
+  # A bounded output's identity: `commit_a` commits durable state AND emits
   # once, keyed `k` with one metadata pair, on a keyed hybrid channel; the
   # output rides its Cell's record and reaches the sink once the stage commits.
   defmodule OutboxA do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "commit_a"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run(input, state, ctx) do
       state = Ctx.apply(ctx, state, "commit_a")
@@ -534,36 +534,36 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule OutboxBlockWorkflow do
+  defmodule OutboxBlockBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "outbox_block_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "outbox_block_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.OutboxA)
+      |> into(ElixirRunner.Bounded.OutboxA)
       |> keyed()
       |> sink_with("mid", fn s -> "a-out:" <> s end)
-      |> into(ElixirRunner.Workflows.BlockB)
+      |> into(ElixirRunner.Bounded.BlockB)
     end
   end
 
-  defmodule UndoOutboxWorkflow do
+  defmodule UndoOutboxBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "undo_outbox_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "undo_outbox_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.UndoOutboxA)
+      |> into(ElixirRunner.Bounded.UndoOutboxA)
       |> sink_with("mid", fn s -> "out:" <> s end)
-      |> into(ElixirRunner.Workflows.UndoC)
+      |> into(ElixirRunner.Bounded.UndoC)
     end
   end
 
@@ -584,28 +584,28 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule FailedStageWorkflow do
+  defmodule FailedStageBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "failed_stage_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "failed_stage_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.KeySplit)
-      |> into(ElixirRunner.Workflows.FailedStage)
+      |> into(ElixirRunner.Bounded.KeySplit)
+      |> into(ElixirRunner.Bounded.FailedStage)
       |> sink_with("mid", fn s -> "lost:" <> s end)
     end
   end
 
   # The tasklet TREE. One channel, two consumers, is THE fan-out: both
   # branches read exactly what BranchA released on it.
-  defmodule BranchWorkflow do
+  defmodule BranchBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "branch_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "branch_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
@@ -613,30 +613,30 @@ defmodule ElixirRunner.Workflows do
       mid =
         c
         |> input("in")
-        |> into(ElixirRunner.Workflows.BranchA)
+        |> into(ElixirRunner.Bounded.BranchA)
         |> sink_with("mid", fn s -> "a:" <> s end)
 
       # Fail fast: the compensation scenario is about the rollback order, not
       # the ladder before it.
       mid
-      |> into(ElixirRunner.Workflows.BranchB)
+      |> into(ElixirRunner.Bounded.BranchB)
       |> sink_with("bmid", fn s -> "b:" <> s end)
       |> retry_max(1)
-      |> into(ElixirRunner.Workflows.BranchD)
+      |> into(ElixirRunner.Bounded.BranchD)
       |> sink("d_out")
 
       mid
-      |> into(ElixirRunner.Workflows.BranchC)
+      |> into(ElixirRunner.Bounded.BranchC)
       |> sink("c_out")
     end
   end
 
   # The fan-in DAG. A held handle wired twice is the fan-out; two unnamed
   # mentions of DiamJoin are one node, dispatched once after both arms commit.
-  defmodule DiamondWorkflow do
+  defmodule DiamondBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "diamond_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "diamond_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
@@ -644,53 +644,53 @@ defmodule ElixirRunner.Workflows do
       fan =
         c
         |> input("in")
-        |> into(ElixirRunner.Workflows.DiamA)
+        |> into(ElixirRunner.Bounded.DiamA)
         |> sink_with("dfan", fn s -> "a:" <> s end)
 
       fan
-      |> into(ElixirRunner.Workflows.DiamB1)
+      |> into(ElixirRunner.Bounded.DiamB1)
       |> named("db1")
-      |> into(ElixirRunner.Workflows.DiamB2)
+      |> into(ElixirRunner.Bounded.DiamB2)
       |> sink_with("db2", & &1)
-      |> into(ElixirRunner.Workflows.DiamJoin)
+      |> into(ElixirRunner.Bounded.DiamJoin)
 
       fan
-      |> into(ElixirRunner.Workflows.DiamC)
+      |> into(ElixirRunner.Bounded.DiamC)
       |> sink_with("dc", & &1)
-      |> into(ElixirRunner.Workflows.DiamJoin)
+      |> into(ElixirRunner.Bounded.DiamJoin)
       |> sink("j_out")
     end
   end
 
-  defmodule RetryWorkflow do
+  defmodule RetryBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "retry_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "retry_bounded"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.RetryA)
+      |> into(ElixirRunner.Bounded.RetryA)
       |> sink_with("mid", fn s -> "res:" <> s end)
-      |> into(ElixirRunner.Workflows.RetryFlaky)
+      |> into(ElixirRunner.Bounded.RetryFlaky)
       |> sink("out")
     end
   end
 
-  # `timer_loop_workflow`: `in -> tick -> relay -> out`, a per-input loop whose
+  # `timer_loop_bounded`: `in -> tick -> relay -> out`, a per-input loop whose
   # `tick` arms a processing-time timer of the delay `after:<ms>` names and
   # emits `armed:<at>`; its firing emits `fired:<at>` and opens a pass of its
   # own. `slow:<ms>` holds `tick` that long, for a firing due mid-pass. On a
-  # runner booted with `FLEZHA_WORKFLOW_E2E_HOLD` the firing parks at the gate:
+  # runner booted with `FLEZHA_BOUNDED_E2E_HOLD` the firing parks at the gate:
   # `timer` inside `on_timer`, before `tick` commits; `relay` in `relay`, after.
   defmodule Tick do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
     def name, do: "tick"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def run("after:" <> delay, state, ctx) do
       {:ok, at} = Ctx.timer_after(ctx, String.to_integer(delay))
@@ -729,10 +729,10 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule TimerLoopWorkflow do
+  defmodule TimerLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "timer_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "timer_loop_bounded"
     def loop_mode, do: :per_input
     def max_duration_ms, do: 600_000
 
@@ -741,14 +741,14 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.Tick)
+      |> into(ElixirRunner.Bounded.Tick)
       |> named("ticked")
-      |> into(ElixirRunner.Workflows.Relay)
+      |> into(ElixirRunner.Bounded.Relay)
       |> sink("out")
     end
   end
 
-  # `event_timer_workflow`: an entry-fed tasklet whose clock is the message's
+  # `event_timer_bounded`: an entry-fed tasklet whose clock is the message's
   # leading event time; each message arms an event-time timer 100 later and
   # emits `seen:<t>`, and the firing emits `fired:<at>`.
   defmodule EventTick do
@@ -756,8 +756,8 @@ defmodule ElixirRunner.Workflows do
     @behaviour Flezha.SDK.Tasklet
     def name, do: "event_tick"
     def clock, do: :event_time
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     def event_time_of(input),
       do: input |> String.split(":", parts: 2) |> hd() |> ElixirRunner.Numbers.int()
@@ -774,10 +774,10 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule EventTimerWorkflow do
+  defmodule EventTimerBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "event_timer_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "event_timer_bounded"
     def loop_mode, do: :per_input
     def max_duration_ms, do: 600_000
 
@@ -786,12 +786,12 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.EventTick)
+      |> into(ElixirRunner.Bounded.EventTick)
       |> sink("out")
     end
   end
 
-  # `static_cell_workflow`: a per-input loop whose one tasklet declares three
+  # `static_cell_bounded`: a per-input loop whose one tasklet declares three
   # static cells and routes every message to two of them; each cell that runs
   # emits `<cell key>:<message>`, so one message yields exactly two outputs.
   defmodule StaticCellStep do
@@ -808,10 +808,10 @@ defmodule ElixirRunner.Workflows do
     end
   end
 
-  defmodule StaticCellWorkflow do
+  defmodule StaticCellBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "static_cell_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "static_cell_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
@@ -821,32 +821,32 @@ defmodule ElixirRunner.Workflows do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Workflows.StaticCellStep)
+      |> into(ElixirRunner.Bounded.StaticCellStep)
       |> sink("out")
     end
   end
 
-  @doc "The durable structured workflow classes this runner advertises."
+  @doc "The durable structured bounded classes this runner advertises."
   def all do
     [
-      EchoWorkflow,
-      TimerLoopWorkflow,
-      EventTimerWorkflow,
-      StaticCellWorkflow,
-      TypedOnceWorkflow,
-      CommitBlockWorkflow,
-      SyncDurableWorkflow,
-      OptOutCommitBlockWorkflow,
-      TierCommitBlockWorkflow,
-      SagaBlockWorkflow,
-      KeyedBlockWorkflow,
-      KeyedSagaWorkflow,
-      OutboxBlockWorkflow,
-      UndoOutboxWorkflow,
-      FailedStageWorkflow,
-      BranchWorkflow,
-      DiamondWorkflow,
-      RetryWorkflow
+      EchoBounded,
+      TimerLoopBounded,
+      EventTimerBounded,
+      StaticCellBounded,
+      TypedOnceBounded,
+      CommitBlockBounded,
+      SyncDurableBounded,
+      OptOutCommitBlockBounded,
+      TierCommitBlockBounded,
+      SagaBlockBounded,
+      KeyedBlockBounded,
+      KeyedSagaBounded,
+      OutboxBlockBounded,
+      UndoOutboxBounded,
+      FailedStageBounded,
+      BranchBounded,
+      DiamondBounded,
+      RetryBounded
     ]
   end
 end

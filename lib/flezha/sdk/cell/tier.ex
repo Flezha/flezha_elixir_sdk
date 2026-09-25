@@ -17,11 +17,11 @@ defmodule Flezha.SDK.Cell.Tier do
 
   alias Flezha.SDK.Cell.{Interval, Records, State}
   alias Flezha.SDK.Hold
-  alias Flezha.SDK.Operative.Routing
+  alias Flezha.SDK.Operator.Routing
 
   # The end of a replayed slice, taken from the Cell's own queue in mailbox
   # order behind the members it closes. Not the guarantee — that is
-  # `Operative.push/6`'s synchronous `enqueue_block/2` — but the thing that
+  # `Operator.push/6`'s synchronous `enqueue_block/2` — but the thing that
   # keeps the order right if that call ever becomes a cast, which would
   # otherwise misfold a slice with no error anywhere.
   defmodule SliceEnd do

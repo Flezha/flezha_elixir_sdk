@@ -1,6 +1,6 @@
-defmodule Echo.Operative do
+defmodule Echo.Operator do
   @moduledoc """
-  The deployable unit. An operative declares the graph a message travels: the
+  The deployable unit. An operator declares the graph a message travels: the
   entry channel it arrives on, the steps it passes through, and the channel its
   result leaves on.
 
@@ -8,9 +8,9 @@ defmodule Echo.Operative do
   cannot work is refused at startup.
   """
 
-  # `factory_id` is the operative's stable identity, and the name
-  # `flz operative start` takes.
-  use Flezha.SDK.StreamOperative, factory_id: "echo"
+  # `factory_id` is the operator's stable identity, and the name
+  # `flz operator start` takes.
+  use Flezha.SDK.UnboundedOperator, factory_id: "echo"
 
   @impl true
   def channels(c) do

@@ -7,7 +7,7 @@ defmodule Flezha.SDK.Codec do
 
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Topology
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Bounded.Spec
 
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
@@ -50,10 +50,10 @@ defmodule Flezha.SDK.Codec do
     IO.iodata_to_binary(iodata)
   end
 
-  @doc "Encode an `AddOperativeResponse` metadata map into its raw_data bytes."
-  @spec encode_add_operative_response(map()) :: binary()
-  def encode_add_operative_response(metadata) when is_map(metadata) do
-    {:ok, iodata, _size} = Protox.encode(%RunnerCommands.AddOperativeResponse{metadata: metadata})
+  @doc "Encode an `AddOperatorResponse` metadata map into its raw_data bytes."
+  @spec encode_add_operator_response(map()) :: binary()
+  def encode_add_operator_response(metadata) when is_map(metadata) do
+    {:ok, iodata, _size} = Protox.encode(%RunnerCommands.AddOperatorResponse{metadata: metadata})
     IO.iodata_to_binary(iodata)
   end
 
@@ -91,10 +91,10 @@ defmodule Flezha.SDK.Codec do
 
   @doc "The `RunnerShutdownNotification` command tuple for `encode_request/2`."
   @spec shutdown_notification_command(String.t(), binary()) :: {atom(), struct()}
-  def shutdown_notification_command(operative_id, serialized_state) do
+  def shutdown_notification_command(operator_id, serialized_state) do
     {:runner_shutdown_notification,
      %RunnerCommands.RunnerShutdownNotification{
-       operative_id: operative_id,
+       operator_id: operator_id,
        serialized_state: serialized_state
      }}
   end
@@ -118,12 +118,12 @@ defmodule Flezha.SDK.Codec do
 
   @doc """
   The kind a registered class is announced as. `Flezha.SDK.register_factory/2`
-  builds a workflow spec for a module of the workflow behaviour and a topology
-  for a stream, so the class it registered already states the kind.
+  builds a bounded spec for a module of the bounded operator behaviour and a topology
+  for an unbounded operator, so the class it registered already states the kind.
   """
   @spec kind(Spec.t() | Topology.t()) :: String.t()
-  def kind(%Spec{}), do: "workflow"
-  def kind(%Topology{}), do: "stream"
+  def kind(%Spec{}), do: "bounded"
+  def kind(%Topology{}), do: "unbounded"
 
   @doc """
   The `AdminRequest` command tuple: the verb, and its arguments as a JSON
@@ -136,15 +136,15 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc """
-  The `SpawnWorkflowRequest` command tuple. No namespace rides it: the
+  The `SpawnBoundedRequest` command tuple. No namespace rides it: the
   controller resolves the request in the namespace of the connection it
   arrived on.
   """
-  @spec spawn_workflow_request_command(String.t(), String.t(), binary(), :deliver | :error) ::
+  @spec spawn_bounded_request_command(String.t(), String.t(), binary(), :deliver | :error) ::
           {atom(), struct()}
-  def spawn_workflow_request_command(instance_id, factory_id, payload, if_running) do
-    {:spawn_workflow_request,
-     %RunnerCommands.SpawnWorkflowRequest{
+  def spawn_bounded_request_command(instance_id, factory_id, payload, if_running) do
+    {:spawn_bounded_request,
+     %RunnerCommands.SpawnBoundedRequest{
        instance_id: instance_id,
        factory_id: factory_id,
        payload: payload,
@@ -167,7 +167,7 @@ defmodule Flezha.SDK.Codec do
           map() | nil
         ) :: {atom(), struct()}
   def task_commit_command(
-        operative_id,
+        operator_id,
         task_idx,
         iter,
         cells_ran,
@@ -179,7 +179,7 @@ defmodule Flezha.SDK.Codec do
       ) do
     {:task_commit,
      %RunnerCommands.TaskCommit{
-       operative_id: operative_id,
+       operator_id: operator_id,
        task_idx: task_idx,
        iter: iter,
        cells_ran: Enum.map(cells_ran, &committed_cell/1),
@@ -222,7 +222,7 @@ defmodule Flezha.SDK.Codec do
           String.t()
         ) :: {atom(), struct()}
   def iter_commit_command(
-        operative_id,
+        operator_id,
         iter,
         consumed_offset,
         handoff,
@@ -232,7 +232,7 @@ defmodule Flezha.SDK.Codec do
       ) do
     {:iter_commit,
      %RunnerCommands.IterCommit{
-       operative_id: operative_id,
+       operator_id: operator_id,
        iter: iter,
        consumed_offset: consumed_offset,
        handoff: handoff_items(handoff),
@@ -253,23 +253,23 @@ defmodule Flezha.SDK.Codec do
           non_neg_integer(),
           non_neg_integer() | nil
         ) :: {atom(), struct()}
-  def iter_park_command(operative_id, iter, wake_deadline_ms, consumed_offset) do
+  def iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset) do
     {:iter_park,
      %RunnerCommands.IterPark{
-       operative_id: operative_id,
+       operator_id: operator_id,
        iter: iter,
        wake_deadline_ms: wake_deadline_ms,
        consumed_offset: consumed_offset
      }}
   end
 
-  @doc "The `WorkflowCompleted` command tuple for a terminated instance."
-  @spec workflow_completed_command(String.t(), String.t(), String.t(), binary()) ::
+  @doc "The `BoundedCompleted` command tuple for a terminated instance."
+  @spec bounded_completed_command(String.t(), String.t(), String.t(), binary()) ::
           {atom(), struct()}
-  def workflow_completed_command(operative_id, status, error, result) do
-    {:workflow_completed,
-     %RunnerCommands.WorkflowCompleted{
-       operative_id: operative_id,
+  def bounded_completed_command(operator_id, status, error, result) do
+    {:bounded_completed,
+     %RunnerCommands.BoundedCompleted{
+       operator_id: operator_id,
        status: status,
        error: error,
        result: result
@@ -323,7 +323,6 @@ defmodule Flezha.SDK.Codec do
       %RunnerCommands.TaskHandoffItem{channel_id: channel_id, payload: payload}
     end)
   end
-
 
   defp encode(message) do
     {:ok, iodata, _size} = Protox.encode(message)

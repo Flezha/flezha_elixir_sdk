@@ -72,7 +72,7 @@ defmodule Flezha.SDK.SafeCall do
 
         {:ok, result} ->
           # On a timeout the target is alive but wedged — introspect it so the
-          # log names WHERE it is stuck instead of forcing operators to infer
+          # log names WHERE it is stuck instead of forcing users to infer
           # the wedge from the caller side. A `:noproc` target is already gone.
           probe = if classified == :timeout, do: probe_target(server), else: %{}
           report(server, classified, probe)

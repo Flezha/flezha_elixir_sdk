@@ -1,8 +1,8 @@
-defmodule Flezha.SDK.Operative.Cells do
+defmodule Flezha.SDK.Operator.Cells do
   @moduledoc """
-  An operative instance's Cells, held in the state of the process that owns
-  them — the stream `Flezha.SDK.Operative` or the workflow
-  `Flezha.SDK.Workflow.Driver` — as `%{node_ref => %{key => pid}}`.
+  An operator instance's Cells, held in the state of the process that owns
+  them — the unbounded `Flezha.SDK.Operator` or the bounded operator
+  `Flezha.SDK.Bounded.Driver` — as `%{node_ref => %{key => pid}}`.
 
   Single Cells and the owned Static ones are minted at start; a Dynamic key's
   Cell is minted on the first value addressed to it, up to its node's
@@ -14,9 +14,9 @@ defmodule Flezha.SDK.Operative.Cells do
   "evicted" rather than "never existed". The set also holds the owner's
   plugin outputs no bound stream would take, replayed after the Cells rebind.
 
-  One option is the kind's: a stream Cell parks what its ladder exhausts,
-  a workflow Cell reports it to the driver, and has no timers until they fire
-  inside a workflow.
+  One option is the kind's: an unbounded Cell parks what its ladder exhausts,
+  a bounded operator Cell reports it to the driver, and has no timers until they fire
+  inside a bounded operator.
   """
 
   require Logger
@@ -29,9 +29,9 @@ defmodule Flezha.SDK.Operative.Cells do
   # so a burst of expiries drains over a few ticks rather than stalling it.
   @evict_budget 256
 
-  @enforce_keys [:operative_id, :topology, :kind]
+  @enforce_keys [:operator_id, :topology, :kind]
   defstruct [
-    :operative_id,
+    :operator_id,
     :topology,
     :kind,
     :range,
@@ -51,8 +51,8 @@ defmodule Flezha.SDK.Operative.Cells do
 
   @doc """
   The Cell set of the calling process, its Single and owned Static Cells
-  minted. `opts` carries `:operative_id`, `:topology`, `:kind` (`:stream` |
-  `:workflow`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
+  minted. `opts` carries `:operator_id`, `:topology`, `:kind` (`:unbounded` |
+  `:bounded`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
   `:secondaries` and `:credit`.
   """
   @spec new(keyword()) :: t()
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Operative.Cells do
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
 
     prewarm(%__MODULE__{
-      operative_id: Keyword.fetch!(opts, :operative_id),
+      operator_id: Keyword.fetch!(opts, :operator_id),
       topology: topology,
       kind: Keyword.fetch!(opts, :kind),
       range: Keyword.get(opts, :range) || KeyGroup.decode(0, 0, 0, 0),
@@ -232,7 +232,7 @@ defmodule Flezha.SDK.Operative.Cells do
     Enum.reduce(dead, c, fn {node_ref, key}, acc ->
       if reason not in [:normal, :shutdown] do
         Logger.warning(
-          "[Flezha.SDK] cell crashed: operative=#{acc.operative_id} " <>
+          "[Flezha.SDK] cell crashed: operator=#{acc.operator_id} " <>
             "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
         )
       end
@@ -268,7 +268,7 @@ defmodule Flezha.SDK.Operative.Cells do
   @spec emit_output(t(), map(), binary()) :: t()
   def emit_output(%__MODULE__{} = c, meta, bytes) do
     hold = Hold.bind(c.held, c.secondaries)
-    {_verdict, held} = Hold.write({:output, c.operative_id}, hold, {bytes, meta})
+    {_verdict, held} = Hold.write({:output, c.operator_id}, hold, {bytes, meta})
     %{c | held: held}
   end
 
@@ -333,17 +333,17 @@ defmodule Flezha.SDK.Operative.Cells do
   @doc "The wire identity of the Cell of `key` on `node_ref`."
   @spec wire_identity(t(), reference(), String.t() | nil) :: binary()
   def wire_identity(%__MODULE__{topology: topo} = c, node_ref, key),
-    do: Park.identity(c.operative_id, topo.node_modules[node_ref].name(), key)
+    do: Park.identity(c.operator_id, topo.node_modules[node_ref].name(), key)
 
   defp note_evicted(%__MODULE__{evicted: evicted} = c, key) do
     dynamic_event(c, :evicted)
     %{c | evicted: Hold.push(evicted, key)}
   end
 
-  defp dynamic_event(%__MODULE__{operative_id: oid}, event),
+  defp dynamic_event(%__MODULE__{operator_id: oid}, event),
     do:
       :telemetry.execute([:flezha, :sdk, :dynamic], %{count: 1}, %{
-        operative_id: oid,
+        operator_id: oid,
         event: event
       })
 
@@ -397,7 +397,7 @@ defmodule Flezha.SDK.Operative.Cells do
   """
   @spec forget(t(), reference(), String.t() | nil) :: t()
   def forget(%__MODULE__{} = c, node_ref, key) do
-    Counters.dispatch_finished(c.counters, Cell.identity(c.operative_id, node_ref, key))
+    Counters.dispatch_finished(c.counters, Cell.identity(c.operator_id, node_ref, key))
     %{c | cells: Map.update(c.cells, node_ref, %{}, &Map.delete(&1, key))}
   end
 
@@ -406,8 +406,8 @@ defmodule Flezha.SDK.Operative.Cells do
     ladder = Topology.retry_ladder(topo, node_ref)
 
     Cell.start(
-      operative: self(),
-      operative_id: c.operative_id,
+      operator: self(),
+      operator_id: c.operator_id,
       node_ref: node_ref,
       node_name: topo.node_name[node_ref],
       # The channel this Cell consumes from: what a park reports, matching
@@ -419,10 +419,10 @@ defmodule Flezha.SDK.Operative.Cells do
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: ladder.retry_max,
       retry_backoff_ms: ladder.retry_backoff_ms,
-      # A workflow answers an exhausted ladder by unwinding, not by shedding
+      # A bounded operator answers an exhausted ladder by unwinding, not by shedding
       # the input to the dead-letter queue, and decides when a due firing runs.
-      park_on_exhaustion: c.kind == :stream,
-      gate_firings: c.kind == :workflow,
+      park_on_exhaustion: c.kind == :unbounded,
+      gate_firings: c.kind == :bounded,
       counters: c.counters,
       hold_cap: c.hold_cap,
       secondaries: c.secondaries,
@@ -435,14 +435,14 @@ defmodule Flezha.SDK.Operative.Cells do
   end
 
   # What a Cell of this node needs to know about its records: whether it
-  # writes effect records (the tier, or a durable workflow, whose stage commit
+  # writes effect records (the tier, or a durable bounded operator, whose stage commit
   # names them), the checkpoint policy, the sink routes it captures its own
   # outputs through (the router delivers such a class's emits to nodes only),
-  # whether a record waits for an inter-tasklet edge (a workflow's edge value
-  # waits on its driver instead) and whether it is a workflow stage's Cell.
+  # whether a record waits for an inter-tasklet edge (a bounded operator's edge value
+  # waits on its driver instead) and whether it is a bounded stage's Cell.
   defp tier_facts(%__MODULE__{kind: kind}, topo, node_ref) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
-    stage? = kind == :workflow
+    stage? = kind == :bounded
 
     %{
       on?: topo.effectively_once? or (stage? and topo.persistence_enabled?),

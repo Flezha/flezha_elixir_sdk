@@ -1,12 +1,12 @@
-defmodule Flezha.SDK.Workflow.Spec do
+defmodule Flezha.SDK.Bounded.Spec do
   @moduledoc """
-  The frozen registration-time result of authoring a workflow class: a
+  The frozen registration-time result of authoring a bounded class: a
   validated tasklet DAG, plus the class's loop, rollback and durability
   facts.
 
-  A structured class authors in `channels/1` on the same builder a stream class
+  A structured class authors in `channels/1` on the same builder an unbounded class
   does, so its topology is compiled by `Flezha.SDK.Topology.build/2`, which
-  also refuses the stream's settings on it, and only the refusals a
+  also refuses the unbounded operator's settings on it, and only the refusals a
   *bounded* graph adds are decided here: an entry channel to arrive on,
   acyclic, reachable, and a chained loop whose every chain
   converges on one terminal. Each entry channel roots a chain (the nodes it
@@ -24,10 +24,10 @@ defmodule Flezha.SDK.Workflow.Spec do
   entry channel — a tasklet unreachable from the entry cannot be declared.
 
   Every issue is accumulated — a class hears all of what is wrong with it at
-  once — and reported as `{:error, {:invalid_workflow, issues}}`.
+  once — and reported as `{:error, {:invalid_bounded, issues}}`.
   """
 
-  alias Flezha.SDK.{Graph, Tasklet, Topology, WorkflowOperative}
+  alias Flezha.SDK.{Graph, Tasklet, Topology, BoundedOperator}
 
   @enforce_keys [:factory_id, :module]
   defstruct factory_id: nil,
@@ -64,12 +64,12 @@ defmodule Flezha.SDK.Workflow.Spec do
         }
 
   @doc """
-  Compile `module` into a workflow spec, or refuse it. A class that declares
-  no `channels/1` has no body to run and is refused `NoWorkflowBody`.
+  Compile `module` into a bounded spec, or refuse it. A class that declares
+  no `channels/1` has no body to run and is refused `NoBoundedBody`.
   """
-  @spec build(module()) :: {:ok, t()} | {:error, {:invalid_workflow, [term()]}}
+  @spec build(module()) :: {:ok, t()} | {:error, {:invalid_bounded, [term()]}}
   def build(module) do
-    knobs = WorkflowOperative.knobs(module)
+    knobs = BoundedOperator.knobs(module)
     base = %__MODULE__{factory_id: module.factory_id(), module: module, knobs: knobs}
 
     class_issues =
@@ -79,11 +79,11 @@ defmodule Flezha.SDK.Workflow.Spec do
 
     if Tasklet.exports?(module, :channels, 1),
       do: structured(module, base, class_issues),
-      else: refuse([{:NoWorkflowBody, mod_name(module)} | class_issues])
+      else: refuse([{:NoBoundedBody, mod_name(module)} | class_issues])
   end
 
   defp structured(module, %__MODULE__{} = spec, issues) do
-    case Topology.build(module, :workflow) do
+    case Topology.build(module, :bounded) do
       {:error, {:invalid_topology, topology_issues}} ->
         refuse(Enum.map(topology_issues, &{:Topology, &1}) ++ issues)
 
@@ -97,7 +97,7 @@ defmodule Flezha.SDK.Workflow.Spec do
     end
   end
 
-  # --- the shape a bounded graph adds on top of a stream topology ---
+  # --- the shape a bounded graph adds on top of an unbounded topology ---
 
   defp shape(factory_id, topo, knobs) do
     walk = Graph.walk(topo.node_seq, Topology.node_edges(topo.routes))
@@ -111,7 +111,7 @@ defmodule Flezha.SDK.Workflow.Spec do
     {dag, issues}
   end
 
-  # A workflow's messages arrive on its entry channels; a class with none
+  # A bounded operator's messages arrive on its entry channels; a class with none
   # has nothing its messages could arrive on.
   defp check_entry(is, factory_id, topo) do
     if map_size(topo.entries) == 0, do: [{:NoEntryChannel, factory_id} | is], else: is
@@ -143,7 +143,7 @@ defmodule Flezha.SDK.Workflow.Spec do
   # The `use` macro refuses a mode outside its set at compile time; a
   # hand-written `loop_mode/0` or `rollback_mode/0` meets the same set here.
   defp check_modes(is, factory_id, knobs) do
-    for {knob, allowed} <- WorkflowOperative.modes(),
+    for {knob, allowed} <- BoundedOperator.modes(),
         (value = Map.fetch!(knobs, knob)) not in allowed,
         reduce: is,
         do: (is -> [{:InvalidMode, factory_id, knob, value} | is])
@@ -205,5 +205,5 @@ defmodule Flezha.SDK.Workflow.Spec do
 
   defp mod_name(module), do: inspect(module)
 
-  defp refuse(issues), do: {:error, {:invalid_workflow, Enum.reverse(issues)}}
+  defp refuse(issues), do: {:error, {:invalid_bounded, Enum.reverse(issues)}}
 end

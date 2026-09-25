@@ -1,6 +1,6 @@
-defmodule Flezha.SDK.Operative do
+defmodule Flezha.SDK.Operator do
   @moduledoc """
-  One process per operative instance: the routing core plus per-Cell
+  One process per operator instance: the routing core plus per-Cell
   supervision. An input on an entry channel (parsed, a parse failure riding the
   entry ladder) fans out along that entry's routes; a value a Cell emits fans
   out along its node's routes. Each route applies at most one fused transform and
@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Operative do
   the seq its dispatch started at with the emit ordinal, and the key. Routing
   is serialized here (per-Cell ordering); Cells dispatch concurrently.
 
-  Its Cells are the `Flezha.SDK.Operative.Cells` set, the one a workflow
+  Its Cells are the `Flezha.SDK.Operator.Cells` set, the one a bounded operator
   driver holds too: minted per mode, capped, and swept by a `:reap` tick that
   runs in this process, so no push can be routed while it runs. What an
   evicted Cell could not ship — the records it still held, then its delete —
@@ -29,11 +29,11 @@ defmodule Flezha.SDK.Operative do
   use GenServer
 
   alias Flezha.SDK.{Call, Cell, Hold, Knob, Park}
-  alias Flezha.SDK.Operative.{Cells, Inbox, Routing}
-  alias Flezha.SDK.Workflow.Commit
+  alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
+  alias Flezha.SDK.Bounded.Commit
 
   # What a router that will not answer tells its caller.
-  @busy {:error, :operative_busy}
+  @busy {:error, :operator_busy}
   # What an entry input carries into routing: no metadata, no key, no Cell,
   # and the durable offset the controller stamped under the tier.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
@@ -41,7 +41,7 @@ defmodule Flezha.SDK.Operative do
   defmodule State do
     @moduledoc false
     defstruct [
-      :operative_id,
+      :operator_id,
       :topology,
       :runner,
       :cells,
@@ -72,20 +72,20 @@ defmodule Flezha.SDK.Operative do
              | :cell_not_found
              | :cell_evicted
              | :cell_capped
-             | :operative_busy}
+             | :operator_busy}
   def lookup(pid, tasklet, key, opts \\ []),
     do: Call.control(pid, {:lookup, tasklet, key, Keyword.get(opts, :materialise, false)}, @busy)
 
   @doc """
   Every node as `{tasklet_name, mode, [{key, cell_pid}]}` — the live-read
-  walk's input — or `{:error, :operative_busy}` from a router that will not
+  walk's input — or `{:error, :operator_busy}` from a router that will not
   answer. The refusal is deliberately not an empty list: "no Cells" and "the
   router did not say" are different facts, and a walk that confused them would
-  report a live operative as empty.
+  report a live operator as empty.
   """
   @spec cells(GenServer.server()) ::
           [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
-          | {:error, :operative_busy}
+          | {:error, :operator_busy}
   def cells(pid), do: Call.control(pid, :cells, @busy)
 
   # --- server ---
@@ -95,7 +95,7 @@ defmodule Flezha.SDK.Operative do
     Process.flag(:trap_exit, true)
 
     counters = Keyword.fetch!(opts, :counters)
-    # The reconnect cap, resolved once: this Operative's holds and every
+    # The reconnect cap, resolved once: this Operator's holds and every
     # Cell's are bounded by one number the caller can state, rather than by
     # what the process-wide variable said at each separate construction.
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
@@ -103,7 +103,7 @@ defmodule Flezha.SDK.Operative do
     cells =
       opts
       |> Keyword.take([
-        :operative_id,
+        :operator_id,
         :topology,
         :range,
         :counters,
@@ -111,12 +111,12 @@ defmodule Flezha.SDK.Operative do
         :secondaries,
         :credit
       ])
-      |> Keyword.merge(kind: :stream, hold_cap: hold_cap)
+      |> Keyword.merge(kind: :unbounded, hold_cap: hold_cap)
       |> Cells.new()
       |> Cells.schedule_reap()
 
     s = %State{
-      operative_id: Keyword.fetch!(opts, :operative_id),
+      operator_id: Keyword.fetch!(opts, :operator_id),
       topology: Keyword.fetch!(opts, :topology),
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
@@ -139,7 +139,7 @@ defmodule Flezha.SDK.Operative do
 
   def handle_call(:cells, _from, %State{} = s), do: {:reply, Cells.listing(s.cells), s}
 
-  # A restore frame landed. Its saga markers are a workflow's; a stream has
+  # A restore frame landed. Its saga markers are a bounded operator's; an unbounded operator has
   # no restore gate to count it toward.
   def handle_call({:restore_landed, _identity, _intent, _done}, _from, %State{} = s),
     do: {:reply, :ok, s}
@@ -157,7 +157,7 @@ defmodule Flezha.SDK.Operative do
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
 
-    case Inbox.enter(s.runner, s.operative_id, s.topology, channel, message) do
+    case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message) do
       {:ok, channel, value} ->
         {offset, replay} = frame_facts(s.topology, metadata)
         emit = %{@entry_emit | offset: offset, replay: replay}
@@ -200,10 +200,10 @@ defmodule Flezha.SDK.Operative do
   end
 
   # A Cell died — forget it; it is recreated on that key's next input. A
-  # crash must not take the Operative down with it, and must not leave the
+  # crash must not take the Operator down with it, and must not leave the
   # key unroutable; the log is what makes a key crashing on every input
   # visible instead of looking like silent inactivity. Monitored, not linked,
-  # so this process's own exit — `:normal` on `RemOperative` — ends every Cell
+  # so this process's own exit — `:normal` on `RemOperator` — ends every Cell
   # through its monitor of this process. The Cell's `after` cannot run for an
   # untrappable kill, so its in-flight slot is released there too.
   @impl true
@@ -259,7 +259,7 @@ defmodule Flezha.SDK.Operative do
          {:quiet, latest} <- quiet_since(s),
          quiet_for = now - latest,
          :sleep <- if(quiet_for < window, do: {:wait, window - quiet_for}, else: :sleep) do
-      Commit.park(s.runner, s.operative_id, 0, 0, nil)
+      Commit.park(s.runner, s.operator_id, 0, 0, nil)
       %{s | idle: nil}
     else
       {:wait, after_ms} -> arm_idle(s, after_ms)
@@ -319,7 +319,7 @@ defmodule Flezha.SDK.Operative do
   # then — on a keyed sink — the identity stamps, which nothing can clobber.
   # Every plugin output advances the ordinal, stamped or not.
   defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
-    stamp_with = if route.keyed, do: {s.operative_id, s.topology.node_modules}
+    stamp_with = if route.keyed, do: {s.operator_id, s.topology.node_modules}
     {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
     {%{s | cells: Cells.emit_output(s.cells, metadata, bytes)}, ordinal + 1}
   end
@@ -370,7 +370,7 @@ defmodule Flezha.SDK.Operative do
 
   defp park_misroute(%State{} = s, node_ref, value, reason) do
     label = node_ref_label(s, node_ref)
-    Inbox.park_pre_dispatch(s.runner, s.operative_id, label, label, reason, value)
+    Inbox.park_pre_dispatch(s.runner, s.operator_id, label, label, reason, value)
     s
   end
 

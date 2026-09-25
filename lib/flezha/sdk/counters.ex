@@ -6,8 +6,8 @@ defmodule Flezha.SDK.Counters do
   `runner_pool_wedged` verdict requires (a frozen value with the runner alive is
   what makes a wedged Cell population visible). `blocked_parks` counts blocked
   enqueues, and `drops_newest`/`drops_oldest` count what a shedding policy threw
-  away — the same three keys every other SDK's heartbeat carries, so an operator
-  reads one vocabulary whichever runtime the operative runs on.
+  away — the same three keys every other SDK's heartbeat carries, so a user
+  reads one vocabulary whichever runtime the operator runs on.
 
   Handout liveness — how many dispatches are underway and how long the oldest has
   been — is the same self-report every other SDK carries, and it is what makes ONE
@@ -15,7 +15,7 @@ defmodule Flezha.SDK.Counters do
   rides a fixed table of start timestamps rather than an in-flight counter,
   because a counter cannot be un-leaked: a Cell killed untrappably would hold
   its increment for the life of the runner. A slot belongs to a Cell's
-  identity instead, so the Operative clears it when that Cell dies. Two
+  identity instead, so the Operator clears it when that Cell dies. Two
   identities hashing to one slot means one of them runs unrecorded — the report
   under-states, which is the safe direction for a signal a rebind hangs off.
 
@@ -34,7 +34,7 @@ defmodule Flezha.SDK.Counters do
   was seen, so the interval's inputs and the buffered slice go with it. The
   controller re-forwards them from the rewound watermark, which is why the
   discard is a report and not a loss — and why a key that is silently absent
-  and a key reported as zero are different answers to an operator.
+  and a key reported as zero are different answers to a user.
 
   `timers_armed` is the processing-time timers the runner's Cells hold on
   the BEAM's timer service — one per armed deadline, released on its firing,

@@ -1,13 +1,13 @@
 defmodule Flezha.SDK.Local do
   @moduledoc """
-  Running a declared operative graph in this process, with no controller.
+  Running a declared operator graph in this process, with no controller.
 
-  `start/2` takes the `Flezha.SDK.StreamOperative` module you deploy, compiles
-  the topology its `channels/1` already declares, and stands the operative up on
+  `start/2` takes the `Flezha.SDK.UnboundedOperator` module you deploy, compiles
+  the topology its `channels/1` already declares, and stands the operator up on
   an in-node stream pair this run owns. Nothing about the class changes: no
   local-mode callback, no second declaration. Cell lifecycle, key resolution,
   routing, mailboxes, overflow and the retry ladder are the deployed ones —
-  `feed/3` enters through the same `Flezha.SDK.Operative.Inbox.input/4` a frame
+  `feed/3` enters through the same `Flezha.SDK.Operator.Inbox.input/4` a frame
   off a bound data stream enters, and `on_sink/3` takes output where production
   frames it, stamps and metadata included.
 
@@ -38,13 +38,13 @@ defmodule Flezha.SDK.Local do
     Counters,
     KeyGroup,
     LocalStream,
-    Operative,
+    Operator,
     Spawn,
     Topology,
     Transport
   }
 
-  alias Flezha.SDK.Operative.Inbox
+  alias Flezha.SDK.Operator.Inbox
 
   @silent "the local run did not answer"
 
@@ -88,7 +88,7 @@ defmodule Flezha.SDK.Local do
   @doc """
   Start `module`'s declared graph in this process. Refuses, before building
   anything, a declaration that asks for something only a controller can answer.
-  `:operative_id` names the run (default `"<factory_id>-local"`).
+  `:operator_id` names the run (default `"<factory_id>-local"`).
   """
   @spec start(module(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start(module, opts \\ []) do
@@ -125,7 +125,7 @@ defmodule Flezha.SDK.Local do
     case settle(run, System.monotonic_time(:millisecond) + budget_ms, {0, :unread}) do
       :ok -> :ok
       {:working, nil} -> {:error, "the local run did not answer within #{budget_ms}ms"}
-      {:working, id} -> {:error, "operative `#{id}` was still working after #{budget_ms}ms"}
+      {:working, id} -> {:error, "operator `#{id}` was still working after #{budget_ms}ms"}
     end
   end
 
@@ -141,11 +141,11 @@ defmodule Flezha.SDK.Local do
   end
 
   @doc """
-  The live operative, for a caller that wants to read its Cells, or nil from
+  The live operator, for a caller that wants to read its Cells, or nil from
   a run that will not answer.
   """
-  @spec operative(pid()) :: pid() | nil
-  def operative(run), do: Call.control(run, :operative, nil)
+  @spec operator(pid()) :: pid() | nil
+  def operator(run), do: Call.control(run, :operator, nil)
 
   @doc "What every local run states before it does any work."
   @spec notice() :: String.t()
@@ -171,11 +171,11 @@ defmodule Flezha.SDK.Local do
     :ok = Transport.controlling_process(controller_side, self())
     :ok = Transport.set_active(controller_side)
     counters = Counters.new()
-    id = Keyword.get(opts, :operative_id, "#{topology.factory_id}-local")
+    id = Keyword.get(opts, :operator_id, "#{topology.factory_id}-local")
 
     {:ok, op} =
-      Operative.start_link(
-        operative_id: id,
+      Operator.start_link(
+        operator_id: id,
         topology: topology,
         range: KeyGroup.decode(0, 0, 0, 0),
         counters: counters,
@@ -227,15 +227,15 @@ defmodule Flezha.SDK.Local do
     {:reply, {verdict, s.id, Counters.dispatches(s.counters)}, s}
   end
 
-  def handle_call(:operative, _from, s), do: {:reply, s.op, s}
+  def handle_call(:operator, _from, s), do: {:reply, s.op, s}
 
   @impl true
-  # The operative forwards a park here because local mode is its runner: an
+  # The operator forwards a park here because local mode is its runner: an
   # entry parse that failed, or a value the partition guard refused. Nothing
   # acks it, so it is named rather than swallowed.
   def handle_cast({:park, _cell, _identity, body}, s) do
     Logger.warning(
-      "[flezha] local mode: operative `#{s.id}` parked an input on channel " <>
+      "[flezha] local mode: operator `#{s.id}` parked an input on channel " <>
         "`#{body.channel}`: #{body.error}"
     )
 
@@ -252,7 +252,7 @@ defmodule Flezha.SDK.Local do
   def handle_cast({:claim_spawn, _reference_id}, s), do: {:noreply, s}
 
   @impl true
-  # A sink output: the router writes it under the operative's own payload id.
+  # A sink output: the router writes it under the operator's own payload id.
   def handle_info({:flz_data, _stream, id, payload, metadata}, %{id: id} = s) do
     channel = Map.get(metadata, "channel", id)
 
@@ -283,7 +283,7 @@ defmodule Flezha.SDK.Local do
 
   @impl true
   def terminate(_reason, s) do
-    if Process.alive?(s.op), do: Operative.stop(s.op)
+    if Process.alive?(s.op), do: Operator.stop(s.op)
     Transport.close(s.stream)
     :ok
   end
@@ -293,14 +293,14 @@ defmodule Flezha.SDK.Local do
   # What a declaration can ask for that only a controller answers. Each is
   # refused by name rather than run as a graph whose work would go nowhere.
   # Partitioning is absent from this list because it is absent from the
-  # declaration: a member's key-group range arrives with `AddOperative`, so a
+  # declaration: a member's key-group range arrives with `AddOperator`, so a
   # local run is unpartitioned by construction.
   defp refuse_controller_only(module) do
-    if Flezha.SDK.operative_kind(module) == {:ok, :workflow} do
+    if Flezha.SDK.operator_kind(module) == {:ok, :bounded} do
       needs_controller(
         inspect(module),
-        "a workflow",
-        "a workflow's steps are driven from the controller's inbox, and its commit " <>
+        "a bounded operator",
+        "a bounded operator's steps are driven from the controller's inbox, and its commit " <>
           "barriers are durable"
       )
     else
@@ -323,7 +323,7 @@ defmodule Flezha.SDK.Local do
     do: {:error, "class `#{class}` declares #{capability}, which requires a controller: #{why}"}
 
   # The declared channel of that kind; the refusal names the channel and the
-  # operative, because a name nothing matches is otherwise a value that vanishes.
+  # operator, because a name nothing matches is otherwise a value that vanishes.
   defp declared(s, channel, kind) do
     names = channel_names(s.topology, kind)
 
@@ -331,7 +331,7 @@ defmodule Flezha.SDK.Local do
       do: :ok,
       else:
         {:error,
-         "operative `#{s.id}` has no #{kind} channel `#{channel}`; " <>
+         "operator `#{s.id}` has no #{kind} channel `#{channel}`; " <>
            "it declares #{inspect(names)}"}
   end
 
@@ -346,7 +346,7 @@ defmodule Flezha.SDK.Local do
 
   defp settle(run, deadline, {seen, dispatched}) do
     # A run that will not answer its own status is not idle, and it names no
-    # operative: the budget is what ends the wait either way.
+    # operator: the budget is what ends the wait either way.
     {state, id, now_dispatched} = Call.control(run, :status, {:working, nil, :unread})
 
     seen = if state == :idle and now_dispatched == dispatched, do: seen + 1, else: 0
@@ -379,7 +379,7 @@ defmodule Flezha.SDK.Local do
 
   # A router that will not answer cannot be walked, so the run is not idle.
   defp settled_cells?(%{op: op} = s) do
-    case Operative.cells(op) do
+    case Operator.cells(op) do
       {:error, _busy} ->
         false
 

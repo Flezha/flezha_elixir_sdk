@@ -1,12 +1,12 @@
-# Twins of the rust_runner durable-loop and bench workflow fixtures
-# (test/apps/rust_runner/src/workflow_loop.rs): the chat loop with suspension,
+# Twins of the rust_runner durable-loop and bench bounded fixtures
+# (test/apps/rust_runner/src/bounded_loop.rs): the chat loop with suspension,
 # its stateless twin, the rewindable variant, and the chains and loop
-# `mix bench.workflow` drives. The crash-resume family is in workflows.ex,
+# `mix bench.bounded` drives. The crash-resume family is in bounded.ex,
 # which also holds the release gate all of these share.
 
-defmodule ElixirRunner.WorkflowsLoop do
+defmodule ElixirRunner.BoundedLoop do
   @moduledoc false
-  alias ElixirRunner.Workflows.Gate
+  alias ElixirRunner.Bounded.Gate
   alias Flezha.SDK.Ctx
 
   # The turn whose payload is this blocks while the release env is unset, so a
@@ -20,12 +20,12 @@ defmodule ElixirRunner.WorkflowsLoop do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
 
-    alias ElixirRunner.Workflows.Gate
+    alias ElixirRunner.Bounded.Gate
     alias Flezha.SDK.Ctx
 
     def name, do: "chat_turn"
-    def init_state(_), do: ElixirRunner.Workflows.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Workflows.Seen.insert(state, item)
+    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
 
     # The closing turn is not a turn of the conversation: it is not recorded,
     # and it ends the session with the number of turns the state holds.
@@ -133,7 +133,7 @@ defmodule ElixirRunner.WorkflowsLoop do
   for n <- 0..15 do
     Module.create(
       Module.concat(__MODULE__, "BenchS#{n}"),
-      ElixirRunner.Workflows.Step.durable_body("bench_s#{n}"),
+      ElixirRunner.Bounded.Step.durable_body("bench_s#{n}"),
       Macro.Env.location(__ENV__)
     )
   end
@@ -142,10 +142,10 @@ defmodule ElixirRunner.WorkflowsLoop do
 
   # -- classes --------------------------------------------------------------
 
-  defmodule ChatLoopWorkflow do
+  defmodule ChatLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "chat_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "chat_loop_bounded"
     def loop_mode, do: :per_input
 
     # A chat session ends itself on the turn `bye`; the duration backstop keeps
@@ -157,21 +157,21 @@ defmodule ElixirRunner.WorkflowsLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
+      |> into(ElixirRunner.BoundedLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.WorkflowsLoop.ChatReply)
+      |> into(ElixirRunner.BoundedLoop.ChatReply)
       |> sink("out")
     end
   end
 
   # The reply that blocks on the turn `reply-crash` while the release env is
-  # unset, after the root has committed: what `reply_block_loop_workflow`
+  # unset, after the root has committed: what `reply_block_loop_bounded`
   # crashes in.
   defmodule BlockingReply do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
 
-    alias ElixirRunner.Workflows.Gate
+    alias ElixirRunner.Bounded.Gate
     alias Flezha.SDK.Ctx
 
     def name, do: "blocking_reply"
@@ -186,10 +186,10 @@ defmodule ElixirRunner.WorkflowsLoop do
 
   # The chat loop with the block moved AFTER the root's commit, so a SIGKILL
   # lands between a root's `task_committed` and the pass's `iter_committed`.
-  defmodule ReplyBlockLoopWorkflow do
+  defmodule ReplyBlockLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "reply_block_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "reply_block_loop_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
@@ -199,16 +199,16 @@ defmodule ElixirRunner.WorkflowsLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
+      |> into(ElixirRunner.BoundedLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.WorkflowsLoop.BlockingReply)
+      |> into(ElixirRunner.BoundedLoop.BlockingReply)
       |> sink("out")
     end
   end
 
   # A durable per-input loop keyed on its entry edge by the text before the
   # first `:`, so one Cell counts one symbol's messages and emits
-  # `<symbol>:<count>`: the shape a partition group of workflow members takes.
+  # `<symbol>:<count>`: the shape a partition group of bounded operator members takes.
   defmodule KeyedLoopCount do
     @moduledoc false
     @behaviour Flezha.SDK.Tasklet
@@ -226,10 +226,10 @@ defmodule ElixirRunner.WorkflowsLoop do
     end
   end
 
-  defmodule KeyedLoopWorkflow do
+  defmodule KeyedLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "keyed_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "keyed_loop_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
@@ -240,8 +240,8 @@ defmodule ElixirRunner.WorkflowsLoop do
       c
       |> input("trades")
       |> key_by(&ElixirRunner.Key.prefix/1)
-      |> into(ElixirRunner.WorkflowsLoop.KeyedLoopCount)
-      |> sink("keyed_loop_workflow_out")
+      |> into(ElixirRunner.BoundedLoop.KeyedLoopCount)
+      |> sink("keyed_loop_bounded_out")
     end
   end
 
@@ -249,10 +249,10 @@ defmodule ElixirRunner.WorkflowsLoop do
   # nothing writes a Cell record and the controller ships no restore on a
   # rehydrating bind: the instance's task-journal reaches the driver only if it
   # rides the bind itself.
-  defmodule StatelessLoopWorkflow do
+  defmodule StatelessLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "stateless_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "stateless_loop_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
@@ -262,15 +262,15 @@ defmodule ElixirRunner.WorkflowsLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.WorkflowsLoop.ChatReply)
+      |> into(ElixirRunner.BoundedLoop.ChatReply)
       |> sink("out")
     end
   end
 
-  defmodule ChatRewindWorkflow do
+  defmodule ChatRewindBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "chat_rewind_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "chat_rewind_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     def max_duration_ms, do: 600_000
@@ -280,17 +280,17 @@ defmodule ElixirRunner.WorkflowsLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.WorkflowsLoop.ChatTurn)
+      |> into(ElixirRunner.BoundedLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.WorkflowsLoop.ChatReplyUndoable)
+      |> into(ElixirRunner.BoundedLoop.ChatReplyUndoable)
       |> sink("out")
     end
   end
 
-  defmodule BenchLoopWorkflow do
+  defmodule BenchLoopBounded do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "bench_loop_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "bench_loop_bounded"
     def loop_mode, do: :per_input
     def self_terminating?, do: false
     # A soak outlives the chat loop's 600 s.
@@ -301,9 +301,9 @@ defmodule ElixirRunner.WorkflowsLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.WorkflowsLoop.BenchTurn)
+      |> into(ElixirRunner.BoundedLoop.BenchTurn)
       |> named("mid")
-      |> into(ElixirRunner.WorkflowsLoop.ChatReply)
+      |> into(ElixirRunner.BoundedLoop.ChatReply)
       |> sink("out")
     end
   end
@@ -329,54 +329,54 @@ defmodule ElixirRunner.WorkflowsLoop do
 
   defmodule BenchChain1 do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "bench_chain_1"
 
     def channels(c),
-      do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(1))
+      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(1))
   end
 
   defmodule BenchChain4 do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "bench_chain_4"
 
     def channels(c),
-      do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
+      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(4))
   end
 
   defmodule BenchChain16 do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "bench_chain_16"
 
     def channels(c),
-      do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(16))
+      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(16))
   end
 
   defmodule BenchChainOptOut4 do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
+    @behaviour Flezha.SDK.BoundedOperator
     def factory_id, do: "bench_chain_optout_4"
     def persistence_enabled, do: false
 
     def channels(c),
-      do: ElixirRunner.WorkflowsLoop.chain(c, ElixirRunner.WorkflowsLoop.bench_steps(4))
+      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(4))
   end
 
-  @doc "The durable-loop and bench workflow classes this runner advertises."
+  @doc "The durable-loop and bench bounded classes this runner advertises."
   def all do
     [
-      ChatLoopWorkflow,
-      StatelessLoopWorkflow,
-      KeyedLoopWorkflow,
-      ChatRewindWorkflow,
-      ReplyBlockLoopWorkflow,
+      ChatLoopBounded,
+      StatelessLoopBounded,
+      KeyedLoopBounded,
+      ChatRewindBounded,
+      ReplyBlockLoopBounded,
       BenchChain1,
       BenchChain4,
       BenchChain16,
       BenchChainOptOut4,
-      BenchLoopWorkflow
+      BenchLoopBounded
     ]
   end
 

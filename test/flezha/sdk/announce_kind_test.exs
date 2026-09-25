@@ -38,23 +38,23 @@ defmodule Flezha.SDK.AnnounceKindTest do
     end
   end
 
-  defmodule StreamClass do
+  defmodule UnboundedClass do
     @moduledoc false
-    @behaviour Flezha.SDK.StreamOperative
-    def factory_id, do: "announce_stream"
+    @behaviour Flezha.SDK.UnboundedOperator
+    def factory_id, do: "announce_unbounded"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
   end
 
-  defmodule WorkflowClass do
+  defmodule BoundedClass do
     @moduledoc false
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "announce_workflow"
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "announce_bounded"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
   end
 
   defmodule Late do
     @moduledoc false
-    use Flezha.SDK.WorkflowOperative, factory_id: "announce_late", sink: "out"
+    use Flezha.SDK.BoundedOperator, factory_id: "announce_late", sink: "out"
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -84,8 +84,8 @@ defmodule Flezha.SDK.AnnounceKindTest do
     handle =
       "announce_ns"
       |> Flezha.SDK.create_runner()
-      |> Flezha.SDK.register_factory(StreamClass)
-      |> Flezha.SDK.register_factory(WorkflowClass)
+      |> Flezha.SDK.register_factory(UnboundedClass)
+      |> Flezha.SDK.register_factory(BoundedClass)
       |> Flezha.SDK.start()
 
     assert %Flezha.SDK{} = handle
@@ -94,16 +94,16 @@ defmodule Flezha.SDK.AnnounceKindTest do
     assert_receive {:handshake, payload}, 5_000
 
     assert Enum.map(payload["factories"], &{&1["id"], &1["kind"]}) == [
-             {"announce_stream", "stream"},
-             {"announce_workflow", "workflow"}
+             {"announce_unbounded", "unbounded"},
+             {"announce_bounded", "bounded"}
            ]
 
     assert %Flezha.SDK{} = Flezha.SDK.register_factory(handle, Late)
 
     assert Enum.map(update_factories().factories, &{&1.id, &1.kind}) == [
-             {"announce_stream", "stream"},
-             {"announce_workflow", "workflow"},
-             {"announce_late", "workflow"}
+             {"announce_unbounded", "unbounded"},
+             {"announce_bounded", "bounded"},
+             {"announce_late", "bounded"}
            ]
   end
 

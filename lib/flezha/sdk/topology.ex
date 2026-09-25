@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, StreamOperative, WorkflowOperative}
+  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, UnboundedOperator, BoundedOperator}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -72,12 +72,12 @@ defmodule Flezha.SDK.Topology do
   @doc """
   Compile `module`'s `channels/1` into a topology. Both kinds author their graph
   there on the same builder, so they compile through the same function, and
-  `kind` (`:stream` or `:workflow`, the class's own) decides which class facts
+  `kind` (`:unbounded` or `:bounded`, the class's own) decides which class facts
   apply.
   """
-  @spec build(module(), :stream | :workflow) ::
+  @spec build(module(), :unbounded | :bounded) ::
           {:ok, t()} | {:error, {:invalid_topology, [term()]}}
-  def build(module, kind \\ :stream) do
+  def build(module, kind \\ :unbounded) do
     c = Channels.new()
 
     case declare_on(module, c) do
@@ -124,7 +124,7 @@ defmodule Flezha.SDK.Topology do
          routes: routes,
          order: Map.keys(acc.nodes),
          keyless?: keyless?(acc, node_mode),
-         persistence_enabled?: StreamOperative.persistence_enabled?(module),
+         persistence_enabled?: UnboundedOperator.persistence_enabled?(module),
          sleep_when_idle?: sleeps?(module, kind),
          compact_after_bytes: compact_after_bytes(acc),
          effectively_once?: acc.tier.effectively_once,
@@ -409,7 +409,7 @@ defmodule Flezha.SDK.Topology do
       changeful_identity(acc)
   end
 
-  # One namespace per operative for channels and one for node identities: a
+  # One namespace per operator for channels and one for node identities: a
   # derived name, a `named/2` override and an entry name all collide here. A
   # name also has to fit the frame it rides, and this is where the author can
   # still be told.
@@ -587,35 +587,35 @@ defmodule Flezha.SDK.Topology do
   # A sleeping instance is evicted and restored from its durable state, so a
   # class of either kind that keeps none cannot sleep.
   defp sleep_facts(module, kind) do
-    if sleeps?(module, kind) and not StreamOperative.persistence_enabled?(module),
+    if sleeps?(module, kind) and not UnboundedOperator.persistence_enabled?(module),
       do: [{:SleepWithoutPersistence, mod_name(module)}],
       else: []
   end
 
-  defp sleeps?(module, :stream), do: StreamOperative.sleep_when_idle?(module)
-  defp sleeps?(module, :workflow), do: WorkflowOperative.knob(module, :sleep_when_idle)
+  defp sleeps?(module, :unbounded), do: UnboundedOperator.sleep_when_idle?(module)
+  defp sleeps?(module, :bounded), do: BoundedOperator.knob(module, :sleep_when_idle)
 
   # Each kind is judged on its own settings, and a setting of the other kind
   # is refused by its own name rather than by the rule that assumes its kind.
-  # A workflow commits stage by stage, so the tier, its checkpoint policy and
+  # A bounded operator commits stage by stage, so the tier, its checkpoint policy and
   # a correction window have nothing to act on there. `sync_durability` is a
-  # workflow knob: a stream class acknowledges at input rates, where a remote
+  # bounded operator knob: an unbounded class acknowledges at input rates, where a remote
   # round trip per acknowledgement is not a guarantee it can keep, and this
   # SDK's stream behaviour has no such callback: declaring one is an authoring
   # error, not a knob nothing reads.
-  defp kind_facts(_module, :workflow, %{tier: tier}, name) do
+  defp kind_facts(_module, :bounded, %{tier: tier}, name) do
     for {true, refusal} <- [
-          {tier.effectively_once, :EffectivelyOnceOnWorkflow},
-          {tier.checkpoint != nil, :CheckpointOnWorkflow},
-          {tier.correction != nil, :CorrectionWindowOnWorkflow}
+          {tier.effectively_once, :EffectivelyOnceOnBounded},
+          {tier.checkpoint != nil, :CheckpointOnBounded},
+          {tier.correction != nil, :CorrectionWindowOnBounded}
         ],
         do: {refusal, name}
   end
 
-  defp kind_facts(module, :stream, acc, name) do
+  defp kind_facts(module, :unbounded, acc, name) do
     sync =
       if Tasklet.exports?(module, :sync_durability, 0) and module.sync_durability(),
-        do: [{:SyncDurabilityOnStream, name}],
+        do: [{:SyncDurabilityOnUnbounded, name}],
         else: []
 
     sync ++ checkpoint_facts(acc, name) ++ correction_facts(acc, name)
@@ -703,7 +703,7 @@ defmodule Flezha.SDK.Topology do
 
   @doc """
   The retry ladder a node's Cells climb: what the edges into it declare, the
-  shared defaults where they are silent. A stream's Cells and a workflow
+  shared defaults where they are silent. An unbounded operator's Cells and a bounded operator
   stage's both read it here, so the two kinds cannot climb different ladders.
   """
   @spec retry_ladder(t(), reference()) :: %{

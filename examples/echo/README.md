@@ -14,8 +14,8 @@ Three files, one for each part the guides describe:
 | File | Part | What it does |
 |---|---|---|
 | `lib/echo/tasklet.ex` | the tasklet | the processing stage: prefixes each message |
-| `lib/echo/operative.ex` | the operative | the graph: `in` feeds the tasklet, output lands on `out` |
-| `lib/echo/application.ex` | the runner | this node: offers the operative and waits |
+| `lib/echo/operator.ex` | the operator | the graph: `in` feeds the tasklet, output lands on `out` |
+| `lib/echo/application.ex` | the runner | this node: offers the operator and waits |
 
 ## Run it
 
@@ -31,8 +31,8 @@ mix run --no-halt
 Then, from another terminal:
 
 ```sh
-flz operative start echo --id my_echo
-flz operative send my_echo --text 'hello world' --await 2000
+flz operator start echo --id my_echo
+flz operator send my_echo --text 'hello world' --await 2000
 ```
 
 ```

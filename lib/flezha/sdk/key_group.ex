@@ -2,7 +2,7 @@ defmodule Flezha.SDK.KeyGroup do
   @moduledoc """
   Key groups: the hash that puts a routing key in one of #{256} groups, and the
   partition key-group range twin of the Rust `KeyGroupRange`, decoded from
-  `AddOperative` fields 7–10. `partition_count < 2` is unpartitioned (one
+  `AddOperator` fields 7–10. `partition_count < 2` is unpartitioned (one
   comparison).
 
   The hash is FNV-1a-128 with the constants frozen by every SDK's `StableId`.
@@ -55,7 +55,7 @@ defmodule Flezha.SDK.KeyGroup do
   def group_of(key) when is_binary(key), do: band(fnv1a128(key), @key_groups - 1)
 
   @doc """
-  Why a workflow class that reads one message cannot run partitioned: the
+  Why a bounded class that reads one message cannot run partitioned: the
   sentence the SDK's bind and the controller's preflight both refuse with.
   """
   @spec one_message_refusal(String.t(), atom(), pos_integer()) :: String.t()

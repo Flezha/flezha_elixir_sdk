@@ -63,7 +63,7 @@ defmodule Flezha.SDK.Wire do
   def payload_id_delete_cell_state(), do: @payload_id_delete_cell_state
 
   @doc """
-  Payload-ids reserved on the data stream for the workflow-operative saga
+  Payload-ids reserved on the data stream for the bounded-operator saga
   change-log (SDK → controller), same frame layout as `cell_state_change`:
   `compensation_intent` records a tasklet's completion (so a crash
   mid-compensation knows what to undo) and `compensation_done` records a
@@ -90,33 +90,33 @@ defmodule Flezha.SDK.Wire do
   Encode a `cell_id` triple into its on-wire byte form.
   """
   @spec encode_cell_id(binary(), binary(), binary()) :: binary()
-  def encode_cell_id(operative_class, tasklet_id, cell_key)
-      when is_binary(operative_class) and is_binary(tasklet_id) and is_binary(cell_key) do
-    rc_len = byte_size(operative_class)
+  def encode_cell_id(operator_class, tasklet_id, cell_key)
+      when is_binary(operator_class) and is_binary(tasklet_id) and is_binary(cell_key) do
+    rc_len = byte_size(operator_class)
     sh_len = byte_size(tasklet_id)
     pk_len = byte_size(cell_key)
 
     if rc_len > 255 or sh_len > 255 do
-      raise ArgumentError, "operative_class / tasklet_id must be ≤ 255 bytes"
+      raise ArgumentError, "operator_class / tasklet_id must be ≤ 255 bytes"
     end
 
     if pk_len > 0xFFFF do
       raise ArgumentError, "cell_key must be ≤ 65535 bytes"
     end
 
-    <<rc_len::8, operative_class::binary, sh_len::8, tasklet_id::binary, pk_len::16-big,
+    <<rc_len::8, operator_class::binary, sh_len::8, tasklet_id::binary, pk_len::16-big,
       cell_key::binary>>
   end
 
   @doc """
-  Decode the on-wire `cell_id_bytes` into `{operative_class, tasklet_id, cell_key}`.
+  Decode the on-wire `cell_id_bytes` into `{operator_class, tasklet_id, cell_key}`.
   """
   @spec decode_cell_id(binary()) :: {:ok, {binary(), binary(), binary()}} | {:error, term()}
   def decode_cell_id(
-        <<rc_len::8, operative_class::binary-size(rc_len), sh_len::8,
+        <<rc_len::8, operator_class::binary-size(rc_len), sh_len::8,
           tasklet_id::binary-size(sh_len), pk_len::16-big, cell_key::binary-size(pk_len)>>
       ) do
-    {:ok, {operative_class, tasklet_id, cell_key}}
+    {:ok, {operator_class, tasklet_id, cell_key}}
   end
 
   def decode_cell_id(_), do: {:error, :bad_cell_id}
@@ -147,7 +147,7 @@ defmodule Flezha.SDK.Wire do
   Decode an inbound `cell_state_change` / `cell_state_snapshot`
   frame.
 
-  Returns `{:ok, %{cell_id: {operative_class, tasklet_id, cell_key},
+  Returns `{:ok, %{cell_id: {operator_class, tasklet_id, cell_key},
                    seq: u64, header: <<_::128>>, body: bytes}}` or an error.
   Verifies the trailing crc32 over the body.
   """

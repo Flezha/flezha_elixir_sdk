@@ -1,8 +1,8 @@
-defmodule Flezha.SDK.Workflow.SpecTest do
+defmodule Flezha.SDK.Bounded.SpecTest do
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.{Channels, Ctx, Topology}
-  alias Flezha.SDK.Workflow.Spec
+  alias Flezha.SDK.Bounded.Spec
 
   # --- fixtures ---
 
@@ -46,9 +46,9 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule LinearWorkflow do
-    @behaviour Flezha.SDK.WorkflowOperative
-    def factory_id, do: "linear_workflow"
+  defmodule LinearBounded do
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "linear_bounded"
 
     def channels(c) do
       c
@@ -59,22 +59,22 @@ defmodule Flezha.SDK.Workflow.SpecTest do
   end
 
   defp issues(module) do
-    assert {:error, {:invalid_workflow, issues}} = Spec.build(module)
+    assert {:error, {:invalid_bounded, issues}} = Spec.build(module)
     Enum.map(issues, &elem(&1, 0))
   end
 
   # --- the tasklet DAG ---
 
   test "a class silent on every knob reads each default" do
-    assert {:ok, spec} = Spec.build(LinearWorkflow)
-    assert spec.factory_id == "linear_workflow"
+    assert {:ok, spec} = Spec.build(LinearBounded)
+    assert spec.factory_id == "linear_bounded"
     assert spec.knobs.loop_mode == :once
     assert spec.knobs.rollback_mode == :all_or_nothing
     assert spec.knobs.persistence_enabled
   end
 
   test "a structured class builds a Kahn-ordered DAG rooted at the entry's consumer" do
-    assert {:ok, spec} = Spec.build(LinearWorkflow)
+    assert {:ok, spec} = Spec.build(LinearBounded)
     assert [root, tail] = spec.dag.order
     assert %{"in" => chain} = spec.dag.chains
     assert chain.roots == [root]
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
   test "task_idx numbering is the declaration's, not the ref map's" do
     orders =
       for _ <- 1..8 do
-        assert {:ok, spec} = Spec.build(LinearWorkflow)
+        assert {:ok, spec} = Spec.build(LinearBounded)
         Enum.map(spec.dag.order, &spec.topology.node_modules[&1])
       end
 
@@ -100,7 +100,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
 
   # --- class-fact refusals ---
 
-  test "NoWorkflowBody: no channels/1" do
+  test "NoBoundedBody: no channels/1" do
     defmodule Bodyless do
       def factory_id, do: "bodyless"
     end
@@ -111,8 +111,8 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def run(_ctx, _args), do: :ok
     end
 
-    assert :NoWorkflowBody in issues(Bodyless)
-    assert :NoWorkflowBody in issues(OneFunction)
+    assert :NoBoundedBody in issues(Bodyless)
+    assert :NoBoundedBody in issues(OneFunction)
   end
 
   test "ExternalStopOnly — not self-terminating and no duration cap" do
@@ -141,37 +141,37 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert {:error, {:invalid_workflow, issues}} = Spec.build(ForeverLoop)
+    assert {:error, {:invalid_bounded, issues}} = Spec.build(ForeverLoop)
     assert {:InvalidMode, "forever_loop", :loop_mode, :forever} in issues
     assert {:InvalidMode, "forever_loop", :rollback_mode, :best_effort} in issues
   end
 
   # --- a setting of the other kind ---
 
-  # A workflow class writes the same builder a stream does, so what only a
+  # A bounded class writes the same builder an unbounded operator does, so what only a
   # stream carries is refused by its own name, carried as the topology's.
   defp kind_refusals(module) do
-    assert {:error, {:invalid_workflow, issues}} = Spec.build(module)
+    assert {:error, {:invalid_bounded, issues}} = Spec.build(module)
     for {:Topology, issue} <- issues, do: elem(issue, 0)
   end
 
-  test "the tier, a checkpoint setting and a correction window on a workflow are refused by name" do
-    defmodule TierWorkflow do
-      def factory_id, do: "tier_workflow"
+  test "the tier, a checkpoint setting and a correction window on a bounded operator are refused by name" do
+    defmodule TierBounded do
+      def factory_id, do: "tier_bounded"
 
       def channels(c),
         do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule CheckpointWorkflow do
-      def factory_id, do: "checkpoint_workflow"
+    defmodule CheckpointBounded do
+      def factory_id, do: "checkpoint_bounded"
 
       def channels(c),
         do: c |> Channels.checkpoint_every(500) |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule CorrectionWorkflow do
-      def factory_id, do: "correction_workflow"
+    defmodule CorrectionBounded do
+      def factory_id, do: "correction_bounded"
 
       def channels(c),
         do:
@@ -181,79 +181,79 @@ defmodule Flezha.SDK.Workflow.SpecTest do
           |> Channels.into(TailTask)
     end
 
-    assert kind_refusals(TierWorkflow) == [:EffectivelyOnceOnWorkflow]
-    # Judged as the workflow's own setting, not by the stream rule that needs the tier.
-    assert kind_refusals(CheckpointWorkflow) == [:CheckpointOnWorkflow]
-    assert kind_refusals(CorrectionWorkflow) == [:CorrectionWindowOnWorkflow]
+    assert kind_refusals(TierBounded) == [:EffectivelyOnceOnBounded]
+    # Judged as the bounded operator's own setting, not by the stream rule that needs the tier.
+    assert kind_refusals(CheckpointBounded) == [:CheckpointOnBounded]
+    assert kind_refusals(CorrectionBounded) == [:CorrectionWindowOnBounded]
   end
 
-  test "synchronous durability on a stream is refused, and a stream keeps its tier" do
-    defmodule SyncStream do
-      @behaviour Flezha.SDK.StreamOperative
-      def factory_id, do: "sync_stream"
+  test "synchronous durability on an unbounded operator is refused, and it keeps its tier" do
+    defmodule SyncUnbounded do
+      @behaviour Flezha.SDK.UnboundedOperator
+      def factory_id, do: "sync_unbounded"
       def sync_durability, do: true
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule TierStream do
-      @behaviour Flezha.SDK.StreamOperative
-      def factory_id, do: "tier_stream"
+    defmodule TierUnbounded do
+      @behaviour Flezha.SDK.UnboundedOperator
+      def factory_id, do: "tier_unbounded"
 
       def channels(c),
         do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert {:error, {:invalid_topology, [{:SyncDurabilityOnStream, _}]}} =
-             Topology.build(SyncStream)
+    assert {:error, {:invalid_topology, [{:SyncDurabilityOnUnbounded, _}]}} =
+             Topology.build(SyncUnbounded)
 
-    assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierStream)
+    assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierUnbounded)
   end
 
   test "sleeping without persistence is refused for either kind, and both switches are declared" do
-    defmodule SleeplessStream do
-      use Flezha.SDK.StreamOperative,
-        factory_id: "sleepless_stream",
+    defmodule SleeplessUnbounded do
+      use Flezha.SDK.UnboundedOperator,
+        factory_id: "sleepless_unbounded",
         persistence_enabled: false,
         sleep_when_idle: true
 
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
-    defmodule SleeplessWorkflow do
-      use Flezha.SDK.WorkflowOperative,
-        factory_id: "sleepless_workflow",
+    defmodule SleeplessBounded do
+      use Flezha.SDK.BoundedOperator,
+        factory_id: "sleepless_bounded",
         persistence_enabled: false,
         sleep_when_idle: true
 
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
-    defmodule SleepingStream do
-      use Flezha.SDK.StreamOperative, factory_id: "sleeping_stream", sleep_when_idle: true
+    defmodule SleepingUnbounded do
+      use Flezha.SDK.UnboundedOperator, factory_id: "sleeping_unbounded", sleep_when_idle: true
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
-    defmodule OptedOutWorkflow do
-      use Flezha.SDK.WorkflowOperative,
-        factory_id: "opted_out_workflow",
+    defmodule OptedOutBounded do
+      use Flezha.SDK.BoundedOperator,
+        factory_id: "opted_out_bounded",
         persistence_enabled: false
 
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
     assert {:error, {:invalid_topology, [{:SleepWithoutPersistence, _}]}} =
-             Topology.build(SleeplessStream)
+             Topology.build(SleeplessUnbounded)
 
-    assert kind_refusals(SleeplessWorkflow) == [:SleepWithoutPersistence]
+    assert kind_refusals(SleeplessBounded) == [:SleepWithoutPersistence]
 
-    assert {:ok, sleeping} = Topology.build(SleepingStream)
+    assert {:ok, sleeping} = Topology.build(SleepingUnbounded)
     assert %{"sleep_when_idle" => "true"} = declared = Flezha.SDK.Declarations.for(sleeping)
     refute Map.has_key?(declared, "persistent")
 
-    assert {:ok, durable} = Spec.build(LinearWorkflow)
+    assert {:ok, durable} = Spec.build(LinearBounded)
     assert %{"sleep_when_idle" => "true"} = Flezha.SDK.Declarations.for(durable)
 
-    assert {:ok, opted_out} = Spec.build(OptedOutWorkflow)
+    assert {:ok, opted_out} = Spec.build(OptedOutBounded)
     declared = Flezha.SDK.Declarations.for(opted_out)
     assert declared["persistent"] == "false"
     refute Map.has_key?(declared, "sleep_when_idle")
@@ -340,9 +340,9 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     assert length(spec.dag.parents[join]) == 2
   end
 
-  test "a keyed edge into a keyless tasklet makes it dynamic, as a stream's" do
-    defmodule DynamicWorkflow do
-      def factory_id, do: "dynamic_workflow"
+  test "a keyed edge into a keyless tasklet makes it dynamic, as an unbounded operator's" do
+    defmodule DynamicBounded do
+      def factory_id, do: "dynamic_bounded"
 
       def channels(c) do
         c
@@ -353,21 +353,21 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       end
     end
 
-    assert {:ok, spec} = Spec.build(DynamicWorkflow)
+    assert {:ok, spec} = Spec.build(DynamicBounded)
     tail = Enum.find(spec.dag.order, &(spec.topology.node_modules[&1] == TailTask))
     assert spec.topology.node_mode[tail] == :dynamic
   end
 
   test "a static-mode tasklet is not a dynamic one" do
-    defmodule StaticWorkflow do
-      def factory_id, do: "static_workflow"
+    defmodule StaticBounded do
+      def factory_id, do: "static_bounded"
 
       def channels(c) do
         c |> Channels.input("in") |> Channels.into(StaticTask)
       end
     end
 
-    assert {:ok, spec} = Spec.build(StaticWorkflow)
+    assert {:ok, spec} = Spec.build(StaticBounded)
     assert Map.values(spec.topology.node_mode) == [:static]
   end
 
@@ -424,7 +424,7 @@ defmodule Flezha.SDK.Workflow.SpecTest do
       end
     end
 
-    assert {:error, {:invalid_workflow, issues}} = Spec.build(BadTopology)
+    assert {:error, {:invalid_bounded, issues}} = Spec.build(BadTopology)
     assert [{:Topology, {:KeyByOnUnkeyableTarget, _}}] = issues
   end
 
@@ -445,11 +445,11 @@ defmodule Flezha.SDK.Workflow.SpecTest do
     end
 
     found = issues(ManyProblems)
-    assert :NoWorkflowBody in found
+    assert :NoBoundedBody in found
     assert :ExternalStopOnly in found
 
-    assert {:error, {:invalid_workflow, issues}} = Spec.build(TieredStopOnly)
+    assert {:error, {:invalid_bounded, issues}} = Spec.build(TieredStopOnly)
     assert {:ExternalStopOnly, "tiered_stop_only"} in issues
-    assert {:Topology, {:EffectivelyOnceOnWorkflow, inspect(TieredStopOnly)}} in issues
+    assert {:Topology, {:EffectivelyOnceOnBounded, inspect(TieredStopOnly)}} in issues
   end
 end

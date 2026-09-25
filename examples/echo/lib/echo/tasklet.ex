@@ -1,10 +1,10 @@
 defmodule Echo.Tasklet do
   @moduledoc """
-  A processing stage of the operative's graph, run once per message. This one
+  A processing stage of the operator's graph, run once per message. This one
   prefixes the input and emits the result.
 
   With no `state` block, nothing is kept between messages and nothing is
-  journaled. Where the result goes is not decided here: the operative decides
+  journaled. Where the result goes is not decided here: the operator decides
   that, so the graph can be rewired without touching this module.
   """
 

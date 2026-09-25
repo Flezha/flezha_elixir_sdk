@@ -16,7 +16,7 @@ defmodule Flezha.SDK.Cell.Clock do
 
   @doc """
   The `timers` map a fresh Cell starts from, over what its slot held, with the
-  gate a workflow stage's due firings pass through.
+  gate a bounded stage's due firings pass through.
   """
   @spec seed(module(), map(), :settled | :held | nil) :: map()
   def seed(module, held, gate) do
@@ -86,7 +86,7 @@ defmodule Flezha.SDK.Cell.Clock do
     s
   end
 
-  @doc "Every armed ref cancelled: an eviction, or an Operative that has gone."
+  @doc "Every armed ref cancelled: an eviction, or an Operator that has gone."
   @spec disarm_all(State.t()) :: State.t()
   def disarm_all(%State{timers: timers} = s),
     do: Enum.reduce(Map.keys(timers.refs), s, &disarm(&2, &1))
@@ -120,7 +120,7 @@ defmodule Flezha.SDK.Cell.Clock do
 
   defp event(%State{} = s, event, count) do
     :telemetry.execute([:flezha, :sdk, :timers], %{count: count}, %{
-      operative_id: s.operative_id,
+      operator_id: s.operator_id,
       tasklet: s.module.name(),
       event: event
     })
