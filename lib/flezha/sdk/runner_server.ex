@@ -691,6 +691,9 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
+  # Built once per runner process and presented on every connect it makes, so
+  # the `incarnation` minted here tells the controller a reconnect of this
+  # process, which still runs its operators, from a restart that runs none.
   defp handshake_payload(namespace, factories, stable_id) do
     %{
       "namespace" => namespace,
@@ -699,7 +702,8 @@ defmodule Flezha.SDK.RunnerServer do
         Enum.map(factories, fn {id, desc, kind} ->
           %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang(), "kind" => kind}
         end),
-      "stable_id" => stable_id
+      "stable_id" => stable_id,
+      "incarnation" => "#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}"
     }
     |> put_namespace_secret(Knob.get(:namespace_secret))
   end
