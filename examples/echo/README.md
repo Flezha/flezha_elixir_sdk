@@ -15,7 +15,7 @@ Three files, one for each part the guides describe:
 |---|---|---|
 | `lib/echo/tasklet.ex` | the tasklet | the processing stage: prefixes each message |
 | `lib/echo/operator.ex` | the operator | the graph: `in` feeds the tasklet, output lands on `out` |
-| `lib/echo/application.ex` | the runner | this node: offers the operator and waits |
+| `lib/echo/application.ex` | the runner | this node: registers the echo factory and waits |
 
 ## Run it
 
