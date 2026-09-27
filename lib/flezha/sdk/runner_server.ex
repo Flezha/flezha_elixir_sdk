@@ -366,7 +366,15 @@ defmodule Flezha.SDK.RunnerServer do
   # write is.
   def handle_cast({:spawn, caller, %Spawn{} = spawn, payload, if_running}, %State{} = s) do
     %Spawn{reference_id: id, instance_id: instance_id, factory_id: factory_id} = spawn
-    command = Codec.spawn_bounded_request_command(instance_id, factory_id, payload, if_running)
+
+    command =
+      Codec.spawn_bounded_request_command(
+        instance_id,
+        factory_id,
+        payload,
+        if_running,
+        spawn.identity
+      )
 
     if s.control_handle != nil and ship_request(s, id, command) == :ok do
       Process.send_after(self(), {:spawn_deadline, id}, spawn.deadline, abs: true)

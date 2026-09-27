@@ -432,6 +432,81 @@ defmodule ElixirRunner.CheckpointStoreTask do
   end
 end
 
+# -- tier_chain ---------------------------------------------------------------
+
+# An effectively-once stream of two tasklets: `tier_relay` counts what it
+# relays and passes each `key:value` on; `tier_tally` counts each key's inputs
+# and emits `key=count`. Until the release env is set the tally fails the
+# value `hold` and keeps retrying it, so a runner killed there has made the
+# relay's record durable and not the tally's.
+defmodule ElixirRunner.TierRelayTask do
+  @moduledoc false
+  @behaviour Flezha.SDK.Tasklet
+
+  alias Flezha.SDK.Ctx
+
+  def name, do: "tier_relay"
+  def init_state(_), do: 0
+  def apply_change(count, :relayed), do: count + 1
+
+  def run(input, count, ctx) do
+    count = Ctx.apply(ctx, count, :relayed)
+    Ctx.emit(ctx, input)
+    {:ok, count}
+  end
+end
+
+defmodule ElixirRunner.TierTallyTask do
+  @moduledoc false
+  @behaviour Flezha.SDK.Tasklet
+
+  alias Flezha.Bench.TierStoreTask
+  alias Flezha.SDK.Ctx
+
+  def name, do: "tier_tally"
+  def init_state(_), do: 0
+  def apply_change(count, :tallied), do: count + 1
+
+  def run(input, count, ctx) do
+    case TierStoreTask.split(input) do
+      {key, "hold"} ->
+        if System.get_env("FLEZHA_BOUNDED_E2E_RELEASE"),
+          do: tally(key, count, ctx),
+          else: {:error, "held until released"}
+
+      {key, _value} ->
+        tally(key, count, ctx)
+    end
+  end
+
+  defp tally(key, count, ctx) do
+    count = Ctx.apply(ctx, count, :tallied)
+    Ctx.emit_keyed(ctx, key, "#{key}=#{count}")
+    {:ok, count}
+  end
+end
+
+defmodule ElixirRunner.TierChainOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.UnboundedOperator
+  def factory_id, do: "tier_chain"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> effectively_once()
+    |> input("input")
+    |> on_full(:drop_nothing)
+    |> into(ElixirRunner.TierRelayTask)
+    |> key_by(&(&1 |> Flezha.Bench.TierStoreTask.split() |> elem(0)))
+    |> retry_max(1_000)
+    |> into(ElixirRunner.TierTallyTask)
+    |> keyed()
+    |> sink("sink")
+  end
+end
+
 defmodule ElixirRunner.CheckpointStoreOp do
   @moduledoc false
   @behaviour Flezha.SDK.UnboundedOperator
@@ -554,6 +629,7 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.SchemaEvolutionV1Op,
       ElixirRunner.SchemaEvolutionV2Op,
       ElixirRunner.SessionTimeoutOp,
+      ElixirRunner.TierChainOp,
       ElixirRunner.CheckpointStoreOp,
       ElixirRunner.CheckpointBatchedOp,
       ElixirRunner.CandleOp

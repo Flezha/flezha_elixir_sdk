@@ -27,12 +27,14 @@ defmodule Flezha.SDK.Spawn do
     :runner,
     :deadline,
     :result,
+    identity: "",
     claimed?: false
   ]
 
   @typedoc """
   A request's handle. `instance_id` is the caller's id, or `""` when the
-  controller is to generate one. `result` is set when the answer was known
+  controller is to generate one; `identity` names the request across a re-run
+  of the input that asked, `""` for none. `result` is set when the answer was known
   without asking: a replay, or no runner. `deadline` is a monotonic millisecond
   shared with the runner, which settles the request there. `claimed?` is read
   on the runner's copy: whether a reader asked for the answer before it arrived.
@@ -60,15 +62,16 @@ defmodule Flezha.SDK.Spawn do
              | :unavailable}
 
   @doc false
-  @spec request(pid() | nil, boolean(), String.t(), binary(), [option()]) :: t()
-  def request(runner, replay?, factory_id, payload, opts)
+  @spec request(pid() | nil, boolean(), String.t(), binary(), [option()], String.t()) :: t()
+  def request(runner, replay?, factory_id, payload, opts, identity)
       when is_binary(factory_id) and is_binary(payload) and is_list(opts) do
     {instance_id, if_running} = options!(opts)
 
     handle = %__MODULE__{
       reference_id: "spawn-bounded-#{instance_id}-#{System.unique_integer([:positive])}",
       instance_id: instance_id,
-      factory_id: factory_id
+      factory_id: factory_id,
+      identity: identity
     }
 
     cond do

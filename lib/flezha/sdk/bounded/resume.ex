@@ -210,9 +210,11 @@ defmodule Flezha.SDK.Bounded.Resume do
         do: {task_idx, {nil, result}}
   end
 
+  # The cells the tasklet ran in the resumed iteration: a loop commits it
+  # once per iteration, and a static tasklet may pick other cells each time.
   defp cells_ran(%{instance: %Instance{journal: journal}}, task_idx) do
     journal.committed_tasks
-    |> Enum.find(%{}, &(Map.get(&1, :task_idx) == task_idx))
+    |> Enum.find(%{}, &(&1.task_idx == task_idx and &1.iter == journal.iter))
     |> Map.get(:cells_ran, [])
   end
 end

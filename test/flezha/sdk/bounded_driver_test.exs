@@ -6,7 +6,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
   alias Flezha.SDK.Proto.RunnerCommands
-  alias Flezha.SDK.Bounded.{Driver, Resume, Spec}
+  alias Flezha.SDK.Bounded.{Driver, Instance, Resume, Spec}
 
   # --- fixtures ---
 
@@ -337,7 +337,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   test "a spawn naming an unbounded factory resolves factory_not_bounded" do
-    handle = Spawn.request(self(), false, "prices", "p", [])
+    handle = Spawn.request(self(), false, "prices", "p", [], "")
     assert_receive {:"$gen_cast", {:spawn, _caller, spawn, "p", :deliver}}
     Spawn.answer(self(), %{spawn | claimed?: true}, {"factory_not_bounded", ""}, "")
     assert Spawn.await(handle, 1_000) == {:error, {:factory_not_bounded, "prices"}}
@@ -522,6 +522,29 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     assert_receive {:shipped, {:iter_commit, %{consumed_offset: nil}}}, 5_000
     Driver.stop_bounded(driver)
     assert %{status: "cancelled"} = completion(drain())
+  end
+
+  test "a message the instance already took starts no pass" do
+    driver = start_loop(ChatLoop, park_idle_ms: 60_000)
+
+    Inbox.input(driver, "in", "turn", %{"flz.offset" => "3"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 3}}}, 5_000
+    Inbox.input(driver, "in", "turn", %{"flz.offset" => "3"})
+    Inbox.input(driver, "in", "turn", %{"flz.offset" => "4"})
+    assert_receive {:shipped, {:iter_commit, %{consumed_offset: 4}}}, 5_000
+    refute_received {:shipped, {:iter_commit, %{consumed_offset: 3}}}
+    Driver.stop_bounded(driver)
+  end
+
+  test "the journal's released offset is what the instance already took" do
+    assert {:ok, spec} = Spec.build(LinearFlow)
+    instance = Instance.new("wf", spec, journal: %Instance.Resume{released_offset: 5})
+    at = &%{"flz.offset" => Integer.to_string(&1)}
+
+    assert {:repeat, instance} = Instance.take(instance, at.(5))
+    assert {:ok, instance} = Instance.take(instance, at.(6))
+    assert {:repeat, instance} = Instance.take(instance, at.(6))
+    assert {:ok, _instance} = Instance.take(instance, %{})
   end
 
   # --- every message enters through the stream's entrance ---
@@ -1468,6 +1491,26 @@ defmodule Flezha.SDK.Bounded.DriverTest do
              Operators.add(s, partitioned_add("chat_loop"))
 
     assert Declarations.for(topologies["chat_loop"])["loop_mode"] == "per_input"
+  end
+
+  # KB-451: a committed tasklet's stage record carries the cells it ran in
+  # the resumed iteration, not in the first iteration that ran it.
+  test "a resumed iteration's committed tasklet reports the cells of that iteration" do
+    {:ok, spec} = Spec.build(TimerLoop)
+
+    journal = %Instance.Resume{
+      committed_task_idxs: [0],
+      iter: 1,
+      committed_tasks: [
+        %Instance.Committed{task_idx: 0, iter: 0, cells_ran: ["from-iter-0"]},
+        %Instance.Committed{task_idx: 0, iter: 1, cells_ran: ["from-iter-1"]}
+      ]
+    }
+
+    instance = Instance.new("resume_cells", spec, journal: journal)
+
+    assert [%{task_idx: 0, cells: ["from-iter-1"]}] =
+             Resume.completed_stages(%{instance: instance, spec: spec})
   end
 
   # "a" hashes to key group 100 and "BTC-USD" to 129, so partition 1 of 2

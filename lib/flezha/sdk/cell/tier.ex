@@ -10,13 +10,15 @@ defmodule Flezha.SDK.Cell.Tier do
 
   One invocation becomes ONE record: its changes, the plugin outputs it
   captures here rather than letting the router ship them, the offset it
-  consumed and its timer ops. The record is held only when the invocation also
-  produced an inter-tasklet output — never the Cell's queue, which the
-  router may be waiting on at that moment.
+  consumed, its timer ops and its inter-tasklet values. The record is held
+  only when the invocation also produced an inter-tasklet output — never the
+  Cell's queue, which the router may be waiting on at that moment. A
+  persistent Cell off the tier that took an offset settles through here too,
+  its plugin outputs left to the router.
   """
 
   alias Flezha.SDK.Cell.{Interval, Records, State}
-  alias Flezha.SDK.Hold
+  alias Flezha.SDK.{Hold, Record}
   alias Flezha.SDK.Operator.Routing
 
   # The end of a replayed slice, taken from the Cell's own queue in mailbox
@@ -129,6 +131,7 @@ defmodule Flezha.SDK.Cell.Tier do
       changes: facts.changes,
       timers: ops,
       outputs: capture_outputs(s, facts.emits),
+      edges: edge_records(s, facts.emits, offset),
       offset: offset,
       event_time: facts.event_time,
       checkpointed: facts.checkpointed?,
@@ -138,7 +141,7 @@ defmodule Flezha.SDK.Cell.Tier do
     # An invocation whose emits reach another tasklet holds its record until
     # the router reports every push admitted; one that reaches only sinks has
     # its outputs IN the record and ships at once.
-    hold_ref = if s.tier.edges? and facts.emits != [], do: make_ref()
+    hold_ref = if s.tier.on? and s.tier.edges? and facts.emits != [], do: make_ref()
     s = s |> Records.settle(effects, nil, hold_ref) |> arm_deadline()
     {s, hold_ref && {self(), hold_ref}}
   end
@@ -150,6 +153,7 @@ defmodule Flezha.SDK.Cell.Tier do
       changes: [],
       timers: ops,
       outputs: [],
+      edges: [],
       offset: offset,
       event_time: event_time,
       checkpointed: false,
@@ -182,6 +186,8 @@ defmodule Flezha.SDK.Cell.Tier do
   # The invocation's plugin outputs as the record carries them, through the
   # same key rule the router uses. No identity stamps: the controller derives
   # them at flush, and a host that also stamped would produce a second answer.
+  # Off the tier the router ships them.
+  defp capture_outputs(%State{tier: %{on?: false}}, _emits), do: []
   defp capture_outputs(%State{tier: %{sink_routes: []}}, _emits), do: []
   defp capture_outputs(%State{}, []), do: []
 
@@ -200,6 +206,25 @@ defmodule Flezha.SDK.Cell.Tier do
       }
     end
   end
+
+  # An inter-tasklet value rides the record that carries its producer's
+  # offset, so a restore can deliver it again to a consumer whose own records
+  # never took it. A bounded stage's values wait on its driver instead.
+  defp edge_records(%State{persistent?: true, tier: %{stage?: false} = tier}, emits, offset)
+       when is_integer(offset) do
+    for {value, _meta, _key} <- emits,
+        route <- tier.edge_routes,
+        out <- route.transform.(value) do
+      %{
+        channel: route.channel,
+        consumer: route.consumer,
+        origin: offset,
+        payload: Record.encode_body(out)
+      }
+    end
+  end
+
+  defp edge_records(%State{}, _emits, _offset), do: []
 
   # One `Process.send_after/3` per open interval — the same BEAM timer service
   # the Cell's own timers ride. A close that beats it leaves the message

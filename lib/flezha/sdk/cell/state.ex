@@ -49,12 +49,15 @@ defmodule Flezha.SDK.Cell.State do
     # through, whether it has an inter-tasklet edge, whether it is a bounded operator
     # stage's Cell and the records it wrote since its stage's last barrier, the
     # open interval, the consumed floor, the armed deadline, the records owed
-    # to an edge report, the declared correction policy and the replay slice
-    # buffered until its end marker.
+    # to an edge report, the declared correction policy, the replay slice
+    # buffered until its end marker, the edge routes whose values its records
+    # keep, the instance's processed-prefix ledger and the offsets it took
+    # whose holds wait for their records.
     tier: %{
       on?: false,
       checkpoint: nil,
       sink_routes: [],
+      edge_routes: [],
       edges?: false,
       stage?: false,
       written: nil,
@@ -63,7 +66,9 @@ defmodule Flezha.SDK.Cell.State do
       deadline: nil,
       owed: :queue.new(),
       correction: nil,
-      slice: []
+      slice: [],
+      prefix: nil,
+      unshipped: []
     },
     changeful?: false,
     persistent?: false,

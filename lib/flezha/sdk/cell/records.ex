@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Cell.Records do
 
   require Logger
 
-  alias Flezha.SDK.{Counters, Hold, Record, Timers}
+  alias Flezha.SDK.{Counters, Hold, Prefix, Record, Timers}
   alias Flezha.SDK.Cell.{Interval, State}
 
   @doc """
@@ -39,6 +39,11 @@ defmodule Flezha.SDK.Cell.Records do
           Interval.inputs(s.tier.staged) + length(s.tier.slice)
         )
 
+        for {_event_time, member} <- s.tier.slice,
+            do: Prefix.release(s.tier.prefix, member.offset)
+
+        Prefix.restored(s.tier.prefix)
+
         tier = %{
           s.tier
           | staged: Interval.clear(s.tier.staged),
@@ -54,7 +59,7 @@ defmodule Flezha.SDK.Cell.Records do
             change_seq: terminal + 1
         }
 
-        {:ok, write_slot(s), terminal, migrated}
+        {:ok, s |> write_slot() |> release_settled(), terminal, migrated}
 
       {:error, reason} ->
         {:error, reason}
@@ -110,6 +115,8 @@ defmodule Flezha.SDK.Cell.Records do
     # on the stream this identity chooses, never on the one this hold used.
     held = Enum.map(items, fn {key, body, meta, _route} -> {key, body, meta} end)
     hand_off(s, held ++ owed_delete(s, held))
+    # The Operator writes what was handed on ahead of any marker it sends.
+    Enum.each(s.tier.unshipped, &Prefix.release(s.tier.prefix, &1))
     if s.slots, do: :ets.delete(s.slots, s.identity)
     :ok
   end
@@ -155,7 +162,7 @@ defmodule Flezha.SDK.Cell.Records do
     s = %{s | tier: %{s.tier | staged: staged}}
 
     case shipped do
-      nil -> write_slot(s)
+      nil -> write_slot(owe(s, hold_ref, nil))
       record -> ship_effect(s, record, dlq, hold_ref)
     end
   end
@@ -178,16 +185,21 @@ defmodule Flezha.SDK.Cell.Records do
 
   @doc """
   Ship the head of the owed FIFO: the record whose inter-tasklet pushes the
-  router has now delivered. The router reports in the order it was cast, so the
-  head is always the reported one; anything else is a bug rather than a race,
-  and it is said out loud.
+  router has now delivered, if it waited for them, and the holds of the inputs
+  whose emits the router has now routed. The router reports in the order it
+  was cast, so the head is always the reported one; anything else is a bug
+  rather than a race, and it is said out loud.
   """
   @spec release(State.t(), reference()) :: State.t()
   def release(%State{tier: tier} = s, ref) do
     case :queue.out(tier.owed) do
-      {{:value, {^ref, _seq, frame}}, rest} ->
-        s = send_record(s, "cell_effect_record", frame)
-        %{s | tier: %{s.tier | owed: rest}}
+      {{:value, {^ref, frame, offsets}}, rest} ->
+        s = if frame, do: send_record(s, "cell_effect_record", frame), else: s
+
+        release_settled(%{
+          s
+          | tier: %{s.tier | owed: rest, unshipped: offsets ++ s.tier.unshipped}
+        })
 
       _other ->
         Logger.warning(
@@ -195,6 +207,36 @@ defmodule Flezha.SDK.Cell.Records do
         )
 
         s
+    end
+  end
+
+  @doc """
+  Owe the router's report `ref` the holds this Cell has not released, with
+  `frame` when its record waits for that report too. Nothing with no report.
+  """
+  @spec owe(State.t(), reference() | nil, binary() | nil) :: State.t()
+  def owe(%State{} = s, nil, _frame), do: s
+
+  def owe(%State{tier: tier} = s, ref, frame),
+    do: %{
+      s
+      | tier: %{tier | owed: :queue.in({ref, frame, tier.unshipped}, tier.owed), unshipped: []}
+    }
+
+  @doc """
+  Release the holds of the inputs this Cell took once what they settled into
+  is on the wire: no open interval, nothing held for a stream, no park
+  awaiting its ack. A hold owed a router report waits in the owed FIFO.
+  """
+  @spec release_settled(State.t()) :: State.t()
+  def release_settled(%State{tier: %{unshipped: []}} = s), do: s
+
+  def release_settled(%State{tier: tier} = s) do
+    if Interval.open?(tier.staged) or s.stream.n > 0 or s.park.held? do
+      s
+    else
+      Enum.each(tier.unshipped, &Prefix.release(tier.prefix, &1))
+      %{s | tier: %{tier | unshipped: []}}
     end
   end
 
@@ -219,14 +261,14 @@ defmodule Flezha.SDK.Cell.Records do
     end
   end
 
-  defp ship_effect(%State{persistent?: false} = s, _record, _dlq, _hold_ref),
-    do: write_slot(%{s | change_seq: s.change_seq + 1})
+  defp ship_effect(%State{persistent?: false} = s, _record, _dlq, hold_ref),
+    do: write_slot(owe(%{s | change_seq: s.change_seq + 1}, hold_ref, nil))
 
   defp ship_effect(%State{} = s, record, dlq, hold_ref) do
     seq = s.change_seq
     frame = Record.effect_frame(s.identity, seq, effect_body(record, dlq), s.schema_version)
     s = note_written(%{s | change_seq: seq + 1}, seq, record.outputs)
-    write_slot(hold_or_ship(s, seq, frame, hold_ref))
+    write_slot(hold_or_ship(s, frame, hold_ref))
   end
 
   # A bounded stage's Cell names the records it wrote at its next barrier, so
@@ -263,11 +305,8 @@ defmodule Flezha.SDK.Cell.Records do
   # offset is never durable ahead of the output it produced. Never its queue:
   # the router may be blocked pushing INTO this Cell, and a Cell that
   # stopped draining to wait for that router would be half of a cycle.
-  defp hold_or_ship(%State{} = s, _seq, frame, nil),
-    do: send_record(s, "cell_effect_record", frame)
-
-  defp hold_or_ship(%State{tier: tier} = s, seq, frame, ref),
-    do: %{s | tier: %{tier | owed: :queue.in({ref, seq, frame}, tier.owed)}}
+  defp hold_or_ship(%State{} = s, frame, nil), do: send_record(s, "cell_effect_record", frame)
+  defp hold_or_ship(%State{} = s, frame, ref), do: owe(s, ref, frame)
 
   defp effect_body(record, dlq) do
     %{
@@ -276,7 +315,8 @@ defmodule Flezha.SDK.Cell.Records do
       consumed_offset: record.offset,
       dlq: dlq,
       event_time: record.event_time,
-      timers: record.timers
+      timers: record.timers,
+      edges: record.edges
     }
   end
 

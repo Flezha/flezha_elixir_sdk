@@ -15,6 +15,7 @@ defmodule Flezha.SDK.Bounded.Instance do
 
   alias Flezha.SDK.Knob
   alias Flezha.SDK.Bounded.Spec
+  alias Flezha.SDK.Operator.Inbox
 
   defmodule Item do
     @moduledoc """
@@ -68,8 +69,9 @@ defmodule Flezha.SDK.Bounded.Instance do
     The committed task-journal state one bind carried: the iteration to resume
     at, the tasklets committed inside it with what each released, the
     previous terminal batch, every forward commit the compensation planner
-    needs, and the result the last committed iteration ended the instance
-    with (`nil` when it did not).
+    needs, the result the last committed iteration ended the instance with
+    (`nil` when it did not), and the highest input-log offset the journal
+    released, by a commit or a message dead-lettered unread.
     """
     defstruct committed_task_idxs: [],
               iter: 0,
@@ -78,6 +80,7 @@ defmodule Flezha.SDK.Bounded.Instance do
               task_handoffs: %{},
               committed_tasks: [],
               consumed_offset: nil,
+              released_offset: nil,
               rewind_undo: [],
               completion: nil
 
@@ -91,6 +94,9 @@ defmodule Flezha.SDK.Bounded.Instance do
             inbox: nil,
             owed_inbox: 0,
             parked_offset: nil,
+            # The highest input-log offset this instance took: what its
+            # journal released, raised by every message that arrives.
+            taken: nil,
             park_idle_ms: nil,
             stage_cells: %{},
             journal: nil,
@@ -113,6 +119,7 @@ defmodule Flezha.SDK.Bounded.Instance do
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
       park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:park_idle_ms),
       journal: journal,
+      taken: journal && Map.get(journal, :released_offset),
       iter: if(journal, do: journal.iter, else: 0),
       compensation_done: MapSet.new()
     }
@@ -120,21 +127,35 @@ defmodule Flezha.SDK.Bounded.Instance do
 
   # --- inbox ---
 
+  @doc """
+  Take a message by the input-log offset its metadata carries: `:repeat` for
+  one at or below what this instance already took, which a repeated
+  re-forward delivers again. Either way it arrived.
+  """
+  @spec take(t(), map()) :: {:ok | :repeat, t()}
+  def take(%__MODULE__{} = i, metadata) do
+    i = arrived(i)
+
+    case Inbox.input_offset(metadata) do
+      nil -> {:ok, i}
+      offset when is_integer(i.taken) and offset <= i.taken -> {:repeat, i}
+      offset -> {:ok, %{i | taken: offset}}
+    end
+  end
+
   @doc "Append one message on `channel`, at the input-log offset its metadata carries."
   @spec push_inbox(t(), String.t(), term(), map()) :: t()
   def push_inbox(%__MODULE__{} = i, channel, payload, metadata) do
-    item = %Item{channel: channel, payload: payload, offset: input_offset(metadata)}
-    %{arrived(i) | inbox: :queue.in(item, i.inbox)}
+    item = %Item{channel: channel, payload: payload, offset: Inbox.input_offset(metadata)}
+    %{i | inbox: :queue.in(item, i.inbox)}
   end
 
   @doc """
   A message the entrance parked to the dead-letter queue instead of queueing:
-  it arrived, so it settles its share of the owed tail, and it is consumed
-  without a pass.
+  it is consumed without a pass.
   """
   @spec entry_parked(t(), map()) :: t()
-  def entry_parked(%__MODULE__{} = i, metadata),
-    do: i |> arrived() |> note_parked(input_offset(metadata))
+  def entry_parked(%__MODULE__{} = i, metadata), do: note_parked(i, Inbox.input_offset(metadata))
 
   @doc "A message consumed without a pass: the park record releases its offset."
   @spec note_parked(t(), non_neg_integer() | nil) :: t()
@@ -201,15 +222,6 @@ defmodule Flezha.SDK.Bounded.Instance do
   # Any message that arrives, queued or parked, settles its share of the tail
   # a rehydrating bind still owes.
   defp arrived(%__MODULE__{} = i), do: %{i | owed_inbox: max(i.owed_inbox - 1, 0)}
-
-  # The controller stamps a journaled input with its input-log offset; an
-  # unjournaled one carries none.
-  defp input_offset(metadata) do
-    case Integer.parse(Map.get(metadata, "flz.offset", "")) do
-      {offset, _rest} -> offset
-      :error -> nil
-    end
-  end
 
   # --- compensation markers ---
 

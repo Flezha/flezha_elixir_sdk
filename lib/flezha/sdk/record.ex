@@ -108,6 +108,15 @@ defmodule Flezha.SDK.Record do
   end
 
   @doc """
+  The wire frame of a `processed_prefix` marker: the instance's identity, the
+  prefix in the seq, zero header bytes, and the number of streams it goes out
+  on, each of which the controller waits for before it confirms the prefix.
+  """
+  @spec prefix_frame(binary(), non_neg_integer(), pos_integer()) :: binary()
+  def prefix_frame(identity, prefix, streams),
+    do: Wire.encode_frame(identity, prefix, <<0::128>>, <<streams::16-big>>)
+
+  @doc """
   The wire frame of a `correction_request`. Not a record: it spends no seq and
   carries no record header, so the 16 header bytes are zero and the seq is —
   the same envelope a `park_payload` takes. Its body is the late input's event

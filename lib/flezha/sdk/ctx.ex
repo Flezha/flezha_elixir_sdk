@@ -57,6 +57,7 @@ defmodule Flezha.SDK.Ctx do
     :timer_policy,
     :firing,
     :runner,
+    :origin,
     identity: <<>>,
     seq: 0,
     replay?: false,
@@ -85,8 +86,10 @@ defmodule Flezha.SDK.Ctx do
   `:unavailable` inside a bounded operator),
   the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
-  runner a spawn request goes to (`runner`, nil for none) and whether the input
-  is a replay (`replay`), which issues no spawn.
+  runner a spawn request goes to (`runner`, nil for none), whether the input
+  is a replay (`replay`), which issues no spawn, and the Cell's identity with
+  the input-log offset it is taking (`origin`, nil for none), which names a
+  spawn across a re-run of the input.
   """
   def new(module, cell_key, now_ms, opts \\ []) do
     # Nothing is written here: every reader of a slot defaults to empty, so an
@@ -103,6 +106,7 @@ defmodule Flezha.SDK.Ctx do
       timer_policy: Keyword.get_lazy(opts, :timer_policy, fn -> Tasklet.timer_policy(module) end),
       firing: Keyword.get(opts, :firing),
       runner: Keyword.get(opts, :runner),
+      origin: Keyword.get(opts, :origin),
       identity: Keyword.get(opts, :identity, <<>>),
       seq: Keyword.get(opts, :seq, 0),
       replay?: Keyword.get(opts, :replay, false),
@@ -196,12 +200,34 @@ defmodule Flezha.SDK.Ctx do
   Without `id:` the controller generates one, and every call starts a new
   instance: it never delivers into a running one, a call reissued after a lost
   or timed-out answer starts a second instance, and a replayed invocation
-  resolves an empty id. Pass `id:` for at most one instance, or for the id on a
-  replay.
+  resolves an empty id. A crash re-run of an input the Cell had not durably
+  consumed asks again under the same identity, and the controller answers the
+  instance the first ask started. Pass `id:` for at most one instance, or for
+  the id on a replay.
   """
   @spec spawn_bounded(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
-  def spawn_bounded(%__MODULE__{} = ctx, factory_id, payload, opts \\ []),
-    do: Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts)
+  def spawn_bounded(%__MODULE__{} = ctx, factory_id, payload, opts \\ []) do
+    identity = spawn_identity(ctx, factory_id, payload)
+    Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts, identity)
+  end
+
+  # FNV-1a-128 over the origin, the call's position in the invocation, the
+  # factory and the payload, each part length-prefixed, as the shared core
+  # derives it. Empty for an invocation that took no offset: nothing re-runs
+  # it, and two of its inputs with one payload are two requests.
+  defp spawn_identity(%__MODULE__{origin: {cell, offset}, ref: ref}, factory_id, payload)
+       when is_binary(factory_id) and is_binary(payload) do
+    position = Process.get(spawn_key(ref), 0)
+    Process.put(spawn_key(ref), position + 1)
+
+    [cell, <<offset::64-big>>, <<position::32-big>>, factory_id, payload]
+    |> Enum.reduce(@fnv128_offset_basis, fn part, hash ->
+      hash |> fnv1a128(<<byte_size(part)::64-big>>) |> fnv1a128(part)
+    end)
+    |> hex128()
+  end
+
+  defp spawn_identity(%__MODULE__{}, _factory_id, _payload), do: ""
 
   @doc """
   End the bounded instance this tasklet runs in, with `result` as the
@@ -263,10 +289,11 @@ defmodule Flezha.SDK.Ctx do
     |> fnv1a128(identity)
     |> fnv1a128(<<seq::64-big>>)
     |> fnv1a128(<<ordinal::32-big>>)
-    |> Integer.to_string(16)
-    |> String.downcase()
-    |> String.pad_leading(32, "0")
+    |> hex128()
   end
+
+  defp hex128(hash),
+    do: hash |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(32, "0")
 
   defp fnv1a128(hash, <<byte, rest::binary>>),
     do: fnv1a128(Bitwise.band(Bitwise.bxor(hash, byte) * @fnv128_prime, @fnv128_mask), rest)
@@ -312,6 +339,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(timers_key(ref))
     Process.delete(checkpoint_key(ref))
     Process.delete(stable_id_key(ref))
+    Process.delete(spawn_key(ref))
     Process.delete(completion_key(ref))
   end
 
@@ -366,5 +394,6 @@ defmodule Flezha.SDK.Ctx do
   defp timers_key(ref), do: {__MODULE__, ref, :timers}
   defp checkpoint_key(ref), do: {__MODULE__, ref, :checkpoint}
   defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
+  defp spawn_key(ref), do: {__MODULE__, ref, :spawn}
   defp completion_key(ref), do: {__MODULE__, ref, :completion}
 end

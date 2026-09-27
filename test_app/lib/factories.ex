@@ -672,6 +672,47 @@ defmodule ElixirRunner.SpawnRequesterOp do
   end
 end
 
+# -- spawn_hold_requester ---------------------------------------------------
+
+# An effectively-once stream whose tasklet spawns `stateless_loop_bounded`
+# with no id, prints the answer as `spawn_result hold <id> <outcome>`, then
+# blocks until the release env is set, so a runner killed there dies with the
+# spawn answered and its input not durably consumed.
+defmodule ElixirRunner.SpawnHoldRequesterTask do
+  @moduledoc false
+  @behaviour Flezha.SDK.Tasklet
+
+  alias Flezha.SDK.{Ctx, Spawn}
+
+  def name, do: "spawn_hold_requester"
+  def init_state(_), do: nil
+
+  def run(input, s, ctx) do
+    handle = Ctx.spawn_bounded(ctx, "stateless_loop_bounded", input)
+    ElixirRunner.SpawnRequesterTask.report("hold", Spawn.await(handle))
+    ElixirRunner.Bounded.Gate.block_until_released()
+    {:ok, s}
+  end
+end
+
+defmodule ElixirRunner.SpawnHoldRequesterOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.UnboundedOperator
+  def factory_id, do: "spawn_hold_requester"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> effectively_once()
+    |> input("in")
+    |> on_full(:drop_nothing)
+    |> into(ElixirRunner.SpawnHoldRequesterTask)
+    |> keyed()
+    |> sink("out")
+  end
+end
+
 # -- spawn_once_requester ---------------------------------------------------
 
 defmodule ElixirRunner.SpawnOnceRequesterTask do
@@ -725,6 +766,7 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.BoundedMailboxDropOldestOp,
       ElixirRunner.PartitionRelayOp,
       ElixirRunner.SpawnRequesterOp,
+      ElixirRunner.SpawnHoldRequesterOp,
       ElixirRunner.SpawnOnceRequesterOp
     ] ++ ElixirRunner.FactoriesState.all()
   end

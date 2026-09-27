@@ -140,15 +140,21 @@ defmodule Flezha.SDK.Codec do
   controller resolves the request in the namespace of the connection it
   arrived on.
   """
-  @spec spawn_bounded_request_command(String.t(), String.t(), binary(), :deliver | :error) ::
-          {atom(), struct()}
-  def spawn_bounded_request_command(instance_id, factory_id, payload, if_running) do
+  @spec spawn_bounded_request_command(
+          String.t(),
+          String.t(),
+          binary(),
+          :deliver | :error,
+          String.t()
+        ) :: {atom(), struct()}
+  def spawn_bounded_request_command(instance_id, factory_id, payload, if_running, identity) do
     {:spawn_bounded_request,
      %RunnerCommands.SpawnBoundedRequest{
        instance_id: instance_id,
        factory_id: factory_id,
        payload: payload,
-       if_running: Atom.to_string(if_running)
+       if_running: Atom.to_string(if_running),
+       identity: identity
      }}
   end
 
@@ -292,6 +298,7 @@ defmodule Flezha.SDK.Codec do
         end),
       committed_tasks: Enum.map(j.committed_tasks, &committed_task/1),
       consumed_offset: j.consumed_offset,
+      released_offset: j.released_offset,
       rewind_undo: Enum.map(j.rewind_undo, &committed_task/1),
       completion: completion(j.completed, j.result)
     }

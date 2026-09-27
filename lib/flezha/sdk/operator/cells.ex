@@ -21,7 +21,7 @@ defmodule Flezha.SDK.Operator.Cells do
 
   require Logger
 
-  alias Flezha.SDK.{Cell, Counters, Hold, KeyGroup, Knob, Park, Tasklet, Topology}
+  alias Flezha.SDK.{Cell, Counters, Hold, KeyGroup, Knob, Park, Prefix, Tasklet, Topology}
 
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
@@ -42,6 +42,7 @@ defmodule Flezha.SDK.Operator.Cells do
     :slots,
     :credit,
     :held,
+    :prefix,
     cells: %{},
     dynamic: %{},
     evicted: nil
@@ -53,7 +54,8 @@ defmodule Flezha.SDK.Operator.Cells do
   The Cell set of the calling process, its Single and owned Static Cells
   minted. `opts` carries `:operator_id`, `:topology`, `:kind` (`:unbounded` |
   `:bounded`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
-  `:secondaries` and `:credit`.
+  `:secondaries`, `:credit` and `:prefix`, the instance's processed-prefix
+  ledger.
   """
   @spec new(keyword()) :: t()
   def new(opts) do
@@ -74,6 +76,7 @@ defmodule Flezha.SDK.Operator.Cells do
       # for the replacement of one killed untrappably.
       slots: :ets.new(:flezha_sdk_slots, [:public, :set]),
       credit: Keyword.get(opts, :credit),
+      prefix: Keyword.get(opts, :prefix),
       dynamic: dynamic_knobs(topology),
       evicted: Hold.new(cap: @evicted_trace_cap),
       held: Hold.new(cap: hold_cap, counters: counters)
@@ -161,16 +164,32 @@ defmodule Flezha.SDK.Operator.Cells do
     end
   end
 
+  # An input with an offset holds the instance's processed prefix below it
+  # from here until the Cell releases it.
   defp enqueue(c, pid, node_ref, key, item, retry?) do
-    case knob(c.topology, node_ref, :on_full, :drop_nothing) do
-      :drop_nothing -> Cell.enqueue_block(pid, item)
-      other -> Cell.enqueue_drop(pid, item, other)
-    end
+    offset = held_offset(c, item)
+    if offset, do: Prefix.hold(c.prefix, offset)
 
-    c
-  catch
-    :exit, _reason when retry? -> c |> forget(node_ref, key) |> push(node_ref, key, item, false)
+    try do
+      case knob(c.topology, node_ref, :on_full, :drop_nothing) do
+        :drop_nothing -> Cell.enqueue_block(pid, item)
+        other -> Cell.enqueue_drop(pid, item, other)
+      end
+
+      c
+    catch
+      :exit, reason ->
+        Prefix.release(c.prefix, offset)
+
+        if retry?,
+          do: c |> forget(node_ref, key) |> push(node_ref, key, item, false),
+          else: exit(reason)
+    end
   end
+
+  defp held_offset(%__MODULE__{prefix: nil}, _item), do: nil
+  defp held_offset(%__MODULE__{}, %Cell.Input{offset: offset}), do: offset
+  defp held_offset(%__MODULE__{}, _item), do: nil
 
   @doc """
   The Cell of `tasklet` (its `name/0`) at `key` for a lookup. `materialise`
@@ -440,7 +459,7 @@ defmodule Flezha.SDK.Operator.Cells do
   # outputs through (the router delivers such a class's emits to nodes only),
   # whether a record waits for an inter-tasklet edge (a bounded operator's edge value
   # waits on its driver instead) and whether it is a bounded stage's Cell.
-  defp tier_facts(%__MODULE__{kind: kind}, topo, node_ref) do
+  defp tier_facts(%__MODULE__{kind: kind} = c, topo, node_ref) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
     stage? = kind == :bounded
 
@@ -448,9 +467,19 @@ defmodule Flezha.SDK.Operator.Cells do
       on?: topo.effectively_once? or (stage? and topo.persistence_enabled?),
       checkpoint: topo.checkpoint,
       sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
+      edge_routes:
+        for(
+          %{to: {:node, consumer}} = r <- routes,
+          do: %{
+            channel: topo.node_seq[node_ref],
+            consumer: topo.node_seq[consumer],
+            transform: r.transform
+          }
+        ),
       edges?: not stage? and Enum.any?(routes, &match?(%{to: {:node, _}}, &1)),
       stage?: stage?,
-      correction: topo.correction
+      correction: topo.correction,
+      prefix: c.prefix
     }
   end
 

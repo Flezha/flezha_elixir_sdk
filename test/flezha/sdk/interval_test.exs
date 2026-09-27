@@ -10,6 +10,7 @@ defmodule Flezha.SDK.IntervalTest do
       changes: changes,
       timers: [],
       outputs: outputs,
+      edges: [],
       offset: offset,
       event_time: 7,
       checkpointed: false,

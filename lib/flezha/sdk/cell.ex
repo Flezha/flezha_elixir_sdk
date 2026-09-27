@@ -42,7 +42,7 @@ defmodule Flezha.SDK.Cell do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Tasklet, Timers}
+  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Prefix, Tasklet, Timers}
   alias Flezha.SDK.Cell.{Clock, Records, State, Tier}
   alias Flezha.SDK.Operator.Inbox
 
@@ -86,14 +86,15 @@ defmodule Flezha.SDK.Cell do
     defstruct [:ref, :reply_to]
   end
 
-  # An input under the effectively-once tier: the value with the durable
-  # offset the controller stamped on it, and `replay` — `:member` while it
-  # waits for its slice to close, `:ordered` once the flush re-queued it in
-  # event-time order. Off the tier the queue holds the raw value, so nothing
-  # there pays for this.
+  # An input with the durable offset the controller stamped on it, or its
+  # producer's input took: `replay` is `:member` while it waits for its slice
+  # to close, `:ordered` once the flush re-queued it in event-time order, and
+  # `forwarded?` says the controller forwarded it rather than a tasklet of the
+  # instance emitting it. An input with no offset off the tier is the raw
+  # value, so nothing there pays for this.
   defmodule Input do
     @moduledoc false
-    defstruct [:value, :offset, :replay]
+    defstruct [:value, :offset, :replay, forwarded?: false]
   end
 
   # --- API (used by the Operator router) ---
@@ -274,6 +275,7 @@ defmodule Flezha.SDK.Cell do
     }
 
     state = seed_tier(state, slot)
+    state = %{state | stream: %{state.stream | prefix: tier.prefix}}
     {:ok, state |> Records.rebind(Keyword.get(opts, :secondaries, [])) |> Clock.rearm()}
   end
 
@@ -370,7 +372,7 @@ defmodule Flezha.SDK.Cell do
   end
 
   def handle_call({:rebind, secondaries}, _from, %State{} = s),
-    do: {:reply, :ok, Records.rebind(s, secondaries)}
+    do: {:reply, :ok, s |> Records.rebind(secondaries) |> Records.release_settled()}
 
   def handle_call({:apply_state, json}, _from, %State{} = s) do
     {:reply, :ok, Records.write_slot(%{s | task_state: Tasklet.state_from_json(s.module, json)})}
@@ -385,12 +387,12 @@ defmodule Flezha.SDK.Cell do
         {:noreply, kick(enqueue(s, value))}
 
       policy == :drop_oldest ->
-        {{:value, _dropped}, q} = :queue.out(s.queue)
-        record_drop(s, :drop_oldest)
+        {{:value, dropped}, q} = :queue.out(s.queue)
+        record_drop(s, :drop_oldest, dropped)
         {:noreply, kick(enqueue(%{s | queue: q, size: s.size - 1}, value))}
 
       true ->
-        record_drop(s, :drop_newest)
+        record_drop(s, :drop_newest, value)
         {:noreply, s}
     end
   end
@@ -399,7 +401,8 @@ defmodule Flezha.SDK.Cell do
   def handle_info(:process, %State{} = s), do: {:noreply, process_next(s)}
 
   def handle_info({:park_released, park_id}, %State{park: %{id: park_id}} = s) do
-    {:noreply, process_next(%{s | park: %{s.park | held?: false, id: nil}})}
+    s = Records.release_settled(%{s | park: %{s.park | held?: false, id: nil}})
+    {:noreply, process_next(s)}
   end
 
   def handle_info({:park_released, _stale}, s), do: {:noreply, s}
@@ -500,7 +503,7 @@ defmodule Flezha.SDK.Cell do
 
       {{:value, item}, q} ->
         s = %{s | queue: q, size: s.size - 1}
-        s = admit(s, item)
+        s = s |> admit(item) |> Records.release_settled()
         s = admit_waiter(s)
 
         if s.park.held? do
@@ -561,52 +564,60 @@ defmodule Flezha.SDK.Cell do
   # message removes that dependency on another module's choice of call.
   defp admit(%State{} = s, %Tier.SliceEnd{}), do: Tier.flush_slice(s, &requeue/2)
 
-  # A re-forwarded input the tier already made durable is a COMPLETED
-  # dispatch, never a re-run: the effect record that consumed it is on disk.
+  # An input at or below the floor this Cell already took is a COMPLETED
+  # dispatch, never a re-run: a re-forward delivers it again.
   defp admit(%State{tier: %{floor: floor}} = s, %Input{offset: offset})
        when is_integer(offset) and offset <= floor do
     Counters.inc_dispatches(s.counters)
+    Prefix.release(s.tier.prefix, offset)
     s
   end
 
-  defp admit(%State{} = s, %Input{value: value, offset: offset, replay: replay}),
-    do: admit_value(s, value, offset, replay)
+  defp admit(%State{} = s, %Input{value: value} = input), do: admit_value(s, value, input)
 
-  defp admit(%State{} = s, value), do: admit_value(s, value, nil, nil)
+  defp admit(%State{} = s, value), do: admit_value(s, value, nil)
 
-  defp admit_value(
-         %State{timers: %{clock: {:event_time, extract}} = timers} = s,
-         value,
-         offset,
-         replay
-       ) do
+  defp admit_value(%State{timers: %{clock: {:event_time, extract}} = timers} = s, value, input) do
     with {:ok, event_time} <- Clock.extract(extract, value),
-         :advance <- Tier.admit(s, event_time, replay) do
+         :advance <- Tier.admit(s, event_time, input && input.replay) do
       s = Clock.advance(s, event_time)
 
       case Timers.due(timers.pending, :event_time, s.timers.high_water) do
         [] ->
-          dispatch(s, value, offset, replay)
+          dispatch(s, value, input)
 
         due ->
           fires = Enum.map(due, &%Fire{kind: :event_time, at: &1})
-          requeue(s, fires ++ [rewrap(value, offset, replay)])
+          requeue(s, fires ++ [input || value])
       end
     else
-      # A correction was requested for it, or the beyond-window policy drops it.
-      :withhold -> s
-      {:buffer, at} -> Tier.buffer(s, rewrap(value, offset, :member), at)
+      # A correction was requested for it, or the beyond-window policy drops
+      # it; a replayed slice brings a corrected one back under a hold of its own.
+      :withhold ->
+        Prefix.release(s.tier.prefix, input && input.offset)
+        s
+
+      {:buffer, at} ->
+        Tier.buffer(s, %{(input || %Input{value: value}) | replay: :member}, at)
+
       # A raising extractor rides the ladder and parks as any bad input; a
       # beyond-window arrival dispatches without moving the high-water.
-      _other -> dispatch(s, value, offset, replay)
+      _other ->
+        dispatch(s, value, input)
     end
   end
 
-  defp admit_value(%State{} = s, value, offset, replay), do: dispatch(s, value, offset, replay)
+  defp admit_value(%State{} = s, value, input), do: dispatch(s, value, input)
 
-  # A value going back on the queue keeps what it arrived with.
-  defp rewrap(value, nil, nil), do: value
-  defp rewrap(value, offset, replay), do: %Input{value: value, offset: offset, replay: replay}
+  # Taking an input: a forwarded one raises the floor a re-forward is dropped
+  # at, and its hold waits for what it settles into.
+  defp take(%State{tier: tier} = s, %Input{offset: offset} = input) when is_integer(offset) do
+    floor = if input.forwarded?, do: max(tier.floor, offset), else: tier.floor
+    unshipped = if tier.prefix, do: [offset | tier.unshipped], else: tier.unshipped
+    %{s | tier: %{tier | floor: floor, unshipped: unshipped}}
+  end
+
+  defp take(%State{} = s, _input), do: s
 
   # Items at the head, in order; the size overshoots the capacity by internal
   # items only, bounded by the pending set.
@@ -619,12 +630,14 @@ defmodule Flezha.SDK.Cell do
   # ONE wedged Cell visible to the controller, so a dispatch that unwinds
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
-  defp dispatch(%State{} = s, item, offset, replay \\ nil) do
+  defp dispatch(%State{} = s, item, input) do
     identity = identity(s.operator_id, s.node_ref, s.cell_key)
     Counters.dispatch_started(s.counters, identity)
+    s = take(s, input)
+    offset = input && input.offset
 
     try do
-      case run_ladder(s, item, ctx_opts(s, item, replay), 1) do
+      case run_ladder(s, item, ctx_opts(s, item, input), 1) do
         {:ok, new_task_state, facts} ->
           {s, facts} = hold_removal(s, item, facts)
           s |> complete(new_task_state, facts, offset) |> request_completion(facts.completion)
@@ -637,21 +650,31 @@ defmodule Flezha.SDK.Cell do
     end
   end
 
-  defp complete(%State{tier: %{on?: true}} = s, new_task_state, facts, offset),
-    do: settle_tier(s, new_task_state, facts, offset)
+  # Under the tier, and off it for a Cell that records and took an input-log
+  # offset, a dispatch settles into ONE record, which keeps the offset beside
+  # the state it produced.
+  defp one_record?(%State{tier: %{on?: true}}, _offset), do: true
+
+  defp one_record?(%State{persistent?: persistent?}, offset),
+    do: persistent? and is_integer(offset)
+
+  defp complete(%State{} = s, new_task_state, facts, offset) do
+    if one_record?(s, offset),
+      do: settle_tier(s, new_task_state, facts, offset),
+      else: ship_changes(s, new_task_state, facts, offset)
+  end
 
   # The records leave first (flush-before-emit, and the outputs are stamped
   # with the seq the dispatch started at), then the timers are armed, then the
   # outputs leave: an output on the wire means its dispatch's timers are armed
   # and counted, for every reader.
-  defp complete(%State{} = s, new_task_state, facts, _offset) do
+  defp ship_changes(%State{} = s, new_task_state, facts, offset) do
     {pending, ops, tally} = facts.timers
     Counters.inc_dispatches(s.counters)
     handout_seq = s.change_seq
     s = %{s | task_state: new_task_state, timers: %{s.timers | pending: pending}}
     s = s |> Records.ship(facts.changes, ops) |> Clock.reflect(ops, tally)
-    flush_emits(s, facts.emits, handout_seq, nil)
-    s
+    flush_emits(s, facts.emits, handout_seq, offset)
   end
 
   # After the outputs, so the driver has them all when this stage settles. A
@@ -677,10 +700,9 @@ defmodule Flezha.SDK.Cell do
     {s, report} = Tier.settle(s, facts, ops, offset)
     s = Clock.reflect(s, ops, tally)
 
-    if s.tier.edges? or s.tier.stage?,
-      do: flush_emits(s, facts.emits, handout_seq, offset, report)
-
-    s
+    if s.tier.on? and not (s.tier.edges? or s.tier.stage?),
+      do: s,
+      else: flush_emits(s, facts.emits, handout_seq, offset, report)
   end
 
   # A bounded operator firing's removal is durable when the stage that served it
@@ -818,11 +840,24 @@ defmodule Flezha.SDK.Cell do
   # opens on its own removal. A replayed input's spawn requests issue nothing.
   # A `compensate` hook's context carries no timers: a rollback is no place to
   # arm a deadline.
-  defp ctx_opts(%State{} = s, %Undo{}, _replay),
+  defp ctx_opts(%State{} = s, %Undo{}, _input),
     do: [timers: :unavailable] ++ s.ctx_opts ++ [replay: false]
 
-  defp ctx_opts(%State{} = s, item, replay),
-    do: s.ctx_opts ++ [timers: s.timers.pending, firing: firing(item), replay: replay != nil]
+  defp ctx_opts(%State{} = s, item, input) do
+    s.ctx_opts ++
+      [
+        timers: s.timers.pending,
+        firing: firing(item),
+        replay: input != nil and input.replay != nil,
+        origin: origin(s, input)
+      ]
+  end
+
+  # What names a spawn this invocation asks for across a re-run of its input.
+  defp origin(%State{} = s, %Input{offset: offset}) when is_integer(offset),
+    do: {s.identity, offset}
+
+  defp origin(%State{}, _input), do: nil
 
   defp firing(%Fire{kind: kind, at: at}), do: {kind, at}
   defp firing(_value), do: nil
@@ -844,9 +879,10 @@ defmodule Flezha.SDK.Cell do
     run_ladder(s, value, opts, attempt + 1)
   end
 
-  # Under the tier a park IS a record: the entry, the offset it consumed and a
-  # parked firing's removal ride one frame, and nothing is held — the record is
-  # the durability, so there is no ack to wait for.
+  # Where a dispatch settles into one record a park IS a record: the entry, the
+  # offset it consumed and a parked firing's removal ride one frame, and
+  # nothing is held — the record is the durability, so there is no ack to wait
+  # for.
   # A bounded stage's Cell does not park: its exhausted ladder fails the
   # tasklet, and the driver unwinds the run. An unbounded operator's Cell parks to the
   # DLQ, which is the only behaviour that existed before bounded operators.
@@ -858,15 +894,13 @@ defmodule Flezha.SDK.Cell do
   defp exhausted(%State{} = s, value, error, attempts, offset),
     do: park(s, value, error, attempts, offset)
 
-  defp park(%State{tier: %{on?: true}} = s, value, error, attempts, offset) do
-    {s, ops, tally} = firing_removal(s, value)
-    dlq = Park.dlq_entry(park_channel(s), error, attempts, value)
-    s = Tier.park(s, dlq, ops, offset, clock_now(s, value))
-    s = if ops == [], do: s, else: Clock.reflect(s, ops, tally)
-    parked_event(s)
+  defp park(%State{} = s, value, error, attempts, offset) do
+    if one_record?(s, offset),
+      do: park_in_record(s, value, error, attempts, offset),
+      else: park_held(s, value, error, attempts)
   end
 
-  defp park(%State{} = s, value, error, attempts, _offset) do
+  defp park_held(%State{} = s, value, error, attempts) do
     seq = s.park.seq
     park_id = "#{State.label(s)}##{seq}"
     body = Park.body(park_id, park_channel(s), error, attempts, value)
@@ -881,6 +915,14 @@ defmodule Flezha.SDK.Cell do
     parked_event(%{s | park: %{held?: true, id: park_id, seq: seq + 1}})
   end
 
+  defp park_in_record(%State{} = s, value, error, attempts, offset) do
+    {s, ops, tally} = firing_removal(s, value)
+    dlq = Park.dlq_entry(park_channel(s), error, attempts, value)
+    s = Tier.park(s, dlq, ops, offset, clock_now(s, value))
+    s = if ops == [], do: s, else: Clock.reflect(s, ops, tally)
+    parked_event(s)
+  end
+
   defp park_channel(%State{} = s), do: s.input_channel || s.node_name || s.operator_id
 
   defp parked_event(%State{} = s) do
@@ -889,16 +931,31 @@ defmodule Flezha.SDK.Cell do
   end
 
   defp flush_emits(s, emits, handout_seq, offset, report \\ nil)
-  defp flush_emits(_s, [], _handout_seq, _offset, _report), do: :ok
+  defp flush_emits(%State{} = s, [], _handout_seq, _offset, _report), do: s
 
-  defp flush_emits(%State{} = s, emits, handout_seq, offset, report),
-    do: Inbox.emitted(s.operator, s.node_ref, s.cell_key, emits, handout_seq, offset, report)
+  defp flush_emits(%State{} = s, emits, handout_seq, offset, report) do
+    {s, report} = routing_report(s, report)
+    Inbox.emitted(s.operator, s.node_ref, s.cell_key, emits, handout_seq, offset, report)
+    s
+  end
+
+  # The inputs this Cell took stay held until the router has routed their
+  # emits: a push into a Cell of the instance takes a hold of its own.
+  defp routing_report(%State{tier: %{prefix: nil}} = s, report), do: {s, report}
+
+  defp routing_report(%State{} = s, nil) do
+    ref = make_ref()
+    {Records.owe(s, ref, nil), {self(), ref}}
+  end
+
+  defp routing_report(%State{} = s, report), do: {s, report}
 
   # Two readers, one event: telemetry is the in-node handle, the counter is what
   # leaves the runner on the heartbeat — a drop nobody can see from outside the
   # process is the defect this closes.
-  defp record_drop(%State{} = s, policy) do
+  defp record_drop(%State{} = s, policy, dropped) do
     Counters.inc_drops(s.counters, policy)
+    if is_struct(dropped, Input), do: Prefix.release(s.tier.prefix, dropped.offset)
 
     :telemetry.execute([:flezha, :sdk, :mailbox], %{count: 1}, %{
       operator_id: s.operator_id,

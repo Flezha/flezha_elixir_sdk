@@ -238,7 +238,8 @@ defmodule Flezha.SDK.Wire do
                  scheduled_at: non_neg_integer(),
                  register: boolean()
                }
-             ]
+             ],
+             edges: [edge()]
            }}
           | {:error, term()}
   def decode_effect_body(body) when is_binary(body) do
@@ -247,7 +248,8 @@ defmodule Flezha.SDK.Wire do
          {:ok, consumed_offset, rest} <- decode_option(rest, &decode_varint/1),
          {:ok, dlq, rest} <- decode_option(rest, &decode_dlq_entry/1),
          {:ok, event_time, rest} <- decode_varint(rest),
-         {:ok, timers, <<>>} <- decode_vec(rest, &decode_timer_op/1) do
+         {:ok, timers, rest} <- decode_vec(rest, &decode_timer_op/1),
+         {:ok, edges, <<>>} <- decode_vec(rest, &decode_edge/1) do
       {:ok,
        %{
          changes: changes,
@@ -255,7 +257,8 @@ defmodule Flezha.SDK.Wire do
          consumed_offset: consumed_offset,
          dlq: dlq,
          event_time: event_time,
-         timers: timers
+         timers: timers,
+         edges: edges
        }}
     else
       {:ok, _, _trailing} -> {:error, :trailing_bytes}
@@ -280,7 +283,8 @@ defmodule Flezha.SDK.Wire do
           required(:consumed_offset) => non_neg_integer() | nil,
           optional(:dlq) => map() | nil,
           optional(:event_time) => non_neg_integer(),
-          optional(:timers) => [map()]
+          optional(:timers) => [map()],
+          optional(:edges) => [edge()]
         }) :: binary()
   def encode_effect_body(%{changes: changes, outputs: outputs, consumed_offset: offset} = body) do
     IO.iodata_to_binary([
@@ -289,8 +293,39 @@ defmodule Flezha.SDK.Wire do
       encode_option(offset, &encode_varint/1),
       encode_option(Map.get(body, :dlq), &encode_dlq_entry/1),
       encode_varint(Map.get(body, :event_time, 0)),
-      encode_vec(Map.get(body, :timers, []), &encode_timer_op/1)
+      encode_vec(Map.get(body, :timers, []), &encode_timer_op/1),
+      encode_vec(Map.get(body, :edges, []), &encode_edge/1)
     ])
+  end
+
+  @typedoc """
+  One inter-tasklet value an effect record keeps: the channel it was emitted
+  on and the consuming tasklet, the input-log offset it derives from, and the
+  value through the channel's codec.
+  """
+  @type edge :: %{
+          channel: non_neg_integer(),
+          consumer: non_neg_integer(),
+          origin: non_neg_integer() | nil,
+          payload: binary()
+        }
+
+  defp decode_edge(bin) do
+    with {:ok, channel, rest} <- decode_varint(bin),
+         {:ok, consumer, rest} <- decode_varint(rest),
+         {:ok, origin, rest} <- decode_option(rest, &decode_varint/1),
+         {:ok, payload, rest} <- decode_bytes(rest) do
+      {:ok, %{channel: channel, consumer: consumer, origin: origin, payload: payload}, rest}
+    end
+  end
+
+  defp encode_edge(%{channel: channel, consumer: consumer, origin: origin, payload: payload}) do
+    [
+      encode_varint(channel),
+      encode_varint(consumer),
+      encode_option(origin, &encode_varint/1),
+      encode_bytes(payload)
+    ]
   end
 
   @typedoc "One mutation of a Cell's pending-timer set, as the postcard `TimerOp` carries it."

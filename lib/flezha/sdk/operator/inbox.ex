@@ -20,6 +20,18 @@ defmodule Flezha.SDK.Operator.Inbox do
   # value this side chose, never a name off the wire.
   @unresolved_tasklet_id "_unresolved"
 
+  @doc """
+  The input-log offset the controller stamped on a journaled input, `nil` on
+  one it did not journal.
+  """
+  @spec input_offset(map()) :: non_neg_integer() | nil
+  def input_offset(metadata) do
+    case Integer.parse(Map.get(metadata, "flz.offset", "")) do
+      {offset, _rest} -> offset
+      :error -> nil
+    end
+  end
+
   @doc "Route a raw input frame arriving on an entry channel."
   def input(pid, channel, message, metadata),
     do: GenServer.cast(pid, {:input, channel, message, metadata})

@@ -30,7 +30,7 @@ defmodule Flezha.SDK.Hold do
 
   require Logger
 
-  alias Flezha.SDK.{Counters, Credit, Knob, Transport}
+  alias Flezha.SDK.{Counters, Credit, Knob, Prefix, Transport}
   alias Flezha.SDK.Wire
 
   @typedoc "The guarantee a frame is owed, or `:probe` for one owed none."
@@ -56,6 +56,7 @@ defmodule Flezha.SDK.Hold do
             streams: [],
             counters: nil,
             credit: nil,
+            prefix: nil,
             misses: [],
             asked_at: nil
 
@@ -73,6 +74,9 @@ defmodule Flezha.SDK.Hold do
     # The controller re-raises a lost correction when the input is re-delivered,
     # so nothing is owed a hold and the refusal is the caller's to read.
     "correction_request" => :control,
+    # A marker held behind a record it covers, or beside one a hold may shed,
+    # would confirm what the controller never received; the next goes out anew.
+    "processed_prefix" => :control,
     "control_ping" => :control,
     "connect_control_channel" => :control,
     "data_heartbeat" => :probe
@@ -106,8 +110,9 @@ defmodule Flezha.SDK.Hold do
 
   @doc """
   An empty hold. `:cap` bounds it — the reconnect cap when none is given —
-  `:counters` is where a shed is counted, `:streams` what a write goes to, and
-  `:credit` the window this writer's records are debited against.
+  `:counters` is where a shed is counted, `:streams` what a write goes to,
+  `:credit` the window this writer's records are debited against, and
+  `:prefix` the ledger a shed record freezes.
   """
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
@@ -116,6 +121,7 @@ defmodule Flezha.SDK.Hold do
       cap: declared_cap(Keyword.get(opts, :cap)),
       counters: Keyword.get(opts, :counters),
       credit: Keyword.get(opts, :credit),
+      prefix: Keyword.get(opts, :prefix),
       streams: Keyword.get(opts, :streams, [])
     }
   end
@@ -276,6 +282,9 @@ defmodule Flezha.SDK.Hold do
   defp keep(%__MODULE__{} = hold, {key, _body, _meta, _route} = item, reason) do
     cond do
       hold.n >= hold.cap and hold.counters ->
+        # The shed record's input is lost to the controller: no marker may
+        # cover it until a restore re-seats the instance.
+        Prefix.freeze(hold.prefix)
         Counters.inc_drops(hold.counters, :drop_oldest)
 
       hold.n == 0 ->

@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Cell.Interval do
   `fold/4` takes one invocation's effects and answers `{record | nil, staged}`.
   Under per-input granularity (`policy` is nil) every effectful invocation
   ships its own record, acknowledging its own input. Under checkpoint
-  granularity the changes, the timer ops and the last offset stage, the
+  granularity the changes, the timer ops, the edge values and the last offset stage, the
   interval opens on the first offset, outputs are held or passed by the
   policy's posture, and a close ships one record for the whole interval — on an
   explicit `Ctx.checkpoint/1`, on a park, on `every` inputs, or on the delay.
@@ -21,6 +21,9 @@ defmodule Flezha.SDK.Cell.Interval do
   defstruct changes: [],
             timers: [],
             outputs: [],
+            # Always held: an edge value is recorded with the offset that
+            # closes its interval.
+            edges: [],
             offset: nil,
             inputs: 0,
             # nil exactly when the interval is closed.
@@ -40,6 +43,7 @@ defmodule Flezha.SDK.Cell.Interval do
           changes: [term()],
           timers: [map()],
           outputs: [map()],
+          edges: [map()],
           offset: non_neg_integer() | nil,
           event_time: non_neg_integer(),
           checkpointed: boolean(),
@@ -51,6 +55,7 @@ defmodule Flezha.SDK.Cell.Interval do
           changes: [term()],
           timers: [map()],
           outputs: [map()],
+          edges: [map()],
           offset: non_neg_integer() | nil,
           event_time: non_neg_integer()
         }
@@ -70,11 +75,13 @@ defmodule Flezha.SDK.Cell.Interval do
     # Per-input: one record per effectful invocation, each acknowledging its
     # own input. An effect-free invocation contributes nothing durable unless
     # it parked.
-    if effects.parked or effects.changes != [] or effects.outputs != [] or effects.timers != [] do
+    if effects.parked or effects.changes != [] or effects.outputs != [] or effects.timers != [] or
+         effects.edges != [] do
       {%{
          changes: effects.changes,
          timers: effects.timers,
          outputs: effects.outputs,
+         edges: effects.edges,
          offset: effects.offset,
          event_time: effects.event_time
        }, staged}
@@ -102,6 +109,7 @@ defmodule Flezha.SDK.Cell.Interval do
            changes: [],
            timers: [],
            outputs: flushed_now,
+           edges: [],
            offset: nil,
            event_time: effects.event_time
          }, staged}
@@ -145,7 +153,8 @@ defmodule Flezha.SDK.Cell.Interval do
       staged
       | event_time: effects.event_time,
         changes: prepend(staged.changes, effects.changes),
-        timers: prepend(staged.timers, effects.timers)
+        timers: prepend(staged.timers, effects.timers),
+        edges: prepend(staged.edges, effects.edges)
     }
 
     # Held outputs wait for the close; as-produced ones leave now.
@@ -173,6 +182,7 @@ defmodule Flezha.SDK.Cell.Interval do
       changes: Enum.reverse(staged.changes),
       timers: Enum.reverse(staged.timers),
       outputs: Enum.reverse(staged.outputs),
+      edges: Enum.reverse(staged.edges),
       offset: staged.offset,
       event_time: staged.event_time
     }

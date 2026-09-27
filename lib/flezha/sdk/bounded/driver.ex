@@ -233,14 +233,9 @@ defmodule Flezha.SDK.Bounded.Driver do
   # idle window. A readable one waits in the inbox for the next message-fed
   # pass; a driver waiting for one starts that pass now.
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
-    case Inbox.enter(s.runner, s.operator_id, s.spec.topology, channel, message) do
-      {:ok, channel, value} ->
-        s = %{s | instance: Instance.push_inbox(s.instance, channel, value, metadata)}
-        if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
-
-      :parked ->
-        s = %{s | instance: Instance.entry_parked(s.instance, metadata)}
-        if s.idle, do: {:noreply, await_input(s)}, else: {:noreply, s}
+    case Instance.take(s.instance, metadata) do
+      {:ok, instance} -> enter(%{s | instance: instance}, channel, message, metadata)
+      {:repeat, instance} -> {:noreply, %{s | instance: instance}}
     end
   end
 
@@ -264,6 +259,19 @@ defmodule Flezha.SDK.Bounded.Driver do
   # tasklet when the driver waits with nothing queued, joins the tasklet's
   # stage while it runs, and otherwise waits its turn behind what arrived
   # first.
+  # The entrance for a message this instance has not taken before.
+  defp enter(%State{} = s, channel, message, metadata) do
+    case Inbox.enter(s.runner, s.operator_id, s.spec.topology, channel, message) do
+      {:ok, channel, value} ->
+        s = %{s | instance: Instance.push_inbox(s.instance, channel, value, metadata)}
+        if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
+
+      :parked ->
+        s = %{s | instance: Instance.entry_parked(s.instance, metadata)}
+        if s.idle, do: {:noreply, await_input(s)}, else: {:noreply, s}
+    end
+  end
+
   @impl true
   def handle_info({:firing_due, node_ref, cell_key, fire}, %State{} = s) do
     firing = %Instance.Firing{node_ref: node_ref, cell_key: cell_key, fire: fire}

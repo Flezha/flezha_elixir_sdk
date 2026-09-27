@@ -20,6 +20,10 @@ defmodule Flezha.SDK.Operator do
   the live Cells or replays its own outputs, so a dead Cell's delete cannot
   arrive behind its replacement's first record.
 
+  A persistent instance keeps a processed-prefix ledger (`Flezha.SDK.Prefix`):
+  each push of an input with an offset holds it, its Cell releases it, and a
+  tick reports the prefix behind everything written, on every stream.
+
   A class that sleeps arms one idle timer at bind. When it fires, the owed
   input tail still awaited or a Cell active inside the window re-arms it; with
   every Cell quiet past the window the instance ships `IterPark` at iteration
@@ -27,15 +31,19 @@ defmodule Flezha.SDK.Operator do
   """
 
   use GenServer
+  require Logger
 
-  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park}
+  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park, Prefix, Record}
   alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
   alias Flezha.SDK.Bounded.Commit
+
+  # How long a report of the processed prefix waits for more releases.
+  @prefix_tick_ms 5
 
   # What a router that will not answer tells its caller.
   @busy {:error, :operator_busy}
   # What an entry input carries into routing: no metadata, no key, no Cell,
-  # and the durable offset the controller stamped under the tier.
+  # and the durable offset the controller stamped.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
 
   defmodule State do
@@ -45,7 +53,9 @@ defmodule Flezha.SDK.Operator do
       :topology,
       :runner,
       :cells,
+      :prefix,
       handed: nil,
+      prefix_tick?: false,
       # The sleep: the input tail the bind still owes, when it bound, and the
       # armed idle timer's ref (`nil` once it asked to sleep).
       owed: 0,
@@ -99,6 +109,8 @@ defmodule Flezha.SDK.Operator do
     # Cell's are bounded by one number the caller can state, rather than by
     # what the process-wide variable said at each separate construction.
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
+    topology = Keyword.fetch!(opts, :topology)
+    prefix = if topology.persistence_enabled?, do: Prefix.new()
 
     cells =
       opts
@@ -111,15 +123,16 @@ defmodule Flezha.SDK.Operator do
         :secondaries,
         :credit
       ])
-      |> Keyword.merge(kind: :unbounded, hold_cap: hold_cap)
+      |> Keyword.merge(kind: :unbounded, hold_cap: hold_cap, prefix: prefix)
       |> Cells.new()
       |> Cells.schedule_reap()
 
     s = %State{
       operator_id: Keyword.fetch!(opts, :operator_id),
-      topology: Keyword.fetch!(opts, :topology),
+      topology: topology,
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
+      prefix: prefix,
       # The frames a Cell that stopped handed on. The handoff cannot share
       # the Cells' output hold: it arrives after outputs it has to precede,
       # and one FIFO cannot say that.
@@ -154,14 +167,26 @@ defmodule Flezha.SDK.Operator do
     {:noreply, s}
   end
 
+  # A value a restore delivers again, named by the producer's record: to the
+  # one consumer it names, whose floor drops it when it already took `origin`.
+  def handle_cast({:input, _channel, message, %{"flz.edge" => edge} = metadata}, %State{} = s) do
+    {offset, _replay} = frame_facts(metadata)
+    {:noreply, redeliver_edge(s, edge, message, offset)}
+  end
+
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
 
     case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message) do
       {:ok, channel, value} ->
-        {offset, replay} = frame_facts(s.topology, metadata)
+        {offset, replay} = frame_facts(metadata)
         emit = %{@entry_emit | offset: offset, replay: replay}
+        # Held while it routes, so the prefix reaches it even when it reaches
+        # no Cell.
+        held = offset && s.prefix
+        if held, do: Prefix.hold(held, offset)
         {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
+        if held, do: Prefix.release(held, offset)
         {:noreply, s}
 
       :parked ->
@@ -237,6 +262,12 @@ defmodule Flezha.SDK.Operator do
 
   def handle_info({:idle, ref}, %State{idle: ref} = s), do: {:noreply, idle_due(s)}
 
+  def handle_info(:prefix_tick, %State{} = s) do
+    s = %{s | prefix_tick?: false}
+    report = report_prefix(s)
+    {:noreply, if(report == :owed or Prefix.pending?(s.prefix), do: arm_prefix(s), else: s)}
+  end
+
   def handle_info(_msg, s), do: {:noreply, s}
 
   # --- sleeping ---
@@ -280,13 +311,46 @@ defmodule Flezha.SDK.Operator do
     end)
   end
 
+  # --- the processed prefix ---
+
+  defp arm_prefix(%State{prefix_tick?: true} = s), do: s
+
+  defp arm_prefix(%State{} = s) do
+    Process.send_after(self(), :prefix_tick, @prefix_tick_ms)
+    %{s | prefix_tick?: true}
+  end
+
+  # The marker goes on every stream, behind everything this process wrote
+  # there, and only when nothing it holds is still waiting for one: a marker
+  # ahead of a held record would confirm what the controller never received.
+  # `:owed` when a prefix could not go out yet, `:done` otherwise.
+  defp report_prefix(%State{prefix: ledger, cells: cells} = s) do
+    with p when is_integer(p) <- Prefix.candidate(ledger),
+         true <- s.handed.n == 0 and cells.held.n == 0 and cells.secondaries != [] do
+      identity = Park.identity(s.operator_id, "", "")
+      frame = Record.prefix_frame(identity, p, length(cells.secondaries))
+
+      sent? =
+        Enum.all?(cells.secondaries, fn handle ->
+          hold = Hold.new(streams: [handle])
+          match?({:ok, _hold}, Hold.write("processed_prefix", hold, {frame, %{}}))
+        end)
+
+      if sent?, do: Prefix.reported(ledger, p)
+      if sent?, do: :done, else: :owed
+    else
+      nil -> :done
+      false -> :owed
+    end
+  end
+
+  # --- routing ---
+
   # A journaled input the controller re-forwarded or forwarded: stamped with
   # its input-log offset.
   defp owed_arrival?(metadata), do: is_map(metadata) and Map.has_key?(metadata, "flz.offset")
 
   defp now_ms, do: System.monotonic_time(:millisecond)
-
-  # --- routing ---
 
   # Fan `value` out along `source`'s routes; `emit` is the producing emit's
   # metadata, key and origin, `ordinal` the invocation's plugin-output count.
@@ -336,34 +400,62 @@ defmodule Flezha.SDK.Operator do
     {deliver_to_node(s, node_ref, value, key, emit), ordinal}
   end
 
-  # What the controller stamped on a forwarded input of a tier class: the
-  # durable offset, and whether the frame is a member of a replayed slice.
-  # Nothing off the tier, where no metadata is read at all.
-  defp frame_facts(%{effectively_once?: true}, metadata) when is_map(metadata) do
-    offset =
-      case Integer.parse(Map.get(metadata, "flz.offset", "")) do
-        {offset, _rest} -> offset
-        :error -> nil
-      end
+  # What the controller stamped on a forwarded input: its input-log offset,
+  # and whether the frame is a member of a replayed slice.
+  defp frame_facts(metadata) when is_map(metadata),
+    do: {Inbox.input_offset(metadata), if(Map.has_key?(metadata, "flz.replay"), do: :member)}
 
-    {offset, if(Map.has_key?(metadata, "flz.replay"), do: :member)}
-  end
+  defp frame_facts(_metadata), do: {nil, nil}
 
-  defp frame_facts(_topo, _metadata), do: {nil, nil}
-
-  # The queue item: under the tier the offset and the replay mark ride the
-  # input, so the Cell can skip a re-forward it already made durable and hold
-  # a slice member back. Off the tier the queue is the raw value it always was.
+  # The queue item: an input with an offset carries it, the replay mark and
+  # whether the controller forwarded it, so the Cell can skip a re-forward it
+  # already took and hold a slice member back. Anything else is the raw value.
   defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, emit) do
     item =
-      if topo.effectively_once?,
-        do: %Cell.Input{value: value, offset: emit.offset, replay: Map.get(emit, :replay)},
+      if topo.effectively_once? or is_integer(emit.offset),
+        do: %Cell.Input{
+          value: value,
+          offset: emit.offset,
+          replay: Map.get(emit, :replay),
+          forwarded?: emit.origin == nil
+        },
         else: value
 
-    case Cells.deliver(s.cells, node_ref, value, key, item) do
-      {{:misroute, reason}, cells} -> park_misroute(%{s | cells: cells}, node_ref, value, reason)
-      {_keys, cells} -> %{s | cells: cells}
+    s =
+      case Cells.deliver(s.cells, node_ref, value, key, item) do
+        {{:misroute, reason}, cells} ->
+          park_misroute(%{s | cells: cells}, node_ref, value, reason)
+
+        {_keys, cells} ->
+          %{s | cells: cells}
+      end
+
+    if s.prefix && is_integer(emit.offset), do: arm_prefix(s), else: s
+  end
+
+  # The edge names its producer and consumer by node seq, as the producer's
+  # record wrote it; the value was already through the route's transform.
+  defp redeliver_edge(%State{topology: topo} = s, edge, payload, offset) do
+    with [producer, consumer] <- String.split(edge, ":"),
+         {producer, ""} <- Integer.parse(producer),
+         {consumer, ""} <- Integer.parse(consumer),
+         %{key_by: key_by, to: {:node, consumer_ref}} <- edge_route(topo, producer, consumer),
+         {:ok, value} <- Record.decode_body(payload) do
+      key = if key_by, do: key_by.(value)
+      emit = %{@entry_emit | origin: :redelivered, offset: offset}
+      deliver_to_node(s, consumer_ref, value, key, emit)
+    else
+      _unknown ->
+        Logger.warning("[Flezha.SDK] #{s.operator_id} re-delivered edge #{edge} matches no route")
+        s
     end
+  end
+
+  defp edge_route(topo, producer, consumer) do
+    refs = Map.new(topo.node_seq, fn {ref, seq} -> {seq, ref} end)
+
+    with %{^producer => from, ^consumer => to} <- refs,
+         do: topo.routes |> Map.get({:node, from}, []) |> Enum.find(&(&1.to == {:node, to}))
   end
 
   # --- parking (entry-parse + partition mis-route) ---
