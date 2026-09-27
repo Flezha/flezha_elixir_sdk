@@ -98,8 +98,8 @@ defmodule Flezha.SDK.RunnerServer do
   def whereis, do: Process.whereis(@name)
 
   @doc "Post-start declared-set mutations (ships UpdateFactories)."
-  def define(server, module, topology),
-    do: Call.control(server, {:define, module, topology}, @busy)
+  def define(server, factory_row, topology),
+    do: Call.control(server, {:define, factory_row, topology}, @busy)
 
   def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
   def namespace(server), do: Call.control(server, :namespace, nil)
@@ -188,16 +188,14 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   @impl true
-  def handle_call({:define, _module, topology}, _from, %State{} = s) do
-    fid = topology.factory_id
-
+  def handle_call({:define, {fid, _, _} = factory_row, topology}, _from, %State{} = s) do
     if Map.has_key?(s.topologies, fid) do
       {:reply, {:error, {:duplicate_factory_id, fid}}, s}
     else
       s = %{
         s
         | topologies: Map.put(s.topologies, fid, topology),
-          factories: s.factories ++ [{fid, nil, Codec.kind(topology)}]
+          factories: s.factories ++ [factory_row]
       }
 
       ship_update_factories(s)

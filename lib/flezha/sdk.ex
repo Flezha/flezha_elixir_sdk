@@ -59,7 +59,7 @@ defmodule Flezha.SDK do
          {:ok, class} <- build_class(kind, module),
          :ok <- not_duplicate(h, class.factory_id) do
       if h.server do
-        case RunnerServer.define(h.server, module, class) do
+        case RunnerServer.define(h.server, factory_row(module, class), class) do
           :ok -> %{h | classes: h.classes ++ [{module, class}]}
           {:error, _} = e -> e
         end
@@ -97,8 +97,7 @@ defmodule Flezha.SDK do
   def start(%__MODULE__{} = h) do
     topologies = Map.new(h.classes, fn {_m, t} -> {t.factory_id, t} end)
 
-    factories =
-      Enum.map(h.classes, fn {m, t} -> {t.factory_id, description(m), Codec.kind(t)} end)
+    factories = Enum.map(h.classes, fn {m, t} -> factory_row(m, t) end)
 
     opts = [
       namespace: h.namespace,
@@ -241,7 +240,10 @@ defmodule Flezha.SDK do
       else: :ok
   end
 
-  defp description(module) do
-    if function_exported?(module, :description, 0), do: module.description(), else: nil
+  defp factory_row(module, class) do
+    description =
+      if function_exported?(module, :description, 0), do: module.description(), else: nil
+
+    {class.factory_id, description, Codec.kind(class)}
   end
 end

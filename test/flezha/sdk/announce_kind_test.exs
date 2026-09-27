@@ -56,6 +56,8 @@ defmodule Flezha.SDK.AnnounceKindTest do
     @moduledoc false
     use Flezha.SDK.BoundedOperator, factory_id: "announce_late", sink: "out"
 
+    def description, do: "the late class"
+
     def run(input, state, ctx) do
       emit(ctx, input)
       {:ok, state}
@@ -100,10 +102,10 @@ defmodule Flezha.SDK.AnnounceKindTest do
 
     assert %Flezha.SDK{} = Flezha.SDK.register_factory(handle, Late)
 
-    assert Enum.map(update_factories().factories, &{&1.id, &1.kind}) == [
-             {"announce_unbounded", "unbounded"},
-             {"announce_bounded", "bounded"},
-             {"announce_late", "bounded"}
+    assert Enum.map(update_factories().factories, &{&1.id, &1.kind, &1.description}) == [
+             {"announce_unbounded", "unbounded", ""},
+             {"announce_bounded", "bounded", ""},
+             {"announce_late", "bounded", "the late class"}
            ]
   end
 
