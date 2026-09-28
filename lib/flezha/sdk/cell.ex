@@ -1,11 +1,13 @@
 defmodule Flezha.SDK.Cell do
   @moduledoc """
   One process per Cell: a bounded input queue, the retry-then-park dispatch
-  ladder, and per-Cell ordering (arrival order out of the queue). Inputs under
-  `:drop_nothing` arrive as a `GenServer.call` the Cell answers only when
-  there is room — never dropped, never refused (the caller, the Operator
-  router, waits, which is the documented co-tenancy cost);
-  `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
+  ladder, and per-Cell ordering (arrival order out of the queue). An input
+  under `:drop_nothing` that finds a free slot in the Cell's
+  `Flezha.SDK.Cell.Room` arrives as a cast, so its pusher never waits on a
+  Cell that is mid-run; one that finds none arrives as a `GenServer.call` the
+  Cell answers only when a slot frees — never dropped, never refused (the
+  caller, the Operator router, waits, which is the documented co-tenancy
+  cost); `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
   the input and HOLDS the Cell until the controller's `ParkPayloadAck`.
 
   A Cell that writes a record stream — a changeful one, whose tasklet
@@ -43,7 +45,7 @@ defmodule Flezha.SDK.Cell do
   require Logger
 
   alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Prefix, Tasklet, Timers}
-  alias Flezha.SDK.Cell.{Clock, Records, State, Tier}
+  alias Flezha.SDK.Cell.{Clock, Records, Room, State, Tier}
   alias Flezha.SDK.Operator.Inbox
 
   # The live read's two verdicts. Every other refusal is `Flezha.SDK.Call`'s.
@@ -108,8 +110,21 @@ defmodule Flezha.SDK.Cell do
   """
   def enqueue_block(pid, value), do: GenServer.call(pid, {:enqueue, value}, :infinity)
 
+  @doc """
+  Push under `:drop_nothing` through the Cell's `room`: a free slot lands the
+  item as a cast, so the caller does not wait on a Cell that is mid-run;
+  with none it waits in `enqueue_block/2`. A gone Cell exits the caller, as
+  the call would.
+  """
+  @spec push(pid(), Room.t(), term()) :: :ok
+  def push(pid, room, value),
+    do: if(Room.take(room), do: send_item(pid, value), else: enqueue_block(pid, value))
+
   @doc "Run this Cell's `compensate/3` over the outputs it released."
-  def compensate(pid, outputs), do: enqueue_block(pid, %Undo{outputs: outputs})
+  def compensate(pid, outputs), do: send_item(pid, %Undo{outputs: outputs})
+
+  @doc "Queue a due firing its driver hands back, behind what the Cell holds."
+  def fire(pid, %Fire{} = fire), do: send_item(pid, fire)
 
   @doc """
   Enqueue a barrier behind whatever this Cell already holds: `{:stage_done,
@@ -117,8 +132,16 @@ defmodule Flezha.SDK.Cell do
   it. `written` names the effect records a bounded stage's Cell wrote since
   its last barrier (`%{cell_id, first_seq, seq, channels}`), `nil` when none.
   """
-  def barrier(pid, ref, reply_to),
-    do: enqueue_block(pid, %Barrier{ref: ref, reply_to: reply_to})
+  def barrier(pid, ref, reply_to), do: send_item(pid, %Barrier{ref: ref, reply_to: reply_to})
+
+  # A cast to a gone pid is lost in silence, so a Cell already gone exits the
+  # caller as the call would. One that dies with the item in its mailbox loses
+  # it as it loses its queue: an input's prefix hold stays, so the offset is
+  # never reported past.
+  defp send_item(pid, item) do
+    Process.alive?(pid) or exit({:noproc, {__MODULE__, :send_item, [pid]}})
+    GenServer.cast(pid, {:enqueue, item})
+  end
 
   @doc "The earliest processing-time timer pending on this Cell, or `nil`."
   @spec earliest_timer(pid()) :: non_neg_integer() | nil
@@ -251,7 +274,7 @@ defmodule Flezha.SDK.Cell do
       input_channel: Keyword.get(opts, :input_channel),
       module: module,
       cell_key: cell_key,
-      capacity: Keyword.fetch!(opts, :capacity),
+      room: Keyword.fetch!(opts, :room),
       policy: Keyword.fetch!(opts, :policy),
       retry_max: Keyword.fetch!(opts, :retry_max),
       retry_backoff_ms: Keyword.fetch!(opts, :retry_backoff_ms),
@@ -304,11 +327,11 @@ defmodule Flezha.SDK.Cell do
 
   @impl true
   def handle_call({:enqueue, value}, from, %State{} = s) do
-    if s.size < s.capacity do
+    if Room.take(s.room) do
       # Room now — accept immediately (the caller does not block).
       {:reply, :ok, kick(enqueue(s, value))}
     else
-      # No room — defer the reply until a dispatch frees a slot (block policy).
+      # No room — defer the reply until a dequeue frees a slot (block policy).
       Counters.inc_blocked_parks(s.counters)
       # An accepted-but-unqueued push is invisible to `dispatches` and to the
       # handout report, so it carries its own: the age reported is the oldest
@@ -379,14 +402,18 @@ defmodule Flezha.SDK.Cell do
     e -> {:reply, {:error, "apply_state: #{Exception.message(e)}"}, s}
   end
 
+  # A push that took its slot in the room before it was sent, or an item that
+  # holds none.
   @impl true
+  def handle_cast({:enqueue, value}, %State{} = s), do: {:noreply, kick(enqueue(s, value))}
+
   def handle_cast({:enqueue_drop, value, policy}, %State{} = s) do
     cond do
-      s.size < s.capacity ->
+      Room.take(s.room) ->
         {:noreply, kick(enqueue(s, value))}
 
       policy == :drop_oldest ->
-        {{:value, dropped}, q} = :queue.out(s.queue)
+        {dropped, q} = out_oldest_input(s.queue)
         record_drop(s, :drop_oldest, dropped)
         {:noreply, kick(enqueue(%{s | queue: q, size: s.size - 1}, value))}
 
@@ -424,27 +451,21 @@ defmodule Flezha.SDK.Cell do
     {:noreply, s}
   end
 
-  def handle_info({:timer_due, at}, %State{size: size, capacity: capacity} = s)
-      when size >= capacity do
-    # A due message that finds no room comes back later, never drops.
-    Process.send_after(
-      self(),
-      {:timer_due, at},
-      Knob.arm(:cell_wake_retry, 1, s.operator_id)
-    )
-
-    {:noreply, s}
-  end
-
   def handle_info({:timer_due, at}, %State{} = s) do
-    upto = max(at, System.system_time(:millisecond))
+    if Room.free(s.room) < 1 do
+      # A due message that finds no room comes back later, never drops.
+      Process.send_after(self(), {:timer_due, at}, Knob.arm(:cell_wake_retry, 1, s.operator_id))
+      {:noreply, s}
+    else
+      upto = max(at, System.system_time(:millisecond))
 
-    s =
-      s.timers.pending
-      |> Timers.due(:processing_time, upto)
-      |> Enum.reduce(s, &enqueue(&2, %Fire{kind: :processing_time, at: &1}))
+      s =
+        s.timers.pending
+        |> Timers.due(:processing_time, upto)
+        |> Enum.reduce(s, &enqueue(&2, %Fire{kind: :processing_time, at: &1}))
 
-    {:noreply, kick(s)}
+      {:noreply, kick(s)}
+    end
   end
 
   # The Operator is gone — stopped or crashed — so this Cell ends with it,
@@ -486,6 +507,24 @@ defmodule Flezha.SDK.Cell do
   defp enqueue(%State{} = s, value),
     do: %{s | queue: :queue.in(value, s.queue), size: s.size + 1, last_input_ms: now_ms()}
 
+  # Only an input holds a slot of the room; a firing, a close, a slice end,
+  # an undo and a barrier ride beside the inputs, so none costs one its place.
+  defp holds_room?(%type{}) when type in [Fire, Close, Undo, Barrier, Tier.SliceEnd], do: false
+  defp holds_room?(_input), do: true
+
+  # The oldest input, for `:drop_oldest` to shed: never an item beside them.
+  # A full room means at least one is queued.
+  defp out_oldest_input(queue) do
+    {{:value, item}, rest} = :queue.out(queue)
+
+    if holds_room?(item) do
+      {item, rest}
+    else
+      {dropped, rest} = out_oldest_input(rest)
+      {dropped, :queue.in_r(item, rest)}
+    end
+  end
+
   defp kick(%State{processing?: false, park: %{held?: false}, size: size} = s) when size > 0 do
     send(self(), :process)
     %{s | processing?: true}
@@ -498,12 +537,12 @@ defmodule Flezha.SDK.Cell do
   defp process_next(%State{} = s) do
     case :queue.out(s.queue) do
       {:empty, _} ->
-        admit_waiter(%{s | processing?: false})
+        %{s | processing?: false}
 
       {{:value, item}, q} ->
         s = %{s | queue: q, size: s.size - 1}
+        s = if holds_room?(item), do: free_slot(s), else: s
         s = s |> admit(item) |> Records.release_settled()
-        s = admit_waiter(s)
 
         if s.park.held? do
           %{s | processing?: false}
@@ -515,21 +554,23 @@ defmodule Flezha.SDK.Cell do
     end
   end
 
-  # A freed slot admits the next blocked caller (reply :ok, enqueue its value).
-  defp admit_waiter(%State{} = s) do
-    if s.size < s.capacity do
-      case :queue.out(s.waiters) do
-        {:empty, _} ->
-          note_no_deferral(s)
-
-        {{:value, {from, value}}, waiters} ->
-          GenServer.reply(from, :ok)
-          s = %{s | waiters: waiters} |> enqueue(value)
-          if :queue.is_empty(waiters), do: note_no_deferral(s), else: s
+  # A dequeued item's slot, freed before its run so a pusher need not wait
+  # the run out: the head blocked caller's (reply :ok, enqueue its value)
+  # unless the queue still overshoots, the room's otherwise. While a caller is
+  # blocked the room stays at or below zero, where no pusher can move it, so
+  # the read is exact and no later cast overtakes the caller.
+  defp free_slot(%State{} = s) do
+    s =
+      if :queue.is_empty(s.waiters) or Room.free(s.room) < 0 do
+        Room.add(s.room, 1)
+        s
+      else
+        {{:value, {from, value}}, waiters} = :queue.out(s.waiters)
+        GenServer.reply(from, :ok)
+        enqueue(%{s | waiters: waiters}, value)
       end
-    else
-      s
-    end
+
+    if :queue.is_empty(s.waiters), do: note_no_deferral(s), else: s
   end
 
   # Release this Cell's deferred-push slot: nothing is held any more.
@@ -556,11 +597,10 @@ defmodule Flezha.SDK.Cell do
     %{s | tier: %{s.tier | written: nil}}
   end
 
-  # Defence in depth, and no test distinguishes it: the slice's order is already
-  # guaranteed by `Operator.push/6` pushing a member with `enqueue_block/2`, a
-  # synchronous call, so the drain has buffered every member before the close
-  # can arrive. Taking the close off the queue instead of flushing on the
-  # message removes that dependency on another module's choice of call.
+  # The Operator pushes every member before it sends the close, and one
+  # sender's messages arrive in order, so the members are ahead of the close
+  # in the mailbox; queueing the close keeps it behind them until they have
+  # been dispatched into the slice.
   defp admit(%State{} = s, %Tier.SliceEnd{}), do: Tier.flush_slice(s, &requeue/2)
 
   # An input at or below the floor this Cell already took is a COMPLETED
@@ -621,6 +661,7 @@ defmodule Flezha.SDK.Cell do
   # Items at the head, in order; the size overshoots the capacity by internal
   # items only, bounded by the pending set.
   defp requeue(%State{} = s, items) do
+    Room.add(s.room, -Enum.count(items, &holds_room?/1))
     queue = items |> Enum.reverse() |> Enum.reduce(s.queue, &:queue.in_r/2)
     %{s | queue: queue, size: s.size + length(items)}
   end

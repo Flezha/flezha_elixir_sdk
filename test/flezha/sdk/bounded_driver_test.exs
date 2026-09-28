@@ -394,6 +394,67 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     assert commits |> Enum.map(& &1.task_idx) |> Enum.sort() == [0, 1, 2, 3]
   end
 
+  # Each arm reports that it is running and holds until the test releases it,
+  # so both being seen at once is the proof, whichever the driver reached first.
+  defmodule HeldArm do
+    def run(name, input, ctx) do
+      send(:bounded_driver_test_collector, {:running, name, self()})
+
+      receive do
+        :release -> :ok
+      after
+        5_000 -> :ok
+      end
+
+      Flezha.SDK.Ctx.emit(ctx, name <> ":" <> input)
+    end
+  end
+
+  defmodule HeldLeft do
+    use Flezha.SDK.Tasklet, name: "held_left"
+
+    @impl true
+    def run(input, state, ctx) do
+      HeldArm.run(name(), input, ctx)
+      {:ok, state}
+    end
+  end
+
+  defmodule HeldRight do
+    use Flezha.SDK.Tasklet, name: "held_right"
+
+    @impl true
+    def run(input, state, ctx) do
+      HeldArm.run(name(), input, ctx)
+      {:ok, state}
+    end
+  end
+
+  defmodule HeldDiamondFlow do
+    def factory_id, do: "held_diamond_flow"
+
+    def channels(c) do
+      fan = c |> Channels.input("in") |> Channels.into(Tagger)
+      fan |> Channels.into(HeldLeft) |> Channels.into(Join)
+      fan |> Channels.into(HeldRight) |> Channels.into(Join)
+    end
+  end
+
+  test "a level's steps run side by side, and the driver answers while they run" do
+    driver = start_driver(HeldDiamondFlow, [])
+    Inbox.input(driver, nil, "go", %{})
+
+    assert_receive {:running, first, first_pid}, 5_000
+    assert_receive {:running, second, second_pid}, 2_000
+    assert Enum.sort([first, second]) == ["held_left", "held_right"]
+    assert {:ok, _cell} = Operator.lookup(driver, "tagger", "")
+
+    ref = Process.monitor(driver)
+    Enum.each([first_pid, second_pid], &send(&1, :release))
+    assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
+    assert %{status: "ok"} = completion(drain())
+  end
+
   # --- failure and the saga ---
 
   test "a failing tasklet ends the run as an error naming it" do

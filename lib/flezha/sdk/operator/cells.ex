@@ -2,7 +2,8 @@ defmodule Flezha.SDK.Operator.Cells do
   @moduledoc """
   An operator instance's Cells, held in the state of the process that owns
   them — the unbounded `Flezha.SDK.Operator` or the bounded operator
-  `Flezha.SDK.Bounded.Driver` — as `%{node_ref => %{key => pid}}`.
+  `Flezha.SDK.Bounded.Driver` — as `%{node_ref => %{key => pid}}`, with each
+  live Cell's `Flezha.SDK.Cell.Room`, which a push takes its slot from.
 
   Single Cells and the owned Static ones are minted at start; a Dynamic key's
   Cell is minted on the first value addressed to it, up to its node's
@@ -44,6 +45,7 @@ defmodule Flezha.SDK.Operator.Cells do
     :held,
     :prefix,
     cells: %{},
+    rooms: %{},
     dynamic: %{},
     evicted: nil
   ]
@@ -152,9 +154,9 @@ defmodule Flezha.SDK.Operator.Cells do
     end)
   end
 
-  # A `:drop_nothing` push is a `GenServer.call`, so a Cell that died between
-  # the last input and this one would take the owner down unless the exit is
-  # caught; the retry starts a fresh Cell, which is what the `:DOWN` clause
+  # A push to a Cell that died between the last input and this one exits,
+  # and would take the owner down unless the exit is caught; the retry starts
+  # a fresh Cell, which is what the `:DOWN` clause
   # would have arranged, so "the key is routable again on its next input" is
   # true by construction rather than by ordering luck.
   defp push(c, node_ref, key, item, retry? \\ true) do
@@ -172,7 +174,7 @@ defmodule Flezha.SDK.Operator.Cells do
 
     try do
       case knob(c.topology, node_ref, :on_full, :drop_nothing) do
-        :drop_nothing -> Cell.enqueue_block(pid, item)
+        :drop_nothing -> Cell.push(pid, Map.fetch!(c.rooms, pid), item)
         other -> Cell.enqueue_drop(pid, item, other)
       end
 
@@ -403,10 +405,12 @@ defmodule Flezha.SDK.Operator.Cells do
         {:capped, c}
 
       knobs ->
-        {:ok, pid} = start_cell(c, node_ref, key)
+        room = Cell.Room.new(Tasklet.mailbox_capacity(c.topology.node_modules[node_ref]))
+        {:ok, pid} = start_cell(c, node_ref, key, room)
         Process.monitor(pid)
         if knobs, do: dynamic_event(c, :created)
-        {pid, %{c | cells: Map.put(c.cells, node_ref, Map.put(keyed, key, pid))}}
+        cells = Map.put(c.cells, node_ref, Map.put(keyed, key, pid))
+        {pid, %{c | cells: cells, rooms: Map.put(c.rooms, pid, room)}}
     end
   end
 
@@ -417,10 +421,15 @@ defmodule Flezha.SDK.Operator.Cells do
   @spec forget(t(), reference(), String.t() | nil) :: t()
   def forget(%__MODULE__{} = c, node_ref, key) do
     Counters.dispatch_finished(c.counters, Cell.identity(c.operator_id, node_ref, key))
-    %{c | cells: Map.update(c.cells, node_ref, %{}, &Map.delete(&1, key))}
+
+    %{
+      c
+      | cells: Map.update(c.cells, node_ref, %{}, &Map.delete(&1, key)),
+        rooms: Map.delete(c.rooms, pid(c, node_ref, key))
+    }
   end
 
-  defp start_cell(%__MODULE__{topology: topo} = c, node_ref, key) do
+  defp start_cell(%__MODULE__{topology: topo} = c, node_ref, key, room) do
     module = topo.node_modules[node_ref]
     ladder = Topology.retry_ladder(topo, node_ref)
 
@@ -434,7 +443,7 @@ defmodule Flezha.SDK.Operator.Cells do
       input_channel: inbound_channel(topo, node_ref),
       module: module,
       cell_key: key,
-      capacity: Tasklet.mailbox_capacity(module),
+      room: room,
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: ladder.retry_max,
       retry_backoff_ms: ladder.retry_backoff_ms,

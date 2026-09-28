@@ -59,17 +59,15 @@ flz operator start order_executor --id order_by_hand --namespace trading \
   --text '{"symbol": "EUR/USD", "quantity": 10}' --channel order
 ```
 
-About ten seconds later, once `confirm_fill` has its answer from the exchange,
-the runner's terminal shows the order being booked, and the instance ends. The
-ids come from `stable_id/1`, so yours differ:
+The runner's terminal shows the order being booked at once, while
+`confirm_fill` waits. The ids come from `stable_id/1`, so yours differ:
 
 ```
 [book] EUR/USD 10 as ord-663e51f721fc6553d09b24a47c4e1383
 ```
 
-The booking comes after the wait: an Elixir order runs `confirm_fill` and
-`record_order` one after the other, so the book waits for the fill.
-`flz operator info` shows how the order ended:
+About ten seconds later, once `confirm_fill` has its answer from the exchange,
+the instance ends. `flz operator info` shows how the order ended:
 
 ```sh
 flz operator info order_by_hand --namespace trading

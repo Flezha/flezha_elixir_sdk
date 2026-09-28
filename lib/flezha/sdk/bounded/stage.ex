@@ -64,7 +64,7 @@ defmodule Flezha.SDK.Bounded.Stage do
 
       pid ->
         ref = make_ref()
-        Cell.enqueue_block(pid, fire)
+        Cell.fire(pid, fire)
         Cell.barrier(pid, ref, reply_to)
         {[key], [{ref, node_ref}], cells}
     end

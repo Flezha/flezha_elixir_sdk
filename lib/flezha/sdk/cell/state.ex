@@ -21,7 +21,8 @@ defmodule Flezha.SDK.Cell.State do
     :input_channel,
     :module,
     :cell_key,
-    :capacity,
+    # The free queue slots its pusher takes from: `Flezha.SDK.Cell.Room`.
+    :room,
     :policy,
     :retry_max,
     :retry_backoff_ms,

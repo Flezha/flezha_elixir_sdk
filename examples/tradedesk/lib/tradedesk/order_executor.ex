@@ -44,9 +44,9 @@ defmodule Tradedesk.OrderExecutor do
 
   The driver runs the chain level by level: every step of a level commits
   before any of its children run, so the desk's order of events is fixed
-  rather than a race. The two steps of the last level run one after the
-  other, the fill first. A step that fails poisons its whole level, which is
-  why a refusal of the fill unwinds the steps before it.
+  rather than a race. The two steps of the last level run side by side. A
+  step that fails poisons its whole level, which is why a refusal of the fill
+  unwinds the steps before it.
 
   Nothing ends on a sink: the last step ends the instance with its result,
   which `flz operator info` shows.

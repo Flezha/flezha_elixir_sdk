@@ -22,10 +22,9 @@ defmodule Flezha.SDK.Cell.Tier do
   alias Flezha.SDK.Operator.Routing
 
   # The end of a replayed slice, taken from the Cell's own queue in mailbox
-  # order behind the members it closes. Not the guarantee — that is
-  # `Operator.push/6`'s synchronous `enqueue_block/2` — but the thing that
-  # keeps the order right if that call ever becomes a cast, which would
-  # otherwise misfold a slice with no error anywhere.
+  # order behind the members it closes. A member's push is usually a cast,
+  # queued but not yet dispatched when the close arrives, so a close that
+  # flushed on arrival would misfold the slice with no error anywhere.
   defmodule SliceEnd do
     @moduledoc false
     defstruct []
