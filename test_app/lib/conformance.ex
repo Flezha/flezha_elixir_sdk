@@ -6,94 +6,94 @@
 
 defmodule ElixirRunner.Conformance.PlainTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "plain"
 
-  def name, do: "plain"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("plain")
 end
 
 defmodule ElixirRunner.Conformance.SecondTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "second"
 
-  def name, do: "second"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("second")
 end
 
 defmodule ElixirRunner.Conformance.TwinTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "plain"
 
   # A distinct module answering the SAME name as `plain`: that IS the collision.
-  def name, do: "plain"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("twin")
 end
 
 defmodule ElixirRunner.Conformance.StaticTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "static"
 
   # The role is "the static declaration missing its other half". In this SDK
   # `cells_for/1` defaults to the whole keyset, so keys without a router are
   # complete and a router without keys is the incomplete half — the mirror of
   # the reference's, and the shape `CellsForMissing` names here.
-  def name, do: "static"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
+  @impl true
   def cells_for(_input), do: ["a"]
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("static")
 end
 
 defmodule ElixirRunner.Conformance.RoutedTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "routed", cell_keys: ["a", "b"]
 
-  def name, do: "routed"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
-  def cell_keys, do: ["a", "b"]
+  @impl true
   def cells_for(_input), do: ["a"]
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("routed")
 end
 
 defmodule ElixirRunner.Conformance.DynamicTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "dynamic"
 
   # Dynamic mode is DERIVED here: a keyless tasklet a keyed edge reaches.
-  def name, do: "dynamic"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("dynamic")
 end
 
 defmodule ElixirRunner.Conformance.NochangeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "nochange", logical_clock: true
 
   # A logical clock over a tasklet that journals nothing: no `apply_change/2`.
-  def name, do: "nochange"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
-  def clock, do: :logical
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("nochange")
 end
 
 defmodule ElixirRunner.Conformance.EventTimeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "eventtime"
 
-  def name, do: "eventtime"
-  def init_state(_key), do: nil
+  @impl true
   def run(_input, state, _ctx), do: {:ok, state}
-  def clock, do: :event_time
-  def event_time_of(_input), do: 0
+  @impl true
+  def event_time(_input), do: 0
+  @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("eventtime")
 end
 

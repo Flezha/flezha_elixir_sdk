@@ -260,9 +260,8 @@ defmodule Flezha.SDK.Cell do
       park: %{%State{}.park | enabled?: Keyword.get(opts, :park_on_exhaustion, true)},
       slots: slots,
       credit: credit,
-      # The static ctx facts: the node's, from the Operator, and the timer
-      # policy this tasklet declares.
-      ctx_opts: [timer_policy: Tasklet.timer_policy(module)] ++ Keyword.get(opts, :ctx_opts, []),
+      # The ctx's static facts, built once; the node's come from the Operator.
+      ctx: Ctx.template(module, cell_key, identity, Keyword.get(opts, :ctx_opts, [])),
       timers: Clock.seed(module, slot, firing_gate(opts)),
       changeful?: changeful?,
       tier: tier,
@@ -637,7 +636,7 @@ defmodule Flezha.SDK.Cell do
     offset = input && input.offset
 
     try do
-      case run_ladder(s, item, ctx_opts(s, item, input), 1) do
+      case run_ladder(s, item, ctx_seed(s, item, input), 1) do
         {:ok, new_task_state, facts} ->
           {s, facts} = hold_removal(s, item, facts)
           s |> complete(new_task_state, facts, offset) |> request_completion(facts.completion)
@@ -733,7 +732,7 @@ defmodule Flezha.SDK.Cell do
 
   # The op a parked firing commits: its own removal, op 0 of the session.
   defp firing_removal(%State{} = s, %Fire{kind: kind, at: at}) do
-    policy = Keyword.fetch!(s.ctx_opts, :timer_policy)
+    policy = s.ctx.timer_policy
 
     {pending, ops, tally} =
       s.timers.pending |> Timers.session(policy, at, {kind, at}) |> Timers.commit()
@@ -748,10 +747,10 @@ defmodule Flezha.SDK.Cell do
   # ctx is bound before the call, so a raise inside `run/3` still reaches the
   # arm that discards it — the ref is the only handle its dictionary slots
   # have.
-  defp run_ladder(%State{} = s, item, opts, attempt) do
+  defp run_ladder(%State{} = s, item, seed, attempt) do
     outcome =
       with {:ok, ctx} <-
-             guarded(fn -> Ctx.new(s.module, s.cell_key, clock_now(s, item), opts) end),
+             guarded(fn -> %{seed | ref: make_ref(), now_ms: clock_now(s, item)} end),
            {:ok, result} <- guarded(fn -> call(s, item, ctx) end, ctx) do
         {:result, ctx, result}
       end
@@ -782,11 +781,11 @@ defmodule Flezha.SDK.Cell do
 
       {:result, ctx, {:error, reason}} ->
         Ctx.discard(ctx)
-        retry_or_park(s, item, opts, attempt, format_error(reason))
+        retry_or_park(s, item, seed, attempt, format_error(reason))
 
       {:raised, ctx, message} ->
         if ctx, do: Ctx.discard(ctx)
-        retry_or_park(s, item, opts, attempt, message)
+        retry_or_park(s, item, seed, attempt, message)
     end
   end
 
@@ -837,20 +836,21 @@ defmodule Flezha.SDK.Cell do
   defp clock_now(_s, %Fire{at: at}), do: at
   defp clock_now(%State{} = s, value), do: Clock.now(s, value)
   # The invocation's timer session opens over the live pending set; a firing's
-  # opens on its own removal. A replayed input's spawn requests issue nothing.
-  # A `compensate` hook's context carries no timers: a rollback is no place to
-  # arm a deadline.
-  defp ctx_opts(%State{} = s, %Undo{}, _input),
-    do: [timers: :unavailable] ++ s.ctx_opts ++ [replay: false]
+  # opens on its own removal. A replayed input's spawn requests issue nothing, and
+  # a `compensate` hook's context carries no timers. The change seq it starts at,
+  # restored with the Cell, lets a re-run answer the stable ids the first did.
+  defp ctx_seed(%State{} = s, %Undo{}, _input),
+    do: %{s.ctx | timers: :unavailable, seq: s.change_seq}
 
-  defp ctx_opts(%State{} = s, item, input) do
-    s.ctx_opts ++
-      [
+  defp ctx_seed(%State{} = s, item, input) do
+    %{
+      s.ctx
+      | seq: s.change_seq,
         timers: s.timers.pending,
         firing: firing(item),
-        replay: input != nil and input.replay != nil,
+        replay?: input != nil and input.replay != nil,
         origin: origin(s, input)
-      ]
+    }
   end
 
   # What names a spawn this invocation asks for across a re-run of its input.
@@ -862,10 +862,10 @@ defmodule Flezha.SDK.Cell do
   defp firing(%Fire{kind: kind, at: at}), do: {kind, at}
   defp firing(_value), do: nil
 
-  defp retry_or_park(%State{retry_max: max}, _value, _opts, attempt, error) when attempt >= max,
+  defp retry_or_park(%State{retry_max: max}, _value, _seed, attempt, error) when attempt >= max,
     do: {:park, error, attempt}
 
-  defp retry_or_park(%State{} = s, value, opts, attempt, error) do
+  defp retry_or_park(%State{} = s, value, seed, attempt, error) do
     Logger.debug(
       "[Flezha.SDK] #{State.label(s)} attempt #{attempt}/#{s.retry_max} failed: #{error}; retrying"
     )
@@ -876,7 +876,7 @@ defmodule Flezha.SDK.Cell do
     })
 
     Knob.wait(:sdk_retry, attempt, s.operator_id, base: s.retry_backoff_ms)
-    run_ladder(s, value, opts, attempt + 1)
+    run_ladder(s, value, seed, attempt + 1)
   end
 
   # Where a dispatch settles into one record a park IS a record: the entry, the

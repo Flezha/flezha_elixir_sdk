@@ -29,7 +29,7 @@ defmodule Flezha.SDK.Cell.State do
     :identity,
     :slots,
     :credit,
-    ctx_opts: [],
+    :ctx,
     # One field, so the struct stays a flat map: the pending set, the declared
     # clock, the BEAM timer refs armed for processing time, the event-time
     # high-water, and for a bounded stage's Cell the gate its due firings pass

@@ -1,13 +1,16 @@
 defmodule Flezha.SDK.Ctx do
   @moduledoc """
   The invocation context handed to `Tasklet.run/3`. `use Flezha.SDK.Tasklet`
-  imports the functions below, so a tasklet writes `emit(ctx, value)`; `apply/3`
-  and `complete/2` are not imported and are called by their full names.
+  imports the functions below, so a tasklet writes `emit(ctx, value)` and
+  `complete(ctx, result)`; `apply/3` is not imported, since it would shadow
+  `Kernel.apply/3`, and a `use` tasklet never calls it: its `defchange`
+  recorders do.
 
   `emit/2`, `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4`
   accumulate outputs for this invocation; `apply/3` folds a change into the
   state through the tasklet's `apply_change/2` and records it for the Cell's record
-  stream — one fold, one push, the only recorded mutation path; `now/1` is a
+  stream — one fold, one push, the only recorded mutation path, which a
+  reference-form tasklet calls by its full name; `now/1` is a
   wall-clock millisecond stamp captured once at invocation entry;
   `cell_key/1` is the owning Cell's key (or nil for a Single Cell).
   Emits and changes are held in the running process's dictionary under a
@@ -33,11 +36,11 @@ defmodule Flezha.SDK.Ctx do
   hands `timers: :unavailable`, and the four timer calls answer
   `{:error, :timers_unavailable}` and arm nothing.
 
-  Under the effectively-once tier two more slots ride the same dictionary:
+  Two more slots ride the same dictionary: under the effectively-once tier
   `checkpoint/1` raises the flag the Cell reads at the invocation's end to
-  close its staged interval, and `stable_id/1` answers a replay-stable id
-  derived from the Cell's wire identity, the change seq the invocation
-  started at and a per-invocation ordinal.
+  close its staged interval, and on every Cell `stable_id/1` answers a
+  replay-stable id derived from the Cell's wire identity, the change seq the
+  invocation started at and a per-invocation ordinal.
 
   `spawn_bounded/4` asks the runner for a bounded instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
@@ -113,6 +116,17 @@ defmodule Flezha.SDK.Ctx do
       keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
       key_required?: Keyword.get(opts, :key_required?, false)
     }
+  end
+
+  @doc false
+  # A Cell's ctx before any invocation: its static facts, built once at start and
+  # updated per invocation with that invocation's own fields.
+  @spec template(module(), term(), binary(), keyword()) :: t()
+  def template(module, cell_key, identity, opts) do
+    new(module, cell_key, 0, [
+      {:timer_policy, Tasklet.timer_policy(module)},
+      {:identity, identity} | opts
+    ])
   end
 
   @doc """
@@ -273,7 +287,9 @@ defmodule Flezha.SDK.Ctx do
   A replay-stable 128-bit id, 32 lowercase hex digits: FNV-1a-128 over the
   Cell's wire identity, the change seq this invocation started at and a
   per-invocation ordinal. The same invocation on a replay derives the same
-  ids in the same order, which is what makes an effect idempotent.
+  ids in the same order, which is what makes an effect idempotent. The seq
+  moves on only when an invocation records a change, a timer op or an effect,
+  so on a Cell that records nothing every invocation answers the same ids.
   """
   @spec stable_id(t()) :: String.t()
   def stable_id(%__MODULE__{ref: ref} = ctx) do

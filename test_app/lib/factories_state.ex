@@ -19,20 +19,23 @@
 
 defmodule ElixirRunner.StoreInputTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "store_input_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "store_input_tasklet"
+  @impl true
   def init_state(_), do: %{binary_inputs: [], text_inputs: []}
-  def apply_change(s, {:push_text, text}), do: %{s | text_inputs: s.text_inputs ++ [text]}
 
+  defchange push_text(s, text) do
+    %{s | text_inputs: s.text_inputs ++ [text]}
+  end
+
+  @impl true
   def state_from_json(%{"binary_inputs" => binaries, "text_inputs" => texts}),
     do: %{binary_inputs: binaries, text_inputs: texts}
 
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:push_text, input})
-    Ctx.emit(ctx, input)
+    s = push_text(s, ctx, input)
+    emit(ctx, input)
     {:ok, s}
   end
 end
@@ -56,30 +59,30 @@ end
 
 defmodule ElixirRunner.CounterEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "counter_entry_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "counter_entry_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx) do
-    Ctx.emit(ctx, ElixirRunner.Numbers.int(input))
+    emit(ctx, ElixirRunner.Numbers.int(input))
     {:ok, s}
   end
 end
 
 defmodule ElixirRunner.CounterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "counter_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "counter_tasklet"
+  @impl true
   def init_state(_), do: %{value: 0}
-  def apply_change(s, {:delta, delta}), do: %{s | value: s.value + delta}
+
+  defchange delta(s, delta) do
+    %{s | value: s.value + delta}
+  end
+
+  @impl true
   def state_from_json(%{"value" => value}), do: %{value: value}
-  def run(delta, s, ctx), do: {:ok, Ctx.apply(ctx, s, {:delta, delta})}
+  @impl true
+  def run(delta, s, ctx), do: {:ok, delta(s, ctx, delta)}
 end
 
 defmodule ElixirRunner.StatefulCounterOp do
@@ -102,20 +105,27 @@ end
 # the code is the counter's.
 defmodule ElixirRunner.PersistenceOffEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "persistence_off_entry_tasklet"
+  use Flezha.SDK.Tasklet, name: "persistence_off_entry_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.CounterEntryTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.CounterEntryTask
 end
 
 defmodule ElixirRunner.PersistenceOffCounterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "persistence_off_counter_tasklet"
+  use Flezha.SDK.Tasklet, name: "persistence_off_counter_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.CounterTask
-  defdelegate apply_change(state, change), to: ElixirRunner.CounterTask
+  @impl true
   defdelegate state_from_json(json), to: ElixirRunner.CounterTask
-  defdelegate run(input, state, ctx), to: ElixirRunner.CounterTask
+
+  defchange delta(s, delta) do
+    %{s | value: s.value + delta}
+  end
+
+  @impl true
+  def run(delta, s, ctx), do: {:ok, delta(s, ctx, delta)}
 end
 
 defmodule ElixirRunner.PersistenceOffCounterOp do
@@ -141,19 +151,22 @@ end
 # key, and every input emits `key=total` on the `totals` sink.
 defmodule ElixirRunner.SleepingCounterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "sleeping_counter_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "sleeping_counter_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.CounterTask
-  defdelegate apply_change(state, change), to: ElixirRunner.CounterTask
+  @impl true
   defdelegate state_from_json(json), to: ElixirRunner.CounterTask
 
+  defchange delta(s, delta) do
+    %{s | value: s.value + delta}
+  end
+
+  @impl true
   def run(input, s, ctx) do
     [key | rest] = input |> to_string() |> String.split(":", parts: 2)
-    s = Ctx.apply(ctx, s, {:delta, ElixirRunner.Numbers.int(Enum.join(rest))})
-    Ctx.emit(ctx, "#{key}=#{s.value}")
+    s = delta(s, ctx, ElixirRunner.Numbers.int(Enum.join(rest)))
+    emit(ctx, "#{key}=#{s.value}")
     {:ok, s}
   end
 end
@@ -175,19 +188,15 @@ end
 
 defmodule ElixirRunner.TickEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-
-  alias Flezha.SDK.Ctx
-
-  def name, do: "tick_entry_tasklet"
-  def init_state(_), do: nil
+  use Flezha.SDK.Tasklet, name: "tick_entry_tasklet"
 
   # Wire format: `<interval>:<ts>:<delta>`.
+  @impl true
   def run(input, s, ctx) do
     [interval, ts, delta] =
       input |> String.split(":", parts: 3) |> Enum.concat(["0", "0", "0"]) |> Enum.take(3)
 
-    Ctx.emit(ctx, %{
+    emit(ctx, %{
       interval: ElixirRunner.Numbers.int(interval),
       ts: ElixirRunner.Numbers.int(ts),
       delta: ElixirRunner.Numbers.int(delta)
@@ -199,15 +208,19 @@ end
 
 defmodule ElixirRunner.TickTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "tick_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "tick_tasklet"
+  @impl true
   def init_state(_), do: %{last: 0}
-  def apply_change(s, %{delta: delta}), do: %{s | last: delta}
+
+  defchange tick(s, tick) do
+    %{s | last: tick.delta}
+  end
+
+  @impl true
   def state_from_json(%{"last" => last}), do: %{last: last}
-  def run(tick, s, ctx), do: {:ok, Ctx.apply(ctx, s, tick)}
+  @impl true
+  def run(tick, s, ctx), do: {:ok, tick(s, ctx, tick)}
 end
 
 defmodule ElixirRunner.CoalescingCounterOp do
@@ -230,19 +243,23 @@ end
 
 defmodule ElixirRunner.ResumeProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "resume_probe_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "resume_probe_tasklet"
+  @impl true
   def init_state(_), do: %{total: 0}
-  def apply_change(s, {:add, delta}), do: %{s | total: s.total + delta}
+
+  defchange add(s, delta) do
+    %{s | total: s.total + delta}
+  end
+
+  @impl true
   def state_from_json(%{"total" => total}), do: %{total: total}
 
   # Emits the running total, so a resume is observable on the wire.
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:add, ElixirRunner.Numbers.int(input)})
-    Ctx.emit(ctx, Integer.to_string(s.total))
+    s = add(s, ctx, ElixirRunner.Numbers.int(input))
+    emit(ctx, Integer.to_string(s.total))
     {:ok, s}
   end
 end
@@ -266,18 +283,22 @@ end
 
 defmodule ElixirRunner.EvolvingCartV1Task do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "evolving_cart"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "evolving_cart"
+  @impl true
   def init_state(_), do: %{total: 0}
-  def apply_change(s, {:add, delta}), do: %{s | total: s.total + delta}
+
+  defchange add(s, delta) do
+    %{s | total: s.total + delta}
+  end
+
+  @impl true
   def state_from_json(%{"total" => total}), do: %{total: total}
 
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:add, ElixirRunner.Numbers.int(input)})
-    Ctx.emit(ctx, "#{s.total}:")
+    s = add(s, ctx, ElixirRunner.Numbers.int(input))
+    emit(ctx, "#{s.total}:")
     {:ok, s}
   end
 end
@@ -287,28 +308,31 @@ end
 # migrated field so the e2e reads it off the wire.
 defmodule ElixirRunner.EvolvingCartV2Task do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "evolving_cart", schema_version: 2, min_readable_schema_version: 1
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "evolving_cart"
-  def schema_version, do: 2
-  def min_readable_schema_version, do: 1
+  @impl true
   def init_state(_), do: %{total: 0, currency: ""}
-  def apply_change(s, {:add, delta, _note}), do: %{s | total: s.total + delta}
 
+  defchange add(s, delta, _note) do
+    %{s | total: s.total + delta}
+  end
+
+  @impl true
   def state_from_json(%{"total" => total, "currency" => currency}),
     do: %{total: total, currency: currency}
 
+  @impl true
   def migrate_state(1, %{total: total}), do: {:ok, %{total: total, currency: "EUR"}}
   def migrate_state(from, _old), do: {:error, "no migration from #{from}"}
+  @impl true
   def migrate_change(1, {:add, delta}), do: {:ok, {:add, delta, "migrated"}}
   def migrate_change(from, _old), do: {:error, "no migration from #{from}"}
 
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:add, ElixirRunner.Numbers.int(input), "live"})
+    s = add(s, ctx, ElixirRunner.Numbers.int(input), "live")
     currency = if s.currency == "", do: "EUR", else: s.currency
-    Ctx.emit(ctx, "#{s.total}:#{currency}")
+    emit(ctx, "#{s.total}:#{currency}")
     {:ok, s}
   end
 end
@@ -351,29 +375,36 @@ end
 # `TIMER_TEST_TIMEOUT_MS` (the e2e sets it short).
 defmodule ElixirRunner.SessionTimeoutTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "session_timeout_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "session_timeout_tasklet"
+  @impl true
   def init_state(_), do: %{touched: [], closed_at: []}
-  def apply_change(s, {:touched, input}), do: %{s | touched: s.touched ++ [input]}
-  def apply_change(s, {:closed, at}), do: %{s | closed_at: s.closed_at ++ [at]}
 
+  defchange touched(s, input) do
+    %{s | touched: s.touched ++ [input]}
+  end
+
+  defchange closed(s, at) do
+    %{s | closed_at: s.closed_at ++ [at]}
+  end
+
+  @impl true
   def state_from_json(%{"touched" => touched, "closed_at" => closed_at}),
     do: %{touched: touched, closed_at: closed_at}
 
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:touched, input})
+    s = touched(s, ctx, input)
     # A processing-time timer, because the answer to "nothing has arrived"
     # cannot be an event-time one: nothing would advance the clock.
-    {:ok, _at} = Ctx.timer_after(ctx, session_timeout_ms())
+    {:ok, _at} = timer_after(ctx, session_timeout_ms())
     {:ok, s}
   end
 
+  @impl true
   def on_timer(fired_at, _kind, s, ctx) do
-    s = Ctx.apply(ctx, s, {:closed, fired_at})
-    Ctx.emit(ctx, "closed@#{fired_at}")
+    s = closed(s, ctx, fired_at)
+    emit(ctx, "closed@#{fired_at}")
     {:ok, s}
   end
 
@@ -410,20 +441,23 @@ end
 # from both, so the e2e drives every close itself.
 defmodule ElixirRunner.CheckpointStoreTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "checkpoint_store_tasklet"
 
   alias Flezha.Bench.TierStoreTask
-  alias Flezha.SDK.Ctx
-
-  def name, do: "checkpoint_store_tasklet"
+  @impl true
   defdelegate init_state(key), to: TierStoreTask
-  defdelegate apply_change(state, change), to: TierStoreTask
+  @impl true
   def state_from_json(json), do: json
 
+  defchange set(values, key, value) do
+    Map.put(values, key, value)
+  end
+
+  @impl true
   def run(input, s, ctx) do
     case TierStoreTask.split(input) do
       {"commit", _} ->
-        Ctx.checkpoint(ctx)
+        checkpoint(ctx)
         {:ok, s}
 
       {key, value} ->
@@ -441,32 +475,37 @@ end
 # relay's record durable and not the tally's.
 defmodule ElixirRunner.TierRelayTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "tier_relay"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "tier_relay"
+  @impl true
   def init_state(_), do: 0
-  def apply_change(count, :relayed), do: count + 1
 
+  defchange relayed(count) do
+    count + 1
+  end
+
+  @impl true
   def run(input, count, ctx) do
-    count = Ctx.apply(ctx, count, :relayed)
-    Ctx.emit(ctx, input)
+    count = relayed(count, ctx)
+    emit(ctx, input)
     {:ok, count}
   end
 end
 
 defmodule ElixirRunner.TierTallyTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "tier_tally"
 
   alias Flezha.Bench.TierStoreTask
-  alias Flezha.SDK.Ctx
 
-  def name, do: "tier_tally"
+  @impl true
   def init_state(_), do: 0
-  def apply_change(count, :tallied), do: count + 1
 
+  defchange tallied(count) do
+    count + 1
+  end
+
+  @impl true
   def run(input, count, ctx) do
     case TierStoreTask.split(input) do
       {key, "hold"} ->
@@ -480,8 +519,8 @@ defmodule ElixirRunner.TierTallyTask do
   end
 
   defp tally(key, count, ctx) do
-    count = Ctx.apply(ctx, count, :tallied)
-    Ctx.emit_keyed(ctx, key, "#{key}=#{count}")
+    count = tallied(count, ctx)
+    emit_keyed(ctx, key, "#{key}=#{count}")
     {:ok, count}
   end
 end
@@ -570,29 +609,32 @@ end
 # the fold order becomes [100, 200, 300].
 defmodule ElixirRunner.CandleTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-
-  alias Flezha.SDK.Ctx
-
-  def name, do: "candle_tasklet"
-  def clock, do: :event_time
+  use Flezha.SDK.Tasklet, name: "candle_tasklet"
 
   # : Event times in fold order. The assertion surface.
+  @impl true
   def init_state(_), do: %{folded: []}
-  def apply_change(s, {:fold, at}), do: %{s | folded: s.folded ++ [at]}
+
+  defchange fold(s, at) do
+    %{s | folded: s.folded ++ [at]}
+  end
+
+  @impl true
   def state_from_json(%{"folded" => folded}), do: %{folded: folded}
 
-  def event_time_of(input),
+  @impl true
+  def event_time(input),
     do: input |> String.split(":", parts: 2) |> hd() |> ElixirRunner.Numbers.int()
 
+  @impl true
   def run(input, s, ctx) do
     # `Ctx.now/1` IS the extracted event time under an event-time clock.
-    at = Ctx.now(ctx)
-    s = Ctx.apply(ctx, s, {:fold, at})
+    at = now(ctx)
+    s = fold(s, ctx, at)
     # One row per candle bucket, so a corrected replay overwrites by key rather
     # than appending a second row.
     bucket = div(at, 1_000)
-    Ctx.emit_keyed(ctx, "candle/#{bucket}", "#{bucket}=#{input}")
+    emit_keyed(ctx, "candle/#{bucket}", "#{bucket}=#{input}")
     {:ok, s}
   end
 end

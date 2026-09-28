@@ -478,6 +478,7 @@ defmodule Flezha.SDK.Topology do
     |> check_cells_for(module)
     |> check_mailbox(module)
     |> check_clock(module)
+    |> check_retired(module)
     |> Enum.reverse()
   end
 
@@ -520,26 +521,27 @@ defmodule Flezha.SDK.Topology do
   end
 
   # A clock the runtime cannot serve: the reference's `UnservableClock` (a
-  # logical clock reads a change seq no changeless tasklet has), and the
-  # two a dynamic declaration can get wrong.
+  # logical clock reads a change seq no changeless tasklet has), and two
+  # clocks at once, which only a hand-written tasklet can reach: the `use`
+  # form refuses it at compile time.
   defp check_clock(is, module) do
-    case Tasklet.clock(module) do
-      :wall ->
+    cond do
+      Tasklet.exports?(module, :event_time, 1) and Tasklet.logical_clock?(module) ->
+        [{:TwoClocks, mod_name(module)} | is]
+
+      Tasklet.clock(module) == :logical and not Tasklet.changeful?(module) ->
+        [{:UnservableClock, mod_name(module)} | is]
+
+      true ->
         is
-
-      :logical ->
-        if Tasklet.changeful?(module),
-          do: is,
-          else: [{:UnservableClock, mod_name(module)} | is]
-
-      :event_time ->
-        if Tasklet.exports?(module, :event_time_of, 1),
-          do: is,
-          else: [{:EventTimeClockWithoutExtractor, mod_name(module)} | is]
-
-      _other ->
-        [{:UnknownClock, mod_name(module)} | is]
     end
+  end
+
+  # A callback that no longer exists would be ignored, so it is refused by name.
+  defp check_retired(is, module) do
+    Enum.reduce(Tasklet.retired_callbacks(module), is, fn {callback, instead}, is ->
+      [{:RetiredCallback, mod_name(module), callback, instead} | is]
+    end)
   end
 
   # What a channel may claim about its plugin wires, its attempt ceiling and

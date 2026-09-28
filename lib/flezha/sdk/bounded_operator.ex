@@ -4,7 +4,8 @@ defmodule Flezha.SDK.BoundedOperator do
   this behaviour's zero-arity callbacks from its options and imports the channel
   builder. The author writes `channels/1`, as an unbounded operator does: a DAG
   of Tasklets, Channels and Cells authored on the same builder token. A
-  tasklet ends its instance with `Flezha.SDK.Ctx.complete/2`.
+  tasklet ends its instance with `complete/2`, which `use Flezha.SDK.Tasklet`
+  imports.
 
   Every knob below is optional and reads its default through this module's
   reader functions, so a class states only what it departs from. The values are

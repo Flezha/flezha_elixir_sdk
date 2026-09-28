@@ -7,7 +7,6 @@
 defmodule ElixirRunner.BoundedLoop do
   @moduledoc false
   alias ElixirRunner.Bounded.Gate
-  alias Flezha.SDK.Ctx
 
   # The turn whose payload is this blocks while the release env is unset, so a
   # SIGKILL lands with the earlier iterations durable and that one in flight.
@@ -18,20 +17,18 @@ defmodule ElixirRunner.BoundedLoop do
 
   defmodule ChatTurn do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "chat_turn"
 
     alias ElixirRunner.Bounded.Gate
-    alias Flezha.SDK.Ctx
 
-    def name, do: "chat_turn"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use ElixirRunner.Bounded.Seen
 
     # The closing turn is not a turn of the conversation: it is not recorded,
     # and it ends the session with the number of turns the state holds.
+    @impl true
     def run("bye", state, ctx) do
-      Ctx.emit(ctx, "bye")
-      Ctx.complete(ctx, Integer.to_string(length(state.items)))
+      emit(ctx, "bye")
+      complete(ctx, Integer.to_string(length(state.items)))
       {:ok, state}
     end
 
@@ -39,23 +36,19 @@ defmodule ElixirRunner.BoundedLoop do
       if input == "mid-crash", do: Gate.block_until_released()
       # Keyed by the turn, so the record count is the number of DISTINCT turns
       # that ran — a re-run of a committed iteration would show up.
-      state = Ctx.apply(ctx, state, input)
-      Ctx.emit(ctx, input)
+      state = insert(state, ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
   end
 
   defmodule ChatReply do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "chat_reply"
 
-    alias Flezha.SDK.Ctx
-
-    def name, do: "chat_reply"
-    def init_state(_), do: nil
-
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "reply:" <> input)
+      emit(ctx, "reply:" <> input)
       {:ok, state}
     end
   end
@@ -65,30 +58,35 @@ defmodule ElixirRunner.BoundedLoop do
   # outputs. So the hook reads the last thing it said, retracts it, and pops it.
   defmodule ChatReplyUndoable do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "chat_reply_undoable"
 
-    alias Flezha.SDK.Ctx
-
-    def name, do: "chat_reply_undoable"
+    @impl true
     def init_state(_), do: %{said: []}
 
-    def apply_change(state, {:said, turn}), do: %{state | said: state.said ++ [turn]}
-    def apply_change(state, :retracted), do: %{state | said: Enum.drop(state.said, -1)}
+    defchange said(state, turn) do
+      %{state | said: state.said ++ [turn]}
+    end
 
+    defchange retracted(state) do
+      %{state | said: Enum.drop(state.said, -1)}
+    end
+
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, {:said, input})
-      Ctx.emit(ctx, "reply:" <> input)
+      state = said(state, ctx, input)
+      emit(ctx, "reply:" <> input)
       {:ok, state}
     end
 
+    @impl true
     def compensate(_outputs, state, ctx) do
       case List.last(state.said) do
         nil ->
           {:ok, state}
 
         turn ->
-          state = Ctx.apply(ctx, state, :retracted)
-          Ctx.emit(ctx, "retract:" <> turn)
+          state = retracted(state, ctx)
+          emit(ctx, "retract:" <> turn)
           {:ok, state}
       end
     end
@@ -99,30 +97,33 @@ defmodule ElixirRunner.BoundedLoop do
   # iteration.
   defmodule BenchTurn do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "bench_turn"
 
-    alias Flezha.SDK.Ctx
-
-    def name, do: "bench_turn"
+    @impl true
     def init_state(_), do: %{turns: 0, last: ""}
-    def apply_change(state, turn), do: %{state | turns: state.turns + 1, last: turn}
+
+    defchange turn(state, turn) do
+      %{state | turns: state.turns + 1, last: turn}
+    end
 
     # With `FLEZHA_BENCH_WAKE_AFTER_MS` set each turn arms a timer that far
     # out, whose firing sends the bench's wake marker, `wake:<fired_at>`.
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, input)
+      state = turn(state, ctx, input)
 
       case System.get_env("FLEZHA_BENCH_WAKE_AFTER_MS") do
         nil -> :ok
-        after_ms -> {:ok, _at} = Ctx.timer_after(ctx, String.to_integer(after_ms))
+        after_ms -> {:ok, _at} = timer_after(ctx, String.to_integer(after_ms))
       end
 
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
+    @impl true
     def on_timer(fired_at, _kind, state, ctx) do
-      Ctx.emit(ctx, "wake:#{fired_at}")
+      emit(ctx, "wake:#{fired_at}")
       {:ok, state}
     end
   end
@@ -169,17 +170,14 @@ defmodule ElixirRunner.BoundedLoop do
   # crashes in.
   defmodule BlockingReply do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "blocking_reply"
 
     alias ElixirRunner.Bounded.Gate
-    alias Flezha.SDK.Ctx
 
-    def name, do: "blocking_reply"
-    def init_state(_), do: nil
-
+    @impl true
     def run(input, state, ctx) do
       if input == "reply-crash", do: Gate.block_until_released()
-      Ctx.emit(ctx, "reply:" <> input)
+      emit(ctx, "reply:" <> input)
       {:ok, state}
     end
   end
@@ -211,17 +209,19 @@ defmodule ElixirRunner.BoundedLoop do
   # `<symbol>:<count>`: the shape a partition group of bounded operator members takes.
   defmodule KeyedLoopCount do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
+    use Flezha.SDK.Tasklet, name: "keyed_loop_count"
 
-    alias Flezha.SDK.Ctx
-
-    def name, do: "keyed_loop_count"
+    @impl true
     def init_state(_), do: 0
-    def apply_change(count, delta), do: count + delta
 
+    defchange add(count, delta) do
+      count + delta
+    end
+
+    @impl true
     def run(input, count, ctx) do
-      count = Ctx.apply(ctx, count, 1)
-      Ctx.emit(ctx, ElixirRunner.Key.prefix(input) <> ":" <> Integer.to_string(count))
+      count = add(count, ctx, 1)
+      emit(ctx, ElixirRunner.Key.prefix(input) <> ":" <> Integer.to_string(count))
       {:ok, count}
     end
   end

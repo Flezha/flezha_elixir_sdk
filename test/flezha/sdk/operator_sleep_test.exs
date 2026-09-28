@@ -17,10 +17,9 @@ defmodule Flezha.SDK.OperatorSleepTest do
   # Cell holding one is rightly not quiet.
   defmodule Seen do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "seen"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "seen"
 
+    @impl true
     def run(input, s, _ctx) do
       if input == "slow", do: Process.sleep(4 * 150)
       {:ok, s}

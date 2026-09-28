@@ -55,7 +55,7 @@ defmodule Flezha.SDK.UnboundedOperator do
   it and, with `sink:`, it to that plugin channel. With no `sink:` nothing
   leaves the tasklet but its state. `run/3` is written as in a tasklet,
   with the ctx functions and a `state do ... end` block available, and the
-  options `use Flezha.SDK.Tasklet` takes (`max_cells:`, `clock:`, ...)
+  options `use Flezha.SDK.Tasklet` takes (`max_cells:`, `logical_clock:`, ...)
   apply to the generated tasklet. The short form takes no class setting,
   which is the full form's. Writing `run/3`
   and `channels/1` both is a `CompileError` beginning `ShortFormWithTopology`,

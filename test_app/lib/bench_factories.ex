@@ -15,17 +15,13 @@
 
 defmodule Flezha.Bench.EchoTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "do_nothing_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "do_nothing_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 end
@@ -43,82 +39,73 @@ end
 
 defmodule Flezha.Bench.StressA do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "stress_a"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "stress_a"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 
   # The shared 8-key static set (Rust's `STRESS_KEYS`); B/C/D declare the same
   # keyset and narrow the routing to `p0` through `cells_for/1`.
+  @impl true
   def cell_keys, do: ~w(p0 p1 p2 p3 p4 p5 p6 p7)
 end
 
 defmodule Flezha.Bench.StressB do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "stress_b"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "stress_b"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 
+  @impl true
   defdelegate cell_keys, to: Flezha.Bench.StressA
+  @impl true
   def cells_for(_), do: ["p0"]
 end
 
 defmodule Flezha.Bench.StressC do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "stress_c"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "stress_c"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 
+  @impl true
   defdelegate cell_keys, to: Flezha.Bench.StressA
+  @impl true
   def cells_for(_), do: ["p0"]
 end
 
 defmodule Flezha.Bench.StressD do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "stress_d"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "stress_d"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 
+  @impl true
   defdelegate cell_keys, to: Flezha.Bench.StressA
+  @impl true
   def cells_for(_), do: ["p0"]
 end
 
@@ -145,27 +132,33 @@ end
 
 defmodule Flezha.Bench.DynamicTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "dynamic_cell_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "dynamic_cell_tasklet"
+  @impl true
   def init_state(_), do: %{seen: []}
-  def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
+
+  defchange push(s, input) do
+    %{s | seen: s.seen ++ [input]}
+  end
+
+  @impl true
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
-  # The e2e sets the idle TTL short; unset, the Cells live for the
-  # operator's lifetime, as the reference's do.
-  def cell_idle_ttl_ms do
+  # The e2e sets the idle TTL short, in milliseconds, which round up to whole
+  # seconds; unset, the Cells live for the operator's lifetime, as the
+  # reference's do.
+  @impl true
+  def idle_ttl_seconds do
     case System.get_env("DYN_TEST_TTL_MS") do
       nil -> nil
-      ms -> String.to_integer(ms)
+      ms -> ms |> String.to_integer() |> Kernel.+(999) |> div(1_000)
     end
   end
 
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:push, input})
-    Ctx.emit(ctx, input)
+    s = push(s, ctx, input)
+    emit(ctx, input)
     {:ok, s}
   end
 end
@@ -206,16 +199,18 @@ end
 
 defmodule Flezha.Bench.TierStoreTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "tier_store_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "tier_store_tasklet"
+  @impl true
   def init_state(_), do: %{}
-  def apply_change(values, {:set, key, value}), do: Map.put(values, key, value)
+
+  defchange set(values, key, value) do
+    Map.put(values, key, value)
+  end
 
   # Emits `key=value` under `key`, as the reference does: the bench sinks are
   # keyed, so the durable path pays for its stamps here as it does there.
+  @impl true
   def run(input, values, ctx) do
     case split(input) do
       {_key, "poison"} -> {:error, "poison value"}
@@ -233,8 +228,8 @@ defmodule Flezha.Bench.TierStoreTask do
   end
 
   def upsert(key, value, values, ctx) do
-    values = Ctx.apply(ctx, values, {:set, key, value})
-    Ctx.emit_keyed(ctx, key, "#{key}=#{value}")
+    values = set(values, ctx, key, value)
+    emit_keyed(ctx, key, "#{key}=#{value}")
     {:ok, values}
   end
 end
@@ -294,13 +289,18 @@ end
 
 defmodule Flezha.Bench.BenchCheckpointTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "bench_checkpoint_tasklet"
 
   # The same upsert under its own tasklet name, so the declaration a
   # checkpoint class registers is distinguishable from `tier_store`'s.
-  def name, do: "bench_checkpoint_tasklet"
+  @impl true
   defdelegate init_state(key), to: Flezha.Bench.TierStoreTask
-  defdelegate apply_change(state, change), to: Flezha.Bench.TierStoreTask
+
+  defchange set(values, key, value) do
+    Map.put(values, key, value)
+  end
+
+  @impl true
   defdelegate run(input, state, ctx), to: Flezha.Bench.TierStoreTask
 end
 

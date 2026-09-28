@@ -14,15 +14,14 @@ end
 
 defmodule ElixirRunner.CompareFilterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "compare_filter_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "compare_filter_tasklet"
+  @impl true
   def init_state(_), do: %{comparable: "default", inverted: false}
 
+  @impl true
   def run(input, %{comparable: comparable} = s, ctx) do
-    if input == comparable, do: Ctx.emit(ctx, input)
+    if input == comparable, do: emit(ctx, input)
     {:ok, s}
   end
 end
@@ -46,37 +45,32 @@ end
 
 defmodule ElixirRunner.StaticEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "static_entry_tasklet", cell_keys: ["a", "b", "c", "d"]
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "static_entry_tasklet"
+  @impl true
   def init_state(_), do: %{seen: []}
-  def cell_keys, do: ["a", "b", "c", "d"]
+  @impl true
   def cells_for("a" <> _), do: ["a"]
   def cells_for("b" <> _), do: ["b"]
   def cells_for("c" <> _), do: ["c"]
   def cells_for(_), do: ["d"]
 
+  @impl true
   def run(input, s, ctx) do
-    Ctx.emit(ctx, input)
+    emit(ctx, input)
     {:ok, %{s | seen: [input | s.seen]}}
   end
 end
 
 defmodule ElixirRunner.StaticDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "static_downstream_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "static_downstream_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 end
@@ -100,19 +94,23 @@ end
 
 defmodule ElixirRunner.MacroStaticEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "macro_static_entry_tasklet"
+  use Flezha.SDK.Tasklet, name: "macro_static_entry_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.StaticEntryTask
+  @impl true
   defdelegate cell_keys, to: ElixirRunner.StaticEntryTask
+  @impl true
   defdelegate cells_for(input), to: ElixirRunner.StaticEntryTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.StaticEntryTask
 end
 
 defmodule ElixirRunner.MacroStaticDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "macro_static_downstream_tasklet"
+  use Flezha.SDK.Tasklet, name: "macro_static_downstream_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.StaticDownstreamTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamTask
 end
 
@@ -136,34 +134,26 @@ end
 
 defmodule ElixirRunner.MixedMacroEntryTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "mixed_macro_entry_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "mixed_macro_entry_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 end
 
 defmodule ElixirRunner.MixedHandDownstreamTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "mixed_hand_downstream"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "mixed_hand_downstream"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, input)
+        emit(ctx, input)
         {:ok, s}
       )
 end
@@ -213,9 +203,13 @@ defmodule ElixirRunner.SugarStoreInput do
     field(:text_inputs, :list, default: [])
   end
 
+  defchange text_input(state, text) do
+    %{state | text_inputs: state.text_inputs ++ [text]}
+  end
+
   def run(input, state, ctx) do
     emit(ctx, input)
-    {:ok, push_text_inputs(state, ctx, input)}
+    {:ok, text_input(state, ctx, input)}
   end
 end
 
@@ -269,20 +263,20 @@ defmodule ElixirRunner.SugarStateOnly do
     field(:seen, :list, default: [])
   end
 
-  def run(input, state, ctx), do: {:ok, push_seen(state, ctx, input)}
+  defchange seen(state, item) do
+    %{state | seen: state.seen ++ [item]}
+  end
+
+  def run(input, state, ctx), do: {:ok, seen(state, ctx, input)}
 end
 
 # -- hybrid_channel ---------------------------------------------------------
 
 defmodule ElixirRunner.HybridProducerTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "hybrid_producer_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "hybrid_producer_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx) do
     n =
       case Integer.parse(input) do
@@ -290,17 +284,16 @@ defmodule ElixirRunner.HybridProducerTask do
         _ -> 0
       end
 
-    Ctx.emit(ctx, n)
+    emit(ctx, n)
     {:ok, s}
   end
 end
 
 defmodule ElixirRunner.HybridConsumerTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "hybrid_consumer_tasklet"
-  def init_state(_), do: nil
+  use Flezha.SDK.Tasklet, name: "hybrid_consumer_tasklet"
 
+  @impl true
   def run(input, s, _ctx) do
     IO.puts("hybrid_consumer_tasklet: received #{input}")
     {:ok, s}
@@ -335,15 +328,11 @@ end
 
 defmodule ElixirRunner.MergeLabelTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "merge_label_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "merge_label_tasklet"
-  def init_state(_), do: nil
-
+  @impl true
   def run(%{source: source, payload: payload}, s, ctx) do
-    Ctx.emit(ctx, "#{source}:#{payload}")
+    emit(ctx, "#{source}:#{payload}")
     {:ok, s}
   end
 end
@@ -380,9 +369,10 @@ end
 
 defmodule ElixirRunner.TransformLabelTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "transform_label_tasklet"
+  use Flezha.SDK.Tasklet, name: "transform_label_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.StaticDownstreamTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.StaticDownstreamTask
 end
 
@@ -412,21 +402,18 @@ end
 
 defmodule ElixirRunner.PoisonProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-
-  alias Flezha.SDK.Ctx
+  use Flezha.SDK.Tasklet, name: "poison_probe_tasklet"
 
   @antidote {__MODULE__, :antidote}
-  def name, do: "poison_probe_tasklet"
-  def init_state(_), do: nil
 
+  @impl true
   def run(input, s, ctx) do
     if input == "antidote", do: :persistent_term.put(@antidote, true)
 
     if input == "poison" and not :persistent_term.get(@antidote, false) do
       {:error, "poison payload"}
     else
-      Ctx.emit(ctx, "ok:" <> input)
+      emit(ctx, "ok:" <> input)
       {:ok, s}
     end
   end
@@ -450,17 +437,13 @@ end
 
 defmodule ElixirRunner.WedgeProbeTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-
-  alias Flezha.SDK.Ctx
+  use Flezha.SDK.Tasklet, name: "wedge_probe_tasklet"
 
   @aborted {__MODULE__, :aborted}
 
-  def name, do: "wedge_probe_tasklet"
-  def init_state(_), do: nil
-
   # Blocks the dispatch forever: the runner stays connected and heartbeating
   # while its dispatch counter freezes — the `runner_pool_wedged` signature.
+  @impl true
   def run("wedge", _s, _ctx), do: Process.sleep(:infinity)
 
   # Ends the activation as violently as this host allows, WITHOUT emitting,
@@ -468,7 +451,7 @@ defmodule ElixirRunner.WedgeProbeTask do
   # where user code can take its Cell process down untrappably.
   def run("abort", s, ctx) do
     if :persistent_term.get(@aborted, false) do
-      Ctx.emit(ctx, "ok:abort")
+      emit(ctx, "ok:abort")
       {:ok, s}
     else
       :persistent_term.put(@aborted, true)
@@ -479,7 +462,7 @@ defmodule ElixirRunner.WedgeProbeTask do
   def run(input, s, ctx),
     do:
       (
-        Ctx.emit(ctx, "ok:" <> input)
+        emit(ctx, "ok:" <> input)
         {:ok, s}
       )
 end
@@ -503,35 +486,37 @@ end
 
 defmodule ElixirRunner.DropNothingTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "drop_nothing_test_tasklet", mailbox_capacity: 4
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "drop_nothing_test_tasklet"
+  @impl true
   def init_state(_), do: %{processed: 0}
-  def mailbox_capacity, do: 4
 
+  @impl true
   def run(input, s, ctx) do
-    Ctx.emit(ctx, input)
+    emit(ctx, input)
     {:ok, %{s | processed: s.processed + 1}}
   end
 end
 
 defmodule ElixirRunner.DropNewestTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "drop_newest_test_tasklet"
+  use Flezha.SDK.Tasklet, name: "drop_newest_test_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.DropNothingTestTask
+  @impl true
   defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestTask
 end
 
 defmodule ElixirRunner.DropOldestTestTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
-  def name, do: "drop_oldest_test_tasklet"
+  use Flezha.SDK.Tasklet, name: "drop_oldest_test_tasklet"
+  @impl true
   defdelegate init_state(key), to: ElixirRunner.DropNothingTestTask
+  @impl true
   defdelegate mailbox_capacity, to: ElixirRunner.DropNothingTestTask
+  @impl true
   defdelegate run(input, state, ctx), to: ElixirRunner.DropNothingTestTask
 end
 
@@ -587,21 +572,25 @@ end
 
 defmodule ElixirRunner.PartitionRelayTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "partition_relay_tasklet"
 
-  alias Flezha.SDK.Ctx
-
-  def name, do: "partition_relay_tasklet"
+  @impl true
   def init_state(_), do: %{seen: []}
-  def apply_change(s, {:push, input}), do: %{s | seen: s.seen ++ [input]}
+
+  defchange push(s, input) do
+    %{s | seen: s.seen ++ [input]}
+  end
+
+  @impl true
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
   # The Cell is dynamic, keyed by the prefix, so a plain emit carries that
   # key — the reference's `emit_keyed(prefix, input)` with the same key by
   # construction.
+  @impl true
   def run(input, s, ctx) do
-    s = Ctx.apply(ctx, s, {:push, input})
-    Ctx.emit(ctx, input)
+    s = push(s, ctx, input)
+    emit(ctx, input)
     {:ok, s}
   end
 end
@@ -631,20 +620,18 @@ end
 
 defmodule ElixirRunner.SpawnRequesterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "spawn_requester_tasklet"
 
-  alias Flezha.SDK.{Ctx, Spawn}
+  alias Flezha.SDK.Spawn
 
   @bounded "stateless_loop_bounded"
 
-  def name, do: "spawn_requester_tasklet"
-  def init_state(_), do: nil
-
   # The results are printed because the runner's stdout is the only place the
   # scenario can read them.
+  @impl true
   def run(input, s, ctx) do
-    unnamed = Ctx.spawn_bounded(ctx, @bounded, input)
-    named = Ctx.spawn_bounded(ctx, @bounded, input, id: input)
+    unnamed = spawn_bounded(ctx, @bounded, input)
+    named = spawn_bounded(ctx, @bounded, input, id: input)
     report("unnamed", Spawn.await(unnamed))
     report("named", Spawn.await(named))
     {:ok, s}
@@ -680,15 +667,13 @@ end
 # spawn answered and its input not durably consumed.
 defmodule ElixirRunner.SpawnHoldRequesterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "spawn_hold_requester"
 
-  alias Flezha.SDK.{Ctx, Spawn}
+  alias Flezha.SDK.Spawn
 
-  def name, do: "spawn_hold_requester"
-  def init_state(_), do: nil
-
+  @impl true
   def run(input, s, ctx) do
-    handle = Ctx.spawn_bounded(ctx, "stateless_loop_bounded", input)
+    handle = spawn_bounded(ctx, "stateless_loop_bounded", input)
     ElixirRunner.SpawnRequesterTask.report("hold", Spawn.await(handle))
     ElixirRunner.Bounded.Gate.block_until_released()
     {:ok, s}
@@ -717,17 +702,15 @@ end
 
 defmodule ElixirRunner.SpawnOnceRequesterTask do
   @moduledoc false
-  @behaviour Flezha.SDK.Tasklet
+  use Flezha.SDK.Tasklet, name: "spawn_once_requester_tasklet"
 
-  alias Flezha.SDK.{Ctx, Spawn}
-
-  def name, do: "spawn_once_requester_tasklet"
-  def init_state(_), do: nil
+  alias Flezha.SDK.Spawn
 
   # Spawns the `once` bounded operator with the input as its JSON ticket and prints the
   # handle's answer; the spawned pass proves itself on stdout too.
+  @impl true
   def run(input, s, ctx) do
-    handle = Ctx.spawn_bounded(ctx, "typed_once_bounded", Jason.encode!(%{"text" => input}))
+    handle = spawn_bounded(ctx, "typed_once_bounded", Jason.encode!(%{"text" => input}))
     ElixirRunner.SpawnRequesterTask.report("once", Spawn.await(handle))
     {:ok, s}
   end

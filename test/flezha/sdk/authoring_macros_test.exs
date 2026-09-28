@@ -11,8 +11,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureIO, only: [with_io: 2]
+  import Flezha.SDK.Test.Refused
 
-  alias Flezha.SDK.{Channels, Ctx, Local, Topology}
+  alias Flezha.SDK.{Channels, Ctx, Local, Tasklet, Topology}
 
   # --- what `use` defines, and what it does not ---------------------------
 
@@ -42,11 +43,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     for option <- [
           :cell_keys,
-          :cell_idle_ttl_ms,
+          :idle_ttl_seconds,
           :compact_after_bytes,
           :schema_version,
           :min_readable_schema_version,
-          :clock,
+          :logical_clock,
           :max_timers_per_cell
         ] do
       refute function_exported?(Written, option, 0), "`#{option}` was never written"
@@ -104,9 +105,19 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     @impl true
     def name, do: "hand_written"
     @impl true
-    def init_state(_key), do: nil
+    def init_state(_key), do: 0
     @impl true
-    def run(_input, state, _ctx), do: {:ok, state}
+    def idle_ttl_seconds, do: 1
+    @impl true
+    def event_time(input), do: String.to_integer(input)
+    @impl true
+    def apply_change(count, {:add, n}), do: count + n
+
+    @impl true
+    def run(input, count, ctx) do
+      Ctx.emit(ctx, Integer.to_string(Ctx.now(ctx)))
+      {:ok, Ctx.apply(ctx, count, {:add, String.to_integer(input)})}
+    end
   end
 
   defmodule HandWrittenOperator do
@@ -122,10 +133,23 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "the behaviour form registers exactly as before" do
+  test "the behaviour form registers and runs, with its clock and idle TTL read from its callbacks" do
     assert {:ok, topo} = Topology.build(HandWrittenOperator)
     assert topo.factory_id == "hand_written_operator"
     refute function_exported?(HandWritten, :mailbox_capacity, 0)
+
+    assert Tasklet.idle_ttl_ms(HandWritten) == 1_000
+    assert Tasklet.clock(HandWritten) == :event_time
+    assert {[{:add, 7}], 7} = journal(HandWritten, "7")
+    assert HandWritten.apply_change(HandWritten.init_state(nil), {:add, 7}) == 7
+
+    run = start_run(HandWrittenOperator)
+    collect(run, "out")
+    :ok = Local.feed(run, "in", "1234")
+    :ok = Local.run_until_idle(run, 5_000)
+
+    assert ["1234"] = Enum.map(drained(), & &1.payload),
+           "`now/1` serves the input's own event time"
   end
 
   # --- the operator macros -------------------------------------------------
@@ -296,26 +320,98 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       %{state | qty: state.qty + qty, fill_ids: state.fill_ids ++ [id]}
     end
 
-    def run({:set, qty}, state, ctx), do: {:ok, set_qty(state, ctx, qty)}
-    def run({:push, id}, state, ctx), do: {:ok, push_fill_ids(state, ctx, id)}
+    @impl true
     def run({:fill, qty, id}, state, ctx), do: {:ok, record_fill(state, ctx, qty, id)}
   end
 
-  test "the block generates the defaults, the JSON read and the fold" do
+  defmodule Defaults do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "defaults"
+
+    state do
+      field(:qty, :integer, default: 0)
+      field(:seen, :list, default: [])
+    end
+
+    @impl true
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
+  defmodule Tally do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "counter"
+
+    @impl true
+    def init_state(_key), do: 0
+
+    defchange add(count, n) do
+      count + n
+    end
+
+    @impl true
+    def run(_input, count, ctx), do: {:ok, add(count, ctx, 1)}
+  end
+
+  defmodule Noted do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "noted"
+
+    @impl true
+    def init_state(_key), do: 0
+
+    defchange add(count, n, _note) do
+      count + n
+    end
+
+    @impl true
+    def run(_input, count, ctx), do: {:ok, add(count, ctx, 1, "live")}
+  end
+
+  test "a change argument the fold ignores is recorded, and written with an underscore" do
+    assert {[{:add, 1, "live"}], 1} = journal(Noted, "x")
+
+    {_module, warnings} =
+      with_io(:stderr, fn ->
+        Code.compile_string("""
+        defmodule Flezha.SDK.AuthoringMacrosTest.NotedTwin do
+          use Flezha.SDK.Tasklet, name: "noted_twin"
+          @impl true
+          def init_state(_key), do: 0
+          defchange add(count, n, _note) do
+            count + n
+          end
+          @impl true
+          def run(_input, count, ctx), do: {:ok, add(count, ctx, 1, "live")}
+        end
+        """)
+      end)
+
+    assert warnings == ""
+  end
+
+  test "the block generates the defaults and the JSON read" do
     assert Position.init_state(nil) == %{qty: 0, fill_ids: []}
     assert Position.state_from_json(%{"qty" => 7}) == %{qty: 7, fill_ids: []}
     assert Position.state_from_json(%{}) == %{qty: 0, fill_ids: []}
-
-    assert Position.apply_change(%{qty: 0, fill_ids: []}, {:set, :qty, 5}) ==
-             %{qty: 5, fill_ids: []}
-
-    assert Position.apply_change(%{qty: 0, fill_ids: ["a"]}, {:push, :fill_ids, "b"}) ==
-             %{qty: 0, fill_ids: ["a", "b"]}
   end
 
-  test "a field recorder journals one change, and a restore folds it back" do
-    assert {[{:set, :qty, 5}], %{qty: 5, fill_ids: []}} = journal(Position, {:set, 5})
-    assert {[{:push, :fill_ids, "f1"}], %{fill_ids: ["f1"]}} = journal(Position, {:push, "f1"})
+  test "a state block generates no recorder and no change" do
+    assert Defaults.init_state(nil) == %{qty: 0, seen: []}
+    assert function_exported?(Defaults, :state_from_json, 1)
+
+    for {fun, arity} <- [apply_change: 2, set_qty: 3, push_seen: 3, set_seen: 3],
+        do: refute(function_exported?(Defaults, fun, arity), "#{fun}/#{arity}")
+
+    refute Tasklet.changeful?(Defaults)
+  end
+
+  test "defchange works without a state block" do
+    assert {[{:add, 1}], 1} = journal(Tally, "tick")
+
+    assert Tally.apply_change(Tally.apply_change(Tally.init_state(nil), {:add, 1}), {:add, 1}) ==
+             2
+
+    assert Tasklet.changeful?(Tally)
   end
 
   test "a named change is one record for several fields" do
@@ -327,19 +423,43 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert Position.apply_change(Position.init_state(nil), {:record_fill, 3, "f1"}) == live
   end
 
-  test "the block owns apply_change and state_from_json" do
-    for callback <- ["def apply_change(state, _c), do: state", "def state_from_json(j), do: j"] do
+  test "the block owns state_from_json" do
+    error =
+      refused("""
+      use Flezha.SDK.Tasklet, name: "conflicting"
+      state do
+        field(:qty, :integer, default: 0)
+      end
+      def state_from_json(j), do: j
+      def run(_i, s, _c), do: {:ok, s}
+      """)
+
+    assert error.description =~ "state_from_json/1" and error.description =~ "`state` block"
+  end
+
+  test "a hand-written apply_change does not compile in the use form" do
+    block = "state do\n  field(:qty, :integer, default: 0)\nend"
+    change = "defchange add(s, n) do\n  s + n\nend"
+
+    by_hand = "def apply_change(s, _c), do: s"
+
+    for {macro, extra, definition} <- [
+          {~s|Tasklet, name: "by_hand"|, "", by_hand},
+          {~s|Tasklet, name: "by_hand"|, block, by_hand},
+          {~s|Tasklet, name: "by_hand"|, change, by_hand},
+          {~s|Tasklet, name: "by_hand"|, "", "defp apply_change(s, _c), do: s"},
+          {~s|UnboundedOperator, factory_id: "by_hand"|, "", by_hand}
+        ] do
       error =
         refused("""
-        use Flezha.SDK.Tasklet, name: "conflicting"
-        state do
-          field(:qty, :integer, default: 0)
-        end
-        #{callback}
+        use Flezha.SDK.#{macro}
+        #{extra}
+        #{definition}
         def run(_i, s, _c), do: {:ok, s}
         """)
 
-      assert error.description =~ "state" and error.description =~ "block"
+      assert error.description =~ "apply_change/2" and error.description =~ "defchange",
+             "read: #{error.description}"
     end
   end
 
@@ -401,7 +521,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       field(:seen, :list, default: [])
     end
 
-    def run(input, state, ctx), do: {:ok, push_seen(state, ctx, input)}
+    defchange seen(state, item) do
+      %{state | seen: state.seen ++ [item]}
+    end
+
+    def run(input, state, ctx), do: {:ok, seen(state, ctx, input)}
   end
 
   test "an operator module with a run body is a whole unbounded operator" do
@@ -446,10 +570,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert entry_names(Counter) == ["ticks"]
     assert sink_names(topo) == []
 
-    # A tasklet option, and the block's recorders, reach the generated tasklet.
+    # A tasklet option, and the `defchange` recorder, reach the generated tasklet.
     assert Counter.Tasklet.max_cells() == 10
-    assert {[{:push, :seen, "a"}], %{seen: ["a"]}} = journal(Counter.Tasklet, "a")
-    assert Counter.Tasklet.apply_change(%{seen: []}, {:push, :seen, "a"}) == %{seen: ["a"]}
+    assert {[{:seen, "a"}], %{seen: ["a"]}} = journal(Counter.Tasklet, "a")
+    assert Counter.Tasklet.apply_change(%{seen: []}, {:seen, "a"}) == %{seen: ["a"]}
   end
 
   test "register_factory reads a short form's kind" do
@@ -603,18 +727,6 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   # --- driving a tasklet through the ctx -----------------------------------
-
-  # The `CompileError` a module body earns, compiled under a name of its own so
-  # one test can refuse several bodies.
-  defp refused(body) do
-    assert_raise CompileError, fn ->
-      Code.compile_string("""
-      defmodule Flezha.SDK.AuthoringMacrosTest.Refused#{System.unique_integer([:positive])} do
-      #{body}
-      end
-      """)
-    end
-  end
 
   # What one input recorded, and the state it left. `Ctx.take_changes/1` is the
   # runtime's own read of the journal, so the test reads it the way a commit

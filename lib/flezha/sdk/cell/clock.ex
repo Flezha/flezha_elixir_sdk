@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Cell.Clock do
   @spec of(module()) :: :wall | :logical | {:event_time, (term() -> non_neg_integer())}
   def of(module) do
     case Tasklet.clock(module) do
-      :event_time -> {:event_time, &module.event_time_of/1}
+      :event_time -> {:event_time, &module.event_time/1}
       clock -> clock
     end
   end

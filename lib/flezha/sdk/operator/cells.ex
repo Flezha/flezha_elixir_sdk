@@ -7,7 +7,7 @@ defmodule Flezha.SDK.Operator.Cells do
   Single Cells and the owned Static ones are minted at start; a Dynamic key's
   Cell is minted on the first value addressed to it, up to its node's
   `max_cells/0`, and a new key past the cap reaches nothing. Under a declared
-  `cell_idle_ttl_ms/0` one `:reap` tick sweeps them in the owner, so no push
+  `idle_ttl_seconds/0` one `:reap` tick sweeps them in the owner, so no push
   can be routed while it asks each Cell whether it is idle — the drain gate —
   and an idle one evicts itself destructively before the next push can mint
   its successor. Evicted keys are remembered, bounded, so a live read can say
@@ -524,7 +524,7 @@ defmodule Flezha.SDK.Operator.Cells do
     for {node_ref, :dynamic} <- topo.node_mode, into: %{} do
       module = topo.node_modules[node_ref]
 
-      {node_ref, %{cap: Tasklet.max_cells(module), ttl_ms: Tasklet.cell_idle_ttl_ms(module)}}
+      {node_ref, %{cap: Tasklet.max_cells(module), ttl_ms: Tasklet.idle_ttl_ms(module)}}
     end
   end
 

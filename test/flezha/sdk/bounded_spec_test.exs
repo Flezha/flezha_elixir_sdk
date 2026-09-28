@@ -1,48 +1,42 @@
 defmodule Flezha.SDK.Bounded.SpecTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Ctx, Topology}
+  alias Flezha.SDK.{Channels, Topology}
   alias Flezha.SDK.Bounded.Spec
 
   # --- fixtures ---
 
   defmodule PassTask do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "pass"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "pass"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
   end
 
   defmodule TailTask do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tail"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "tail"
+    @impl true
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
   defmodule OtherTailTask do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "other_tail"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "other_tail"
+    @impl true
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
   defmodule JoinTask do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "join"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "join"
+    @impl true
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
   defmodule StaticTask do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "static"
-    def cell_keys, do: ["1m"]
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "static", cell_keys: ["1m"]
+    @impl true
     def run(_input, state, _ctx), do: {:ok, state}
   end
 

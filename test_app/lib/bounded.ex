@@ -65,8 +65,22 @@ defmodule ElixirRunner.Bounded.Seen do
   @doc """
   The reference's `SeenState`: a set kept sorted so snapshot bytes are
   deterministic, and idempotent on insert so re-running a tasklet after a
-  resume changes nothing. Every durable fixture here folds its changes with it.
+  resume changes nothing. Every durable fixture here folds its changes with it:
+  `use` gives a tasklet the empty set and the `insert` change.
   """
+  defmacro __using__(_opts) do
+    quote do
+      require Flezha.SDK.State
+
+      @impl true
+      def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+
+      Flezha.SDK.State.defchange insert(state, item) do
+        ElixirRunner.Bounded.Seen.insert(state, item)
+      end
+    end
+  end
+
   def empty, do: %{items: []}
 
   def insert(state, item),
@@ -101,17 +115,14 @@ defmodule ElixirRunner.Bounded.Step do
   """
   def durable_body(name, compensate \\ nil) do
     quote do
-      @behaviour Flezha.SDK.Tasklet
+      use Flezha.SDK.Tasklet, name: unquote(name)
 
-      alias Flezha.SDK.Ctx
+      use ElixirRunner.Bounded.Seen
 
-      def name, do: unquote(name)
-      def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-      def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
-
+      @impl true
       def run(input, state, ctx) do
-        state = Ctx.apply(ctx, state, unquote(name))
-        Ctx.emit(ctx, input)
+        state = insert(state, ctx, unquote(name))
+        emit(ctx, input)
         {:ok, state}
       end
 
@@ -125,6 +136,7 @@ defmodule ElixirRunner.Bounded.Step do
     quote do
       # A crash-resumed compensation reconstructs completed stages with EMPTY
       # outputs, so a hook that records an undo does so unconditionally.
+      @impl true
       def compensate(_outputs, state, var!(ctx)) do
         _ = var!(ctx)
         unquote(body)
@@ -139,7 +151,6 @@ defmodule ElixirRunner.Bounded do
   import ElixirRunner.Bounded.Step
 
   alias ElixirRunner.Bounded.Gate
-  alias Flezha.SDK.Ctx
 
   # -- shared steps ---------------------------------------------------------
 
@@ -148,27 +159,26 @@ defmodule ElixirRunner.Bounded do
   # An undo that does nothing but record that it ran: the done marker it
   # leaves is what a crash mid-rollback reads to skip this step on resume.
   defstep(SagaB, "saga_b", compensate: :ok)
-  defstep(BranchA, "branch_a", compensate: Ctx.emit(ctx, "undo-a"))
-  defstep(BranchB, "branch_b", compensate: Ctx.emit(ctx, "undo-b"))
+  defstep(BranchA, "branch_a", compensate: emit(ctx, "undo-a"))
+  defstep(BranchB, "branch_b", compensate: emit(ctx, "undo-b"))
   defstep(DiamA, "diam_a")
   defstep(DiamB1, "diam_b1")
-  defstep(RetryA, "retry_a", compensate: Ctx.emit(ctx, "undone"))
+  defstep(RetryA, "retry_a", compensate: emit(ctx, "undone"))
   defstep(KeyedCommit, "keyed_commit", compensate: :ok)
 
   defstep(UndoOutboxA, "undo_outbox_a",
     compensate:
       (
         Gate.block_until_released()
-        Ctx.emit(ctx, "undone")
+        emit(ctx, "undone")
       )
   )
 
   defmodule BlockB do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "block_b"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "block_b"
 
+    @impl true
     def run(_input, state, _ctx) do
       Gate.block_until_released()
       {:ok, state}
@@ -177,50 +187,45 @@ defmodule ElixirRunner.Bounded do
 
   defmodule KeySplit do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "key_split"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "key_split"
 
+    @impl true
     def run(input, state, ctx) do
-      input |> String.split(",") |> Enum.each(&Ctx.emit(ctx, &1))
+      input |> String.split(",") |> Enum.each(&emit(ctx, &1))
       {:ok, state}
     end
   end
 
   defmodule KeyedFail do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "keyed_fail"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "keyed_fail"
+    @impl true
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "keyed_fail always fails"}}
   end
 
   defmodule SagaC do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "saga_c"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "saga_c"
+    @impl true
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "saga_c always fails"}}
   end
 
   defmodule UndoC do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "undo_outbox_c"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "undo_outbox_c"
+    @impl true
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "undo_outbox_c always fails"}}
   end
 
   defmodule TierCommitA do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tier_commit_a"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "tier_commit_a"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, "tier_commit_a")
-      Ctx.emit(ctx, "committed:" <> input)
+      state = insert(state, ctx, "tier_commit_a")
+      emit(ctx, "committed:" <> input)
       {:ok, state}
     end
   end
@@ -229,19 +234,19 @@ defmodule ElixirRunner.Bounded do
   # undo does too.
   defmodule BranchC do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "branch_c"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "branch_c"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, "branch_c")
-      Ctx.emit(ctx, "c:" <> input)
+      state = insert(state, ctx, "branch_c")
+      emit(ctx, "c:" <> input)
       {:ok, state}
     end
 
+    @impl true
     def compensate(_outputs, state, ctx) do
-      Ctx.emit(ctx, "undo-c")
+      emit(ctx, "undo-c")
       {:ok, state}
     end
   end
@@ -249,16 +254,15 @@ defmodule ElixirRunner.Bounded do
   # The deep leaf under BranchB: blocks (crash-resume), or fails (compensation).
   defmodule BranchD do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "branch_d"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "branch_d"
 
+    @impl true
     def run(input, state, ctx) do
       if Gate.branch_fail?() do
         {:error, {:non_retryable, "branch_d failed"}}
       else
         Gate.block_until_released()
-        Ctx.emit(ctx, "d:" <> input)
+        emit(ctx, "d:" <> input)
         {:ok, state}
       end
     end
@@ -269,41 +273,38 @@ defmodule ElixirRunner.Bounded do
   # committed.
   defmodule DiamB2 do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "diam_b2"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "diam_b2"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run(input, state, ctx) do
       Gate.block_until_released()
-      state = Ctx.apply(ctx, state, "diam_b")
-      Ctx.emit(ctx, "b:" <> input)
+      state = insert(state, ctx, "diam_b")
+      emit(ctx, "b:" <> input)
       {:ok, state}
     end
   end
 
   defmodule DiamC do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "diam_c"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "diam_c"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, "diam_c")
-      Ctx.emit(ctx, "c:" <> input)
+      state = insert(state, ctx, "diam_c")
+      emit(ctx, "c:" <> input)
       {:ok, state}
     end
   end
 
   defmodule DiamJoin do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "diam_join"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "diam_join"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "j:" <> input)
+      emit(ctx, "j:" <> input)
       {:ok, state}
     end
   end
@@ -313,17 +314,16 @@ defmodule ElixirRunner.Bounded do
   # counter is the whole ladder's view.
   defmodule RetryFlaky do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "retry_flaky"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "retry_flaky"
 
+    @impl true
     def run(input, state, ctx) do
       attempt = Gate.note_attempt()
 
       if attempt <= Gate.armed_failures() do
         {:error, "flaky attempt #{attempt}"}
       else
-        Ctx.emit(ctx, "attempt:#{attempt}:#{input}")
+        emit(ctx, "attempt:#{attempt}:#{input}")
         {:ok, state}
       end
     end
@@ -332,12 +332,11 @@ defmodule ElixirRunner.Bounded do
   # Echoes the first message, which a `:once` bounded operator's one pass runs on.
   defmodule Echo do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "echo"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "echo"
 
+    @impl true
     def run(args, state, ctx) do
-      Ctx.emit(ctx, "echo:" <> args)
+      emit(ctx, "echo:" <> args)
       {:ok, state}
     end
   end
@@ -364,14 +363,13 @@ defmodule ElixirRunner.Bounded do
   # completes with it, so the pass runs on the payload it was spawned with.
   defmodule OncePlaced do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "once_placed"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "once_placed"
 
+    @impl true
     def run(%{"text" => text}, state, ctx) do
       IO.puts("once_ran #{text}")
-      Flezha.SDK.Ctx.complete(ctx, text)
-      Flezha.SDK.Ctx.emit(ctx, "placed:" <> text)
+      complete(ctx, text)
+      emit(ctx, "placed:" <> text)
       {:ok, state}
     end
   end
@@ -522,14 +520,13 @@ defmodule ElixirRunner.Bounded do
   # output rides its Cell's record and reaches the sink once the stage commits.
   defmodule OutboxA do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "commit_a"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "commit_a"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run(input, state, ctx) do
-      state = Ctx.apply(ctx, state, "commit_a")
-      :ok = Ctx.emit_keyed_with_meta(ctx, "k", input, %{"trace" => "t1"})
+      state = insert(state, ctx, "commit_a")
+      :ok = emit_keyed_with_meta(ctx, "k", input, %{"trace" => "t1"})
       {:ok, state}
     end
   end
@@ -573,13 +570,12 @@ defmodule ElixirRunner.Bounded do
   # commits and no marker ever names that record.
   defmodule FailedStage do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "failed_stage"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "failed_stage"
+    @impl true
     def run("b", _state, _ctx), do: {:error, {:non_retryable, "failed_stage fails on b"}}
 
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
   end
@@ -687,44 +683,43 @@ defmodule ElixirRunner.Bounded do
   # `timer` inside `on_timer`, before `tick` commits; `relay` in `relay`, after.
   defmodule Tick do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tick"
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "tick"
+    use ElixirRunner.Bounded.Seen
 
+    @impl true
     def run("after:" <> delay, state, ctx) do
-      {:ok, at} = Ctx.timer_after(ctx, String.to_integer(delay))
-      Ctx.emit(ctx, "armed:#{at}")
-      {:ok, Ctx.apply(ctx, state, "armed:#{at}")}
+      {:ok, at} = timer_after(ctx, String.to_integer(delay))
+      emit(ctx, "armed:#{at}")
+      {:ok, insert(state, ctx, "armed:#{at}")}
     end
 
     def run("slow:" <> pause = input, state, ctx) do
       Process.sleep(String.to_integer(pause))
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
+    @impl true
     def on_timer(fired_at, _kind, state, ctx) do
       Gate.hold_at("timer")
-      Ctx.emit(ctx, "fired:#{fired_at}")
+      emit(ctx, "fired:#{fired_at}")
       {:ok, state}
     end
   end
 
   defmodule Relay do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "relay"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "relay"
 
+    @impl true
     def run(input, state, ctx) do
       if String.starts_with?(input, "fired:"), do: Gate.hold_at("relay")
-      Ctx.emit(ctx, "relay:" <> input)
+      emit(ctx, "relay:" <> input)
       {:ok, state}
     end
   end
@@ -753,23 +748,23 @@ defmodule ElixirRunner.Bounded do
   # emits `seen:<t>`, and the firing emits `fired:<at>`.
   defmodule EventTick do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "event_tick"
-    def clock, do: :event_time
-    def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
-    def apply_change(state, item), do: ElixirRunner.Bounded.Seen.insert(state, item)
+    use Flezha.SDK.Tasklet, name: "event_tick"
+    use ElixirRunner.Bounded.Seen
 
-    def event_time_of(input),
+    @impl true
+    def event_time(input),
       do: input |> String.split(":", parts: 2) |> hd() |> ElixirRunner.Numbers.int()
 
+    @impl true
     def run(_input, state, ctx) do
-      {:ok, at} = Ctx.timer_at_event_time(ctx, Ctx.now(ctx) + 100)
-      Ctx.emit(ctx, "seen:#{Ctx.now(ctx)}")
-      {:ok, Ctx.apply(ctx, state, "armed:#{at}")}
+      {:ok, at} = timer_at_event_time(ctx, now(ctx) + 100)
+      emit(ctx, "seen:#{now(ctx)}")
+      {:ok, insert(state, ctx, "armed:#{at}")}
     end
 
+    @impl true
     def on_timer(fired_at, _kind, state, ctx) do
-      Ctx.emit(ctx, "fired:#{fired_at}")
+      emit(ctx, "fired:#{fired_at}")
       {:ok, state}
     end
   end
@@ -796,14 +791,13 @@ defmodule ElixirRunner.Bounded do
   # emits `<cell key>:<message>`, so one message yields exactly two outputs.
   defmodule StaticCellStep do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "static_cell_step"
-    def init_state(_), do: nil
-    def cell_keys, do: ["a", "b", "c"]
+    use Flezha.SDK.Tasklet, name: "static_cell_step", cell_keys: ["a", "b", "c"]
+    @impl true
     def cells_for(_input), do: ["a", "b"]
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "#{Ctx.cell_key(ctx)}:#{input}")
+      emit(ctx, "#{cell_key(ctx)}:#{input}")
       {:ok, state}
     end
   end

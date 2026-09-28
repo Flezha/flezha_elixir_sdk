@@ -15,9 +15,10 @@ defmodule Flezha.SDK.Tasklet do
 
   `use` declares this behaviour, defines `name/0` and the zero-arity callbacks
   its options name, imports the ctx functions, and makes available a `state`
-  block, which writes `init_state/1`, `apply_change/2` and `state_from_json/1`,
-  and `defchange` (`Flezha.SDK.State`); see `__using__/1`. The author writes
-  `run/3` and any other callback that takes arguments, each under `@impl true`.
+  block, which writes `init_state/1` and `state_from_json/1`, and `defchange`,
+  the one way to change state (`Flezha.SDK.State`); see `__using__/1`. The
+  author writes `run/3` and any other callback that takes arguments, each
+  under `@impl true`.
 
   Callbacks. Mandatory: `name/0`, `init_state/1` (the cell key or nil; `use`
   answers `nil` for a module that declares no state), `run/3` (input, state,
@@ -26,16 +27,16 @@ defmodule Flezha.SDK.Tasklet do
   Optional, with defaults: `cell_keys/0` (static keyset, `[]`), `cells_for/1`,
   `mailbox_capacity/0` (1024, env `FLEZHA_MAILBOX_CAPACITY`, range 1..=1_048_576),
   `max_cells/0` (100_000 — the cap on a dynamic node's live Cells; at it
-  a new key's input is dropped and counted), `cell_idle_ttl_ms/0` (nil — a
-  dynamic Cell idle past it is evicted destructively by its Operator's
-  sweep; nil never evicts). Dynamic typing collapses the Rust type tokens —
-  Input/Output/State are plain terms.
+  a new key's input is dropped and counted), `idle_ttl_seconds/0` (nil — a
+  dynamic Cell idle past that many whole seconds is evicted destructively by
+  its Operator's sweep; nil never evicts). Dynamic typing collapses the Rust
+  type tokens — Input/Output/State are plain terms.
 
   Persistence: a tasklet that exports `apply_change/2` is changeful — its
-  state is rebuilt by folding recorded changes, and `Flezha.SDK.Ctx.apply/3` is
-  the one path that records one (the twin of the Rust `StateHandle::apply`).
-  Without it the tasklet is the reference's `NoChange`: its state is a plain
-  term nothing persists. `compact_after_bytes/0` (8 MiB) is the per-Cell WAL
+  state is rebuilt by folding recorded changes. In the `use` form each
+  `defchange` generates one fold clause and its recorder; without one the
+  tasklet is the reference's `NoChange`: its state is a plain term nothing
+  persists. `compact_after_bytes/0` (8 MiB) is the per-Cell WAL
   size at which the controller solicits a snapshot; `state_from_json/1` turns
   a JSON object read back from the controller (a migration, `init_values`)
   into this tasklet's state term, the object itself by default.
@@ -49,11 +50,13 @@ defmodule Flezha.SDK.Tasklet do
   `{:error, reason}`. Both default to refusing, so a floor declared without
   its migration fails at the first old record.
 
-  Time: `clock/0` (`:wall`) names what `Flezha.SDK.Ctx.now/1` serves — the
-  epoch millisecond at dispatch entry, `:logical` (the Cell's durable change
-  seq) or `:event_time` (what `event_time_of/1` extracts from the input; a
-  `:logical` clock on a tasklet without `apply_change/2` and an `:event_time`
-  clock without its extractor are refused at registration). Timers:
+  Time: the clock `Flezha.SDK.Ctx.now/1` serves follows from what the tasklet
+  writes — event time when it defines `event_time/1` (what that answers for
+  the input), the logical clock (the Cell's durable change seq) when
+  `logical_clock/0` answers `true`, the epoch millisecond at dispatch entry
+  otherwise. A logical clock on a changeless tasklet is refused at
+  registration as `UnservableClock`, and both clocks at once as `TwoClocks`,
+  which the `use` form refuses at compile time instead. Timers:
   `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
   into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set.
@@ -65,6 +68,13 @@ defmodule Flezha.SDK.Tasklet do
   outputs — a tasklet's collected output was never durable — so a hook that
   records an undo must do so unconditionally rather than from what it is
   handed.
+
+  ## The reference form
+
+  A module may instead write `@behaviour Flezha.SDK.Tasklet` and every
+  callback by hand, `name/0` included, recording a change through its own
+  `apply_change/2` and `Flezha.SDK.Ctx.apply/3`. It registers and runs as a
+  `use` module does; the `use` form refuses a hand-written `apply_change/2`.
   """
 
   alias Flezha.SDK.Ctx
@@ -81,7 +91,7 @@ defmodule Flezha.SDK.Tasklet do
   @callback cells_for(input :: term()) :: [String.t()]
   @callback mailbox_capacity() :: pos_integer()
   @callback max_cells() :: pos_integer()
-  @callback cell_idle_ttl_ms() :: pos_integer() | nil
+  @callback idle_ttl_seconds() :: pos_integer() | nil
   @callback apply_change(state(), change :: term()) :: state()
   @callback compact_after_bytes() :: pos_integer()
   @callback state_from_json(map()) :: state()
@@ -91,8 +101,8 @@ defmodule Flezha.SDK.Tasklet do
               {:ok, state()} | {:error, term()}
   @callback migrate_change(from_version :: pos_integer(), old_change :: term()) ::
               {:ok, term()} | {:error, term()}
-  @callback clock() :: :wall | :logical | :event_time
-  @callback event_time_of(input :: term()) :: non_neg_integer()
+  @callback logical_clock() :: boolean()
+  @callback event_time(input :: term()) :: non_neg_integer()
   @callback on_timer(
               fired_at :: non_neg_integer(),
               kind :: :event_time | :processing_time,
@@ -107,7 +117,7 @@ defmodule Flezha.SDK.Tasklet do
                       cells_for: 1,
                       mailbox_capacity: 0,
                       max_cells: 0,
-                      cell_idle_ttl_ms: 0,
+                      idle_ttl_seconds: 0,
                       apply_change: 2,
                       compact_after_bytes: 0,
                       state_from_json: 1,
@@ -115,8 +125,8 @@ defmodule Flezha.SDK.Tasklet do
                       min_readable_schema_version: 0,
                       migrate_state: 2,
                       migrate_change: 2,
-                      clock: 0,
-                      event_time_of: 1,
+                      logical_clock: 0,
+                      event_time: 1,
                       on_timer: 4,
                       max_timers_per_cell: 0
 
@@ -138,12 +148,27 @@ defmodule Flezha.SDK.Tasklet do
     :cell_keys,
     :mailbox_capacity,
     :max_cells,
-    :cell_idle_ttl_ms,
+    :idle_ttl_seconds,
     :compact_after_bytes,
     :schema_version,
     :min_readable_schema_version,
-    :clock,
+    :logical_clock,
     :max_timers_per_cell
+  ]
+
+  # The values two of those options take; any other is refused where it is written.
+  @use_values [idle_ttl_seconds: :pos_integer, logical_clock: :boolean]
+
+  # Options and callbacks that no longer exist, each with what replaced it, so
+  # a leftover is refused by name rather than silently ignored.
+  @retired_options [
+    cell_idle_ttl_ms: "`idle_ttl_seconds:`, in whole seconds",
+    clock: "`logical_clock: true`, or an `event_time/1` def for event time"
+  ]
+  @retired_callbacks [
+    {:cell_idle_ttl_ms, 0, "`idle_ttl_seconds/0`, in whole seconds"},
+    {:clock, 0, "`logical_clock/0` answering true, or `event_time/1` for event time"},
+    {:event_time_of, 1, "`event_time/1`"}
   ]
 
   # The §5 short form's options, taken by the operator macros beside the
@@ -160,7 +185,7 @@ defmodule Flezha.SDK.Tasklet do
 
   # `Flezha.SDK.Ctx`'s authoring surface, imported by `use`. `apply/3` is
   # deliberately absent: importing it would shadow `Kernel.apply/3` in every
-  # tasklet body. A `state` block's recorders call it by its full name.
+  # tasklet body. `defchange`'s recorders call it by its full name.
   @ctx_imports [
     emit: 2,
     emit_with_meta: 3,
@@ -174,6 +199,7 @@ defmodule Flezha.SDK.Tasklet do
     cell_key: 1,
     spawn_bounded: 3,
     spawn_bounded: 4,
+    complete: 2,
     checkpoint: 1,
     stable_id: 1
   ]
@@ -190,14 +216,18 @@ defmodule Flezha.SDK.Tasklet do
   above, under its own name, and **only the options written define anything**:
   a module that does not write `mailbox_capacity` exports none, so
   `FLEZHA_MAILBOX_CAPACITY` still decides its mailbox. Callbacks that take
-  arguments — `run/3`, `cells_for/1`, `event_time_of/1`, `on_timer/4`,
+  arguments — `run/3`, `cells_for/1`, `event_time/1`, `on_timer/4`,
   `compensate/3`, `migrate_state/2`, `migrate_change/2` — stay `def`s the
   author writes. An unknown option is a `CompileError` naming it.
+  `idle_ttl_seconds` takes a positive integer and `logical_clock` a boolean,
+  any other value being a `CompileError`; defining `event_time/1` beside
+  `logical_clock: true` is one too, naming both.
 
   `state do field … end` and `defchange` are available here too; see
   `Flezha.SDK.State`. A module with neither a `state` block nor its own
   `init_state/1` gets `def init_state(_), do: nil`, so a stateless tasklet
-  writes only `run/3`.
+  writes only `run/3`. `apply_change/2` is not written by hand here:
+  `defchange` generates it.
 
   `kind`, `sink` and `input` describe an operator, not a tasklet, and are a
   `CompileError` naming the operator macros: the §5 short form is written
@@ -215,7 +245,13 @@ defmodule Flezha.SDK.Tasklet do
     known = @use_options ++ @operator_keys ++ [:name]
 
     opts =
-      __validate__(opts, known, __MODULE__, {:name, "the tasklet's node identity"})
+      __validate__(
+        opts,
+        known,
+        __MODULE__,
+        {:name, "the tasklet's node identity"},
+        @use_values
+      )
 
     for {key, _value} <- opts, key in @operator_keys do
       raise CompileError,
@@ -243,12 +279,15 @@ defmodule Flezha.SDK.Tasklet do
 
       unquote_splicing(callbacks)
 
+      @flezha_logical_clock unquote(Keyword.get(opts, :logical_clock, false))
       @before_compile Flezha.SDK.Tasklet
     end
   end
 
   @doc false
   defmacro __before_compile__(env) do
+    refuse_misdeclared(env.module, Module.get_attribute(env.module, :flezha_logical_clock))
+
     # A stateless tasklet writes only `run/3`: the block's `init_state/1` and
     # the author's own both win over this one. The block's is generated by
     # `Flezha.SDK.State`'s own `@before_compile`, which may not have run yet, so
@@ -266,9 +305,9 @@ defmodule Flezha.SDK.Tasklet do
   end
 
   # The option checks all three `use` macros make: a keyword list, a value
-  # inside the set `values` names for its option, no unknown option, and the
-  # one option that macro requires. `required` is `{key, what_it_is}`, so the
-  # refusal says what the author is being asked for.
+  # inside what `values` allows for its option, no retired or unknown option,
+  # and the one option that macro requires. `required` is `{key, what_it_is}`,
+  # so the refusal says what the author is being asked for.
   @doc false
   def __validate__(opts, known, macro, {required, what}, values \\ []) do
     unless Keyword.keyword?(opts) do
@@ -278,11 +317,15 @@ defmodule Flezha.SDK.Tasklet do
 
     for {key, allowed} <- values,
         {:ok, value} <- [Keyword.fetch(opts, key)],
-        value not in allowed do
+        not allowed?(allowed, value) do
       raise CompileError,
         description:
-          "`use #{inspect(macro)}` has no #{key} #{inspect(value)}; it takes " <>
-            Enum.map_join(allowed, ", ", &inspect/1)
+          "`use #{inspect(macro)}` has no #{key} #{Macro.to_string(value)}; it takes " <>
+            describe(allowed)
+    end
+
+    for {key, _value} <- opts, instead = @retired_options[key] do
+      refuse("`use #{inspect(macro)}` has no option #{inspect(key)} any more; write #{instead}")
     end
 
     for {key, _value} <- opts, key not in known do
@@ -298,6 +341,34 @@ defmodule Flezha.SDK.Tasklet do
     end
 
     opts
+  end
+
+  defp allowed?(:pos_integer, value), do: is_integer(value) and value > 0
+  defp allowed?(:boolean, value), do: is_boolean(value)
+  defp allowed?(values, value), do: value in values
+
+  defp describe(:pos_integer), do: "a positive integer"
+  defp describe(:boolean), do: "true or false"
+  defp describe(values), do: Enum.map_join(values, ", ", &inspect/1)
+
+  # What the module the author wrote declares beside its options. A callback
+  # that no longer exists, written with `def` or `defp`, would be ignored
+  # without a word. Writing `event_time/1` is what declares event time, so a
+  # module that also declares the logical clock has declared two.
+  defp refuse_misdeclared(module, logical_clock?) do
+    for {fun, arity, instead} <- @retired_callbacks, Module.defines?(module, {fun, arity}) do
+      refuse(
+        "#{inspect(module)} defines `#{fun}/#{arity}`, which is no longer a tasklet " <>
+          "callback; write #{instead}"
+      )
+    end
+
+    if logical_clock? == true and Module.defines?(module, {:event_time, 1}) do
+      refuse(
+        "#{inspect(module)} defines `event_time/1`, which declares the event-time clock, " <>
+          "and `logical_clock: true`; a tasklet runs on one clock, so write one of them"
+      )
+    end
   end
 
   # One zero-arity callback per option written, and nothing for an option that
@@ -328,7 +399,7 @@ defmodule Flezha.SDK.Tasklet do
         [:factory_id | @short_form_only ++ use_options],
         behaviour,
         {:factory_id, "the id the controller places by"},
-        values
+        values ++ @use_values
       )
 
     callbacks = __callbacks__(opts, use_options, behaviour)
@@ -380,6 +451,7 @@ defmodule Flezha.SDK.Tasklet do
         )
 
       run? ->
+        refuse_misdeclared(env.module, Keyword.get(short_form, :logical_clock))
         short_form(env.module, factory_id, short_form)
 
       topology? and short_form != [] ->
@@ -441,6 +513,8 @@ defmodule Flezha.SDK.Tasklet do
     quote do
       defmodule unquote(tasklet) do
         @moduledoc false
+        # Its `apply_change/2` delegates to the author's, which `defchange` wrote.
+        @flezha_delegates_changes true
         use Flezha.SDK.Tasklet, unquote(tasklet_options)
 
         unquote_splicing(delegated)
@@ -487,10 +561,24 @@ defmodule Flezha.SDK.Tasklet do
       else: @default_max_cells
   end
 
-  @doc "Idle window after which a dynamic Cell is evicted; nil (the default) never evicts."
-  @spec cell_idle_ttl_ms(module()) :: pos_integer() | nil
-  def cell_idle_ttl_ms(module) do
-    if exports?(module, :cell_idle_ttl_ms, 0), do: module.cell_idle_ttl_ms(), else: nil
+  @doc """
+  The idle window after which a dynamic Cell is evicted, in milliseconds: the
+  declared `idle_ttl_seconds/0` times 1 000; nil (the default) never evicts.
+  """
+  @spec idle_ttl_ms(module()) :: pos_integer() | nil
+  def idle_ttl_ms(module) do
+    case exports?(module, :idle_ttl_seconds, 0) and module.idle_ttl_seconds() do
+      seconds when is_integer(seconds) and seconds > 0 ->
+        seconds * 1_000
+
+      absent when absent in [false, nil] ->
+        nil
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(module)}.idle_ttl_seconds/0 answered #{inspect(other)}; " <>
+                "it answers a positive whole number of seconds, or nil"
+    end
   end
 
   @doc "Whether the tasklet journals — it exports `apply_change/2`."
@@ -529,10 +617,31 @@ defmodule Flezha.SDK.Tasklet do
       else: :undeclared
   end
 
-  @doc "The declared clock (`:wall` unless declared)."
-  @spec clock(module()) :: atom()
+  @doc """
+  The clock the tasklet runs on, from what it writes: `:event_time` when it
+  exports `event_time/1`, `:logical` when `logical_clock/0` answers `true`,
+  `:wall` otherwise.
+  """
+  @spec clock(module()) :: :wall | :logical | :event_time
   def clock(module) do
-    if exports?(module, :clock, 0), do: module.clock(), else: :wall
+    cond do
+      exports?(module, :event_time, 1) -> :event_time
+      logical_clock?(module) -> :logical
+      true -> :wall
+    end
+  end
+
+  @doc "Whether the tasklet declares the logical clock — `logical_clock/0` answers `true`."
+  @spec logical_clock?(module()) :: boolean()
+  def logical_clock?(module),
+    do: exports?(module, :logical_clock, 0) and module.logical_clock() == true
+
+  @doc "The retired callbacks a module exports, each with what replaced it."
+  @spec retired_callbacks(module()) :: [{String.t(), String.t()}]
+  def retired_callbacks(module) do
+    for {fun, arity, instead} <- @retired_callbacks,
+        exports?(module, fun, arity),
+        do: {"#{fun}/#{arity}", instead}
   end
 
   @doc "Whether the tasklet handles a firing — it exports `on_timer/4`."

@@ -11,20 +11,24 @@ defmodule Flezha.SDK.LocalTest do
   import ExUnit.CaptureIO, only: [with_io: 2]
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
-  alias Flezha.SDK.{Channels, Ctx, Local, Operator, Spawn}
+  alias Flezha.SDK.{Channels, Local, Operator, Spawn}
 
   # --- a changeful tasklet, and one that asks for a spawn ---
 
   defmodule CounterTask do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "counter"
+    use Flezha.SDK.Tasklet, name: "counter"
+    @impl true
     def init_state(_), do: %{value: 0}
-    def apply_change(s, {:delta, n}), do: %{s | value: s.value + n}
 
+    defchange delta(s, n) do
+      %{s | value: s.value + n}
+    end
+
+    @impl true
     def run(input, s, ctx) do
-      s = Ctx.apply(ctx, s, {:delta, input})
-      Ctx.emit(ctx, Integer.to_string(s.value))
+      s = delta(s, ctx, input)
+      emit(ctx, Integer.to_string(s.value))
       {:ok, s}
     end
   end
@@ -44,13 +48,12 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule Spawner do
     @moduledoc false
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "spawner"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "spawner"
 
+    @impl true
     def run(instance_id, state, ctx) do
-      handle = Ctx.spawn_bounded(ctx, "worker", "payload", id: instance_id)
-      Ctx.emit(ctx, inspect(Spawn.await(handle, 5_000)))
+      handle = spawn_bounded(ctx, "worker", "payload", id: instance_id)
+      emit(ctx, inspect(Spawn.await(handle, 5_000)))
       {:ok, state}
     end
   end
@@ -67,24 +70,31 @@ defmodule Flezha.SDK.LocalTest do
   # --- the moduledoc's worked example ---
 
   defmodule Normalise do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "normalise"
-    def init_state(_key), do: nil
+    use Flezha.SDK.Tasklet, name: "normalise"
 
+    @impl true
     def run(word, state, ctx) do
-      Flezha.SDK.Ctx.emit(ctx, String.downcase(word))
+      emit(ctx, String.downcase(word))
       {:ok, state}
     end
   end
 
   defmodule Tally do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tally"
-    def init_state(_key), do: 0
+    use Flezha.SDK.Tasklet, name: "tally"
 
-    def run(word, count, ctx) do
-      Flezha.SDK.Ctx.emit(ctx, "#{word} #{count + 1}")
-      {:ok, count + 1}
+    state do
+      field(:count, :integer, default: 0)
+    end
+
+    defchange counted(state) do
+      %{state | count: state.count + 1}
+    end
+
+    @impl true
+    def run(word, state, ctx) do
+      state = counted(state, ctx)
+      emit(ctx, "#{word} #{state.count}")
+      {:ok, state}
     end
   end
 
@@ -135,14 +145,13 @@ defmodule Flezha.SDK.LocalTest do
   @closer_probe :local_mode_closer
 
   defmodule Closer do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "closer"
-    def init_state(_key), do: nil
+    use Flezha.SDK.Tasklet, name: "closer"
 
+    @impl true
     def run(input, state, ctx) do
       send(:local_mode_closer, {:ran, input})
-      if input == "end", do: Ctx.complete(ctx, "done")
-      Ctx.emit(ctx, input)
+      if input == "end", do: complete(ctx, "done")
+      emit(ctx, input)
       {:ok, state}
     end
   end
@@ -174,10 +183,9 @@ defmodule Flezha.SDK.LocalTest do
   @held_probe :local_mode_held_tasklet
 
   defmodule Held do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "held"
-    def init_state(_key), do: nil
+    use Flezha.SDK.Tasklet, name: "held"
 
+    @impl true
     def run(_input, state, _ctx) do
       send(Process.whereis(:local_mode_held_tasklet), {:held, self()})
 
@@ -198,6 +206,44 @@ defmodule Flezha.SDK.LocalTest do
       |> Channels.named("out")
       |> Channels.sink()
     end
+  end
+
+  # Reports the stable id of every attempt. `flaky` fails its first attempt;
+  # `die` ends the Cell untrappably the first time it runs, before its change
+  # is recorded, so the Cell is minted again from its slot.
+  @stamps_probe :local_mode_stamps
+
+  defmodule Stamper do
+    use Flezha.SDK.Tasklet, name: "stamper"
+
+    @impl true
+    def init_state(_key), do: 0
+
+    defchange add(count, n) do
+      count + n
+    end
+
+    @impl true
+    def run(input, count, ctx) do
+      send(:local_mode_stamps, {:stamp, input, stable_id(ctx)})
+
+      cond do
+        input == "flaky" and Process.put(:flaky_tried, true) == nil -> {:error, "once"}
+        input == "die" and :persistent_term.get({__MODULE__, :died}, false) == false -> die()
+        true -> {:ok, add(count, ctx, 1)}
+      end
+    end
+
+    defp die do
+      :persistent_term.put({__MODULE__, :died}, true)
+      Process.exit(self(), :kill)
+    end
+  end
+
+  defmodule StamperOp do
+    @behaviour Flezha.SDK.UnboundedOperator
+    def factory_id, do: "local_stamper"
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(Stamper)
   end
 
   # --- helpers ---
@@ -229,6 +275,32 @@ defmodule Flezha.SDK.LocalTest do
   defp payloads, do: Enum.map(drained(), & &1.payload)
 
   # --- the graph runs ---
+
+  test "a retried attempt and a Cell restored from its slot answer the stable id the first attempt did" do
+    Process.register(self(), @stamps_probe)
+    on_exit(fn -> :persistent_term.erase({Stamper, :died}) end)
+    run = start_run(StamperOp)
+
+    :ok = Local.feed(run, "in", "flaky")
+    assert_receive {:stamp, "flaky", first}, 5_000
+    assert_receive {:stamp, "flaky", ^first}, 5_000
+
+    {:ok, cell} = Operator.lookup(Local.operator(run), "stamper", nil)
+    ref = Process.monitor(cell)
+
+    log =
+      capture_log(fn ->
+        :ok = Local.feed(run, "in", "die")
+        assert_receive {:stamp, "die", killed}, 5_000
+        assert_receive {:DOWN, ^ref, :process, ^cell, :killed}, 5_000
+        refute killed == first, "the change the retry recorded moved the seq on"
+
+        :ok = Local.feed(run, "in", "die")
+        assert_receive {:stamp, "die", ^killed}, 5_000
+      end)
+
+    assert log =~ "cell crashed: operator=local_stamper-local"
+  end
 
   # The lines to feed and the output to release, read from the file the Rust and
   # Java local-mode suites read: this SDK's own core and `flz_core` are compared

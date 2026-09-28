@@ -3,8 +3,8 @@ defmodule Flezha.SDK.State do
   The `state` block and `defchange`: §3's change derivation, in Elixir.
 
   Declared state is mutated only through declared changes, because the change
-  log IS how a cell is rebuilt. A `state` block writes that path for the
-  field-granular half:
+  log IS how a cell is rebuilt. A `state` block declares the fields and their
+  defaults, and `defchange` writes each change once:
 
       use Flezha.SDK.Tasklet, name: "position"
 
@@ -17,22 +17,23 @@ defmodule Flezha.SDK.State do
         %{state | qty: state.qty + qty, fill_ids: [id | state.fill_ids]}
       end
 
-  The block generates `init_state/1` (the map of defaults, overridable),
+  The block generates `init_state/1` (the map of defaults, overridable) and
   `state_from_json/1` (each field read by its string key, falling back to its
-  default), `apply_change/2` clauses for `{:set, field, value}` on every field
-  and `{:push, field, item}` on every `:list` field, and the recorders
-  `set_<field>(state, ctx, value)` and `push_<field>(state, ctx, item)`, each
-  journaling exactly one change through `Flezha.SDK.Ctx.apply/3`.
+  default). It generates no change.
 
-  `defchange name(state, args…) do body end` is the manual boundary: a mutation
-  that is conditional, spans several fields, or is computed from the prior state
-  is not one generated variant, so it is written once and generated into both
-  halves — the `apply_change(state, {:name, args…})` clause and the recorder
-  `name(state, ctx, args…)` — which is what makes it one journal record.
+  `defchange name(state, args…) do body end` is the one way to change state,
+  in a module with or without a block: it is written once and generated into
+  both halves — the `apply_change(state, {:name, args…})` clause and the
+  recorder `name(state, ctx, args…)`, which journals the change through
+  `Flezha.SDK.Ctx.apply/3` and answers the new state — so a mutation spanning
+  several fields is one journal record. A module with no `defchange` exports
+  no `apply_change/2` and is changeless.
 
-  A module with a `state` block that also writes `apply_change/2` or
-  `state_from_json/1` by hand fails to compile, naming both: the block owns
-  them.
+  A module that `use`s `Flezha.SDK.Tasklet` or an operator macro and writes
+  `apply_change/2` by hand fails to compile, directing the author to
+  `defchange`; a hand-written `apply_change/2` belongs to the reference form,
+  `@behaviour Flezha.SDK.Tasklet`. A block beside a hand-written
+  `state_from_json/1` fails to compile too: the block owns it.
 
   §3.1's keyed-map and deque modes are deferred for Elixir; this block carries
   the field and `:list` modes only. Renaming or retyping a field is a
@@ -107,17 +108,24 @@ defmodule Flezha.SDK.State do
   """
   defmacro defchange({name, _meta, args}, do: body) when is_atom(name) do
     [state_arg | rest] = args
-    ctx = Macro.var(:__flezha_ctx__, __MODULE__)
-    payload = quote(do: {unquote(name), unquote_splicing(rest)})
+    # The recorder takes plain arguments of its own, so an argument the fold
+    # ignores is written `_note` as in any function, with no warning either side.
+    [state | values] = Macro.generate_arguments(length(args), __MODULE__)
+    ctx = Macro.var(:ctx, __MODULE__)
 
     quote do
       @flezha_changes unquote(name)
 
       @doc false
-      def __flezha_apply_change__(unquote(state_arg), unquote(payload)), do: unquote(body)
+      def __flezha_apply_change__(unquote(state_arg), {unquote(name), unquote_splicing(rest)}),
+        do: unquote(body)
 
-      def unquote(name)(unquote(state_arg), unquote(ctx), unquote_splicing(rest)) do
-        Flezha.SDK.Ctx.apply(unquote(ctx), unquote(state_arg), unquote(payload))
+      def unquote(name)(unquote(state), unquote(ctx), unquote_splicing(values)) do
+        Flezha.SDK.Ctx.apply(
+          unquote(ctx),
+          unquote(state),
+          {unquote(name), unquote_splicing(values)}
+        )
       end
     end
   end
@@ -131,33 +139,37 @@ defmodule Flezha.SDK.State do
     # operator generates, so there the callbacks implement no behaviour.
     impl = Flezha.SDK.Tasklet in Module.get_attribute(env.module, :behaviour, [])
 
-    if block? or changes != [] do
-      refuse_hand_written(env.module, block?)
-    end
+    refuse_hand_written(env.module, block?)
 
-    cond do
-      block? -> derived(fields, impl)
-      changes != [] -> fold(impl)
-      true -> nil
+    quote do
+      unquote(if block?, do: derived(fields, impl))
+      unquote(if changes != [], do: fold(impl))
     end
   end
 
-  # The block owns `apply_change/2` and `state_from_json/1`, so a module that
-  # writes one by hand beside it has two answers and no way to say which wins.
+  # `defchange` is the one way to write a change here, and the block owns
+  # `state_from_json/1`. The short form's generated tasklet delegates to the
+  # `apply_change/2` its author's `defchange` wrote, so it is not refused.
   defp refuse_hand_written(module, block?) do
-    for {name, arity} <- [apply_change: 2, state_from_json: 1],
-        Module.defines?(module, {name, arity}) do
+    if Module.defines?(module, {:apply_change, 2}) and
+         not Module.get_attribute(module, :flezha_delegates_changes, false) do
       raise CompileError,
         description:
-          "#{inspect(module)} defines `#{name}/#{arity}` beside " <>
-            if(block?, do: "a `state` block", else: "`defchange`") <>
-            ", which generates it; write the fields and the named changes, or write the " <>
-            "callbacks by hand, not both"
+          "#{inspect(module)} defines `apply_change/2`; in the `use` form each change is " <>
+            "written once with `defchange`, which generates it. A hand-written " <>
+            "`apply_change/2` is the reference form: `@behaviour Flezha.SDK.Tasklet` with " <>
+            "every callback by hand"
+    end
+
+    if block? and Module.defines?(module, {:state_from_json, 1}) do
+      raise CompileError,
+        description:
+          "#{inspect(module)} defines `state_from_json/1` beside a `state` block, which " <>
+            "generates it; write the fields or the callback, not both"
     end
   end
 
-  # Everything the block generates: the two callbacks the state shape decides,
-  # the fold over every derived and named change, and one recorder per mutation.
+  # What the block generates: the two callbacks the state shape decides.
   defp derived(fields, impl) do
     defaults = {:%{}, [], Enum.map(fields, fn {name, _type, default} -> {name, default} end)}
 
@@ -169,27 +181,16 @@ defmodule Flezha.SDK.State do
 
     quote do
       unquote(init_state(impl))
-      unquote(fold(impl))
 
       @impl unquote(impl)
       def state_from_json(json) when is_map(json), do: unquote(from_json)
 
-      @doc false
-      def __flezha_apply_change__(state, {:set, field, value}) when is_map_key(state, field),
-        do: Map.put(state, field, value)
-
-      @doc false
-      def __flezha_apply_change__(state, {:push, field, item}) when is_map_key(state, field),
-        do: Map.put(state, field, Map.fetch!(state, field) ++ [item])
-
-      unquote_splicing(recorders(fields))
       unquote(defaults_doc(defaults))
     end
   end
 
-  # The one `apply_change/2` the behaviour asks for, over every clause the block
-  # and `defchange` generated between them. A module with `defchange` and no
-  # block gets this and nothing else: its state shape is its own `init_state/1`.
+  # The one `apply_change/2` the behaviour asks for, over every clause
+  # `defchange` generated.
   defp fold(impl) do
     quote do
       @impl unquote(impl)
@@ -213,31 +214,5 @@ defmodule Flezha.SDK.State do
       @doc false
       def __flezha_state_defaults__, do: unquote(defaults)
     end
-  end
-
-  # One recorder per derivable mutation: `set_<field>` for every field, and
-  # `push_<field>` for every `:list` field, appending as a Rust `Vec` push does.
-  defp recorders(fields) do
-    Enum.flat_map(fields, fn {name, type, _default} ->
-      setter =
-        quote do
-          def unquote(:"set_#{name}")(state, ctx, value) do
-            Flezha.SDK.Ctx.apply(ctx, state, {:set, unquote(name), value})
-          end
-        end
-
-      if type == :list do
-        [
-          setter,
-          quote do
-            def unquote(:"push_#{name}")(state, ctx, item) do
-              Flezha.SDK.Ctx.apply(ctx, state, {:push, unquote(name), item})
-            end
-          end
-        ]
-      else
-        [setter]
-      end
-    end)
   end
 end

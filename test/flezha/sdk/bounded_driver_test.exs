@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Bounded.DriverTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Codec, Commands, Counters, Ctx, Declarations, KeyGroup}
+  alias Flezha.SDK.{Channels, Codec, Commands, Counters, Declarations, KeyGroup}
   alias Flezha.SDK.{Operator, Operators, Park, Spawn}
   alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
@@ -11,66 +11,61 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # --- fixtures ---
 
   defmodule Tagger do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tagger"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "tagger"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "a:" <> input)
+      emit(ctx, "a:" <> input)
       {:ok, state}
     end
   end
 
   defmodule Left do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "left"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "left"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "l:" <> input)
+      emit(ctx, "l:" <> input)
       {:ok, state}
     end
   end
 
   defmodule Right do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "right"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "right"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "r:" <> input)
+      emit(ctx, "r:" <> input)
       {:ok, state}
     end
   end
 
   defmodule Join do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "join"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "join"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, "j:" <> input)
+      emit(ctx, "j:" <> input)
       {:ok, state}
     end
   end
 
   defmodule Boom do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "boom"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "boom"
+    @impl true
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "boom"}}
   end
 
   defmodule Undoable do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "undoable"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "undoable"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
+    @impl true
     def compensate(_outputs, state, _ctx) do
       send(:bounded_driver_test_collector, {:undone, name()})
       {:ok, state}
@@ -78,15 +73,15 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   defmodule Undoable2 do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "undoable2"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "undoable2"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
+    @impl true
     def compensate(_outputs, state, _ctx) do
       send(:bounded_driver_test_collector, {:undone, name()})
       {:ok, state}
@@ -144,13 +139,12 @@ defmodule Flezha.SDK.Bounded.DriverTest do
 
   # A spawn request from a tasklet, released as its stage's handoff.
   defmodule SpawnStep do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "spawn_step"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "spawn_step"
 
+    @impl true
     def run(input, state, ctx) do
-      handle = Ctx.spawn_bounded(ctx, "worker", input, id: "child-" <> input, if_running: :error)
-      Ctx.emit(ctx, inspect(Spawn.await(handle, 5_000)))
+      handle = spawn_bounded(ctx, "worker", input, id: "child-" <> input, if_running: :error)
+      emit(ctx, inspect(Spawn.await(handle, 5_000)))
       {:ok, state}
     end
   end
@@ -162,10 +156,9 @@ defmodule Flezha.SDK.Bounded.DriverTest do
 
   # Fails every attempt, retryably, and reports each one.
   defmodule Flaky do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "flaky"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "flaky"
 
+    @impl true
     def run(_input, _state, _ctx) do
       send(:bounded_driver_test_collector, :attempt)
       {:error, "flaky"}
@@ -188,51 +181,50 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # `after-slow:<ms>` does the same, marked for the relay to linger on;
   # `hold:<ms>` holds the stage that long. A firing emits `fired:<at>`.
   defmodule Tick do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "tick"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "tick"
 
+    @impl true
     def run("hold:" <> ms = input, state, ctx) do
       Process.sleep(String.to_integer(ms))
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
     def run("after-slow:" <> ms, state, ctx) do
-      Ctx.emit(ctx, "armed-slow:#{arm(ctx, String.to_integer(ms))}")
+      emit(ctx, "armed-slow:#{arm(ctx, String.to_integer(ms))}")
       {:ok, state}
     end
 
     def run("after:" <> ms, state, ctx) do
-      Ctx.emit(ctx, "armed:#{arm(ctx, String.to_integer(ms))}")
+      emit(ctx, "armed:#{arm(ctx, String.to_integer(ms))}")
       {:ok, state}
     end
 
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
 
+    @impl true
     def on_timer(at, _kind, state, ctx) do
-      Ctx.emit(ctx, "fired:#{at}")
+      emit(ctx, "fired:#{at}")
       {:ok, state}
     end
 
     defp arm(ctx, ms) do
-      {:ok, at} = Ctx.timer_after(ctx, ms)
+      {:ok, at} = timer_after(ctx, ms)
       send(:bounded_driver_test_collector, {:armed, at})
       at
     end
   end
 
   defmodule Relay do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "relay"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "relay"
 
+    @impl true
     def run(input, state, ctx) do
       if String.starts_with?(input, "armed-slow"), do: Process.sleep(150)
-      Ctx.emit(ctx, "relay:" <> input)
+      emit(ctx, "relay:" <> input)
       {:ok, state}
     end
   end
@@ -247,12 +239,11 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   defmodule Forward do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "forward"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "forward"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, state}
     end
   end
@@ -446,10 +437,9 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # Reports every input it runs over, so a class that journals nothing, and so
   # commits nothing, can still be seen to have run.
   defmodule Heard do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "heard"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "heard"
 
+    @impl true
     def run(input, state, _ctx) do
       send(:bounded_driver_test_collector, {:heard, input})
       {:ok, state}
@@ -469,14 +459,13 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   defmodule Countdown do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "countdown"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "countdown"
 
+    @impl true
     def run(input, state, ctx) do
       # Ends the chain by releasing nothing on the last pass, which is what a
       # handoff-chained loop reads as "no more work".
-      if input != "0", do: Ctx.emit(ctx, Integer.to_string(String.to_integer(input) - 1))
+      if input != "0", do: emit(ctx, Integer.to_string(String.to_integer(input) - 1))
       {:ok, state}
     end
   end
@@ -683,7 +672,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # after the bootstrap, so whatever the test sends next reaches a loop that has
   # already looked at its empty inbox.
   defp start_loop(module, opts) do
-    driver = start_driver(module, [operator_id: "wf-chat"] ++ opts)
+    driver = start_driver(module, Keyword.merge([operator_id: "wf-chat"], opts))
     _state = :sys.get_state(driver)
     driver
   end
@@ -960,18 +949,19 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # Ends the instance on `bye` with how many turns it counted before, and
   # passes every input on, so the stage after it still has work to do.
   defmodule Closer do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "closer"
+    use Flezha.SDK.Tasklet, name: "closer"
+    @impl true
     def init_state(_), do: 0
 
+    @impl true
     def run("bye", turns, ctx) do
-      Ctx.complete(ctx, "turns:#{turns}")
-      Ctx.emit(ctx, "bye")
+      complete(ctx, "turns:#{turns}")
+      emit(ctx, "bye")
       {:ok, turns}
     end
 
     def run(input, turns, ctx) do
-      Ctx.emit(ctx, input)
+      emit(ctx, input)
       {:ok, turns + 1}
     end
   end
@@ -1006,26 +996,23 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # are declared out of order, so the one that sorts last is neither the first
   # dispatched nor the last.
   defmodule KeyedCloser do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "keyed_closer"
-    def cell_keys, do: ["b", "c", "a"]
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "keyed_closer", cell_keys: ["b", "c", "a"]
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.complete(ctx, "key:" <> Ctx.cell_key(ctx))
-      Ctx.emit(ctx, input)
+      complete(ctx, "key:" <> cell_key(ctx))
+      emit(ctx, input)
       {:ok, state}
     end
   end
 
   defmodule LateCloser do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "late_closer"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "late_closer"
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.complete(ctx, "late")
-      Ctx.emit(ctx, input)
+      complete(ctx, "late")
+      emit(ctx, input)
       {:ok, state}
     end
   end
@@ -1171,40 +1158,36 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   # --- keyed tasklets ---
 
   defmodule Splitter do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "splitter"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "splitter"
 
+    @impl true
     def run(input, state, ctx) do
-      input |> String.split(",") |> Enum.each(&Ctx.emit(ctx, &1))
+      input |> String.split(",") |> Enum.each(&emit(ctx, &1))
       {:ok, state}
     end
   end
 
   # Keyed by the edge into it: emits `<key>:<item>`, reports its undo.
   defmodule KeyedUndo do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "keyed_undo"
-    def init_state(_), do: nil
-    def cell_idle_ttl_ms, do: 20
+    use Flezha.SDK.Tasklet, name: "keyed_undo", idle_ttl_seconds: 1
 
+    @impl true
     def run(input, state, ctx) do
-      Ctx.emit(ctx, Ctx.cell_key(ctx) <> ":" <> input)
+      emit(ctx, cell_key(ctx) <> ":" <> input)
       {:ok, state}
     end
 
+    @impl true
     def compensate(_outputs, state, ctx) do
-      send(:bounded_driver_test_collector, {:undone_key, name(), Ctx.cell_key(ctx)})
+      send(:bounded_driver_test_collector, {:undone_key, name(), cell_key(ctx)})
       {:ok, state}
     end
   end
 
   defmodule KeyedPlain do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "keyed_plain"
-    def init_state(_), do: nil
-    def cell_idle_ttl_ms, do: 20
+    use Flezha.SDK.Tasklet, name: "keyed_plain", idle_ttl_seconds: 1
 
+    @impl true
     def run(input, state, _ctx) do
       send(:bounded_driver_test_collector, {:plain_ran, input})
       {:ok, state}
@@ -1213,10 +1196,9 @@ defmodule Flezha.SDK.Bounded.DriverTest do
 
   # Holds its pass until the test releases it.
   defmodule Blocker do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "blocker"
-    def init_state(_), do: nil
+    use Flezha.SDK.Tasklet, name: "blocker"
 
+    @impl true
     def run(_input, state, _ctx) do
       send(:bounded_driver_test_collector, {:blocking, self()})
 
@@ -1228,15 +1210,15 @@ defmodule Flezha.SDK.Bounded.DriverTest do
 
   # Two static Cells of which `cells_for` names one, and it emits nothing.
   defmodule Silent do
-    @behaviour Flezha.SDK.Tasklet
-    def name, do: "silent"
-    def cell_keys, do: ["a", "b"]
+    use Flezha.SDK.Tasklet, name: "silent", cell_keys: ["a", "b"]
+    @impl true
     def cells_for(_value), do: ["a"]
-    def init_state(_), do: nil
+    @impl true
     def run(_input, state, _ctx), do: {:ok, state}
 
+    @impl true
     def compensate(_outputs, state, ctx) do
-      send(:bounded_driver_test_collector, {:undone_key, name(), Ctx.cell_key(ctx)})
+      send(:bounded_driver_test_collector, {:undone_key, name(), cell_key(ctx)})
       {:ok, state}
     end
   end
@@ -1351,11 +1333,16 @@ defmodule Flezha.SDK.Bounded.DriverTest do
           {KeyedLoopAllOrNothing, "wf-sweep-aon", true},
           {KeyedLoopKeepProgress, "wf-sweep-kp", false}
         ] do
+      handler = attach_dynamic(id)
       driver = start_loop(class, operator_id: id)
       Inbox.input(driver, "in", "a", %{})
       assert_receive {:plain_ran, "a:a"}, 5_000
-      # Several TTLs and sweep ticks with the loop waiting for its next message.
-      Process.sleep(200)
+      # The one-second TTL passes with the loop waiting for its next message;
+      # the compensable Cell, idle longer, is judged on the same sweep or earlier.
+      for _evicted <- if(kept, do: [:plain], else: [:plain, :undo]),
+          do: assert_receive({:dynamic, :evicted}, 5_000)
+
+      :telemetry.detach(handler)
 
       assert match?({:ok, _}, Operator.lookup(driver, "keyed_undo", "a")) == kept,
              "#{id}: the compensable keyed Cell"
@@ -1370,30 +1357,36 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   test "no keyed Cell is swept while a pass runs" do
-    test = self()
-    handler = "wf-sweep-block-#{inspect(test)}"
-
-    :telemetry.attach(
-      handler,
-      [:flezha, :sdk, :dynamic],
-      fn _event, _measure, %{operator_id: oid, event: event}, _ ->
-        if oid == "wf-sweep-block", do: send(test, {:dynamic, event})
-      end,
-      nil
-    )
-
+    handler = attach_dynamic("wf-sweep-block")
     driver = start_driver(KeyedBlockFlow, operator_id: "wf-sweep-block")
     Inbox.input(driver, nil, "a", %{})
     assert_receive {:blocking, blocker}, 5_000
-    # The keyed Cell sits idle past its TTL, and sweep ticks queue up, while
-    # the last stage runs.
-    Process.sleep(200)
+    # The keyed Cell sits idle past its one-second TTL, and sweep ticks queue
+    # up, while the last stage runs.
+    Process.sleep(1_500)
     send(blocker, :release)
     messages = drain()
     :telemetry.detach(handler)
     assert %{status: "ok"} = completion(messages)
     assert {:dynamic, :created} in messages
     refute {:dynamic, :evicted} in messages
+  end
+
+  # Every `[:flezha, :sdk, :dynamic]` event of one operator, sent to the test.
+  defp attach_dynamic(operator_id) do
+    test = self()
+    handler = "#{operator_id}-#{inspect(test)}"
+
+    :telemetry.attach(
+      handler,
+      [:flezha, :sdk, :dynamic],
+      fn _event, _measure, %{operator_id: oid, event: event}, _ ->
+        if oid == operator_id, do: send(test, {:dynamic, event})
+      end,
+      nil
+    )
+
+    handler
   end
 
   test "every restore frame the bind owed opens the gate, whether or not a Cell took it" do
