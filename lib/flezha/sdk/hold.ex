@@ -95,6 +95,7 @@ defmodule Flezha.SDK.Hold do
     iter_commit: :control,
     iter_park: :control,
     bounded_completed: :control,
+    operator_exited: :control,
     response: :control
   }
 

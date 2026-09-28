@@ -71,6 +71,13 @@ defmodule Flezha.SDK.Operator do
   def stop(pid), do: GenServer.stop(pid, :normal)
 
   @doc """
+  Whether an instance or Cell process ended cleanly: `:normal`, `:shutdown` or
+  `{:shutdown, _}`. Any other reason is a crash.
+  """
+  @spec clean_exit?(term()) :: boolean()
+  def clean_exit?(reason), do: reason in [:normal, :shutdown] or match?({:shutdown, _}, reason)
+
+  @doc """
   The Cell of `tasklet` (its `name/0`) at `key` — `nil` for a Single node.
   `materialise: true` creates a dynamic key that has no Cell yet, which is
   what a restore of state the controller holds for it needs.
@@ -269,6 +276,16 @@ defmodule Flezha.SDK.Operator do
   end
 
   def handle_info(_msg, s), do: {:noreply, s}
+
+  # A crash ends every Cell first and waits for each, so everything the dead
+  # incarnation's Cells wrote is on the wire before the runner reads this
+  # process's exit and reports it. A clean stop leaves them to end through
+  # their monitor of this process.
+  @impl true
+  def terminate(reason, %State{} = s) do
+    if not clean_exit?(reason), do: Cells.kill_all(s.cells)
+    :ok
+  end
 
   # --- sleeping ---
 

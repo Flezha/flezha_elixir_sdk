@@ -80,6 +80,9 @@ defmodule Flezha.SDK.RunnerServer do
       primaries: [],
       secondaries: [],
       operators: %{},
+      # Instances whose process exited abnormally, reported and not yet
+      # answered by an `AddOperator` or `RemOperator`: `%{oid => reason}`.
+      exited: %{},
       parks: %{},
       waiters: %{},
       held: nil,
@@ -332,14 +335,27 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info({:spawn_deadline, reference_id}, %State{} = s),
     do: settle(s, reference_id, :timeout, "")
 
-  def handle_info({:EXIT, _pid, _reason}, %State{} = s), do: {:noreply, s}
+  # An operator instance's process ended. The report is kept until answered,
+  # because a control frame is never held and one written while no control
+  # stream is bound goes nowhere.
+  def handle_info({:EXIT, pid, reason}, %State{} = s) do
+    case Operators.exited(s, pid, reason) do
+      {:report, oid, s} ->
+        report_exit(s, oid, reason)
+        {:noreply, s}
+
+      {:ok, s} ->
+        {:noreply, s}
+    end
+  end
+
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
   # The two casts a bounded driver sends upward, both built by
   # `Flezha.SDK.Bounded.Commit` so the driver never names this module.
   def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
-    reference_id = "wf-" <> Integer.to_string(System.unique_integer([:positive]))
+    reference_id = request_ref("wf")
     ship_request(s, reference_id, command)
     {:noreply, await_reply(s, reference_id, driver, ref, :barrier_ack)}
   end
@@ -348,7 +364,7 @@ defmodule Flezha.SDK.RunnerServer do
     do: {:noreply, ship_write(s, write)}
 
   def handle_cast({:admin, caller, ref, verb, args}, %State{} = s) do
-    reference_id = "admin-" <> Integer.to_string(System.unique_integer([:positive]))
+    reference_id = request_ref("admin")
 
     case ship_request(s, reference_id, Codec.admin_request_command(verb, args)) do
       :ok ->
@@ -389,7 +405,7 @@ defmodule Flezha.SDK.RunnerServer do
     do: {:noreply, %{s | waiters: Waiters.claim(s.waiters, reference_id)}}
 
   def handle_cast({:notify, command}, %State{} = s) do
-    ship_request(s, "wf-" <> Integer.to_string(System.unique_integer([:positive])), command)
+    ship_request(s, request_ref("wf"), command)
     {:noreply, s}
   end
 
@@ -465,6 +481,7 @@ defmodule Flezha.SDK.RunnerServer do
     case establish_sockets(s, n) do
       {:ok, s} ->
         reply(s, ref, "success")
+        Enum.each(s.exited, fn {oid, reason} -> report_exit(s, oid, reason) end)
         {:noreply, if(s.handshake == :pending, do: %{s | handshake: :answered}, else: s)}
 
       {:error, reason} ->
@@ -725,9 +742,15 @@ defmodule Flezha.SDK.RunnerServer do
   defp ship_update_factories(%State{control_handle: nil}), do: :ok
 
   defp ship_update_factories(%State{} = s) do
-    ref = "uf-" <> Integer.to_string(System.unique_integer([:positive]))
-    ship_request(s, ref, Codec.update_factories_command(s.factories))
+    ship_request(s, request_ref("uf"), Codec.update_factories_command(s.factories))
   end
+
+  defp report_exit(%State{} = s, oid, reason),
+    do: ship_request(s, request_ref("exit"), Codec.operator_exited_command(oid, reason))
+
+  # A fresh reference id for a request this runner starts.
+  defp request_ref(prefix),
+    do: prefix <> "-" <> Integer.to_string(System.unique_integer([:positive]))
 
   defp ship_request(%State{control_handle: nil}, _ref, _command), do: :ok
 

@@ -34,6 +34,7 @@ defmodule Flezha.SDK.HoldClassTest do
       {{"control_command", :iter_commit}, :control},
       {{"control_command", :iter_park}, :control},
       {{"control_command", :bounded_completed}, :control},
+      {{"control_command", :operator_exited}, :control},
       {{"control_command", :response}, :control},
       {"control_ping", :control},
       {"connect_control_channel", :control},

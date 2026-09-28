@@ -22,7 +22,18 @@ defmodule Flezha.SDK.Operator.Cells do
 
   require Logger
 
-  alias Flezha.SDK.{Cell, Counters, Hold, KeyGroup, Knob, Park, Prefix, Tasklet, Topology}
+  alias Flezha.SDK.{
+    Cell,
+    Counters,
+    Hold,
+    KeyGroup,
+    Knob,
+    Operator,
+    Park,
+    Prefix,
+    Tasklet,
+    Topology
+  }
 
   # Evicted keys remembered; beyond it a key reads as never existed.
   @evicted_trace_cap 1_024
@@ -158,7 +169,8 @@ defmodule Flezha.SDK.Operator.Cells do
   # and would take the owner down unless the exit is caught; the retry starts
   # a fresh Cell, which is what the `:DOWN` clause
   # would have arranged, so "the key is routable again on its next input" is
-  # true by construction rather than by ordering luck.
+  # true by construction rather than by ordering luck. Unless the instance
+  # still holds unfinished input: then the owner ends, as `down/3` would.
   defp push(c, node_ref, key, item, retry? \\ true) do
     case ensure(c, node_ref, key) do
       {:capped, c} -> c
@@ -182,6 +194,7 @@ defmodule Flezha.SDK.Operator.Cells do
     catch
       :exit, reason ->
         Prefix.release(c.prefix, offset)
+        crashed(c, node_ref, key, reason)
 
         if retry?,
           do: c |> forget(node_ref, key) |> push(node_ref, key, item, false),
@@ -245,27 +258,64 @@ defmodule Flezha.SDK.Operator.Cells do
   again at once, as `new/1` minted it — what its slot holds, armed timers
   above all, must not wait for an input. A Dynamic one stays lazy, as its
   keys are.
+
+  A crash while the instance holds unfinished input exits the calling owner
+  with `{:cell_exited, reason}` instead of minting anything.
   """
   @spec down(t(), pid(), term()) :: t()
   def down(%__MODULE__{} = c, pid, reason) do
     dead = for {ref, keyed} <- c.cells, {key, ^pid} <- keyed, do: {ref, key}
 
     Enum.reduce(dead, c, fn {node_ref, key}, acc ->
-      if reason not in [:normal, :shutdown] do
-        Logger.warning(
-          "[Flezha.SDK] cell crashed: operator=#{acc.operator_id} " <>
-            "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
-        )
-      end
-
+      if not Operator.clean_exit?(reason), do: crashed(acc, node_ref, key, reason)
       acc |> forget(node_ref, key) |> remint(node_ref, key, reason)
     end)
   end
 
+  # Logged, so a key crashing on every input is visible. A held offset is an
+  # input some Cell took and has not finished, and only the input log can
+  # deliver it again: a replacement minted here could take a later input and
+  # write a floor past it. So the owner ends instead, and the controller
+  # rebinds the instance and re-forwards the log above its floor. Only an
+  # instance with durable input keeps a ledger.
+  defp crashed(%__MODULE__{} = c, node_ref, key, reason) do
+    Logger.warning(
+      "[Flezha.SDK] cell crashed: operator=#{c.operator_id} " <>
+        "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
+    )
+
+    if c.prefix && Prefix.pending?(c.prefix), do: exit({:cell_exited, reason})
+    :ok
+  end
+
   defp remint(%__MODULE__{topology: topo} = c, node_ref, key, reason) do
-    if reason in [:normal, :shutdown] or topo.node_mode[node_ref] == :dynamic,
+    if Operator.clean_exit?(reason) or topo.node_mode[node_ref] == :dynamic,
       do: c,
       else: c |> ensure(node_ref, key) |> elem(1)
+  end
+
+  @doc """
+  Kill every live Cell and wait until each is gone, `sdk_shutdown_ack_ms` in
+  all at most.
+  """
+  @spec kill_all(t()) :: :ok
+  def kill_all(%__MODULE__{} = c) do
+    deadline = System.monotonic_time(:millisecond) + Knob.get(:sdk_shutdown_ack_ms)
+
+    c
+    |> pids()
+    |> Enum.map(fn pid ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      {ref, pid}
+    end)
+    |> Enum.each(fn {ref, pid} ->
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> :ok
+      after
+        max(deadline - System.monotonic_time(:millisecond), 0) -> :ok
+      end
+    end)
   end
 
   @doc """

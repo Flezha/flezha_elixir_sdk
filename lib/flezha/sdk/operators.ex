@@ -22,6 +22,7 @@ defmodule Flezha.SDK.Operators do
   """
   @spec add(map(), map()) :: {:ok, map(), map()} | {:error, String.t(), map()}
   def add(s, add) do
+    s = answered(s, add.operator_id)
     kind = if add.kind in [nil, ""], do: "unbounded", else: add.kind
 
     range =
@@ -83,16 +84,49 @@ defmodule Flezha.SDK.Operators do
   @doc "Stop `oid` and forget it; an id this runner does not host changes nothing."
   @spec remove(map(), binary()) :: map()
   def remove(s, oid) do
-    case Map.pop(s.operators, oid) do
-      {nil, _} ->
+    case s |> answered(oid) |> drop(oid) do
+      {{pid, _fid}, s} ->
+        if Process.alive?(pid), do: Operator.stop(pid)
         s
 
-      {{pid, _fid}, operators} ->
-        :ets.delete(s.registry, oid)
-        if Process.alive?(pid), do: Operator.stop(pid)
-        %{s | operators: operators}
+      {nil, s} ->
+        s
     end
   end
+
+  @doc """
+  The process registered for an instance exited: forget the instance, so no
+  input is routed to the dead process and the next `AddOperator` for its id
+  starts a fresh one. An abnormal exit, while the runner is neither
+  disconnecting nor stopped, is kept in `exited` until the controller answers
+  it and answers `{:report, oid, s}`; anything else, including the exit of a
+  process no id names any more, answers `{:ok, s}`.
+  """
+  @spec exited(map(), pid(), term()) :: {:report, binary(), map()} | {:ok, map()}
+  def exited(s, pid, reason) do
+    case Enum.find(s.operators, fn {_oid, {registered, _fid}} -> registered == pid end) do
+      nil ->
+        {:ok, s}
+
+      {oid, _} ->
+        {_entry, s} = drop(s, oid)
+
+        if Operator.clean_exit?(reason) or s.disconnecting? or s.stopped?,
+          do: {:ok, s},
+          else: {:report, oid, %{s | exited: Map.put(s.exited, oid, reason)}}
+    end
+  end
+
+  # Out of the operator map and the registry, so nothing is routed to it.
+  defp drop(s, oid) do
+    {entry, operators} = Map.pop(s.operators, oid)
+    :ets.delete(s.registry, oid)
+    {entry, %{s | operators: operators}}
+  end
+
+  # An `AddOperator` or a `RemOperator` for the id is the controller's answer
+  # to its exit report.
+  defp answered(s, oid), do: %{s | exited: Map.delete(s.exited, oid)}
 
   defp start_stream(s, add, topo, range) do
     {:ok, op_pid} =

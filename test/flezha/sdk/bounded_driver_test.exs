@@ -1681,7 +1681,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
         {module.factory_id(), spec}
       end)
 
-    s = %{topologies: topologies}
+    s = %{topologies: topologies, exited: %{}}
 
     for {factory, mode} <- [{"entry_keyed_once", "once"}, {"entry_keyed_chained", "chained"}] do
       assert {:error, "PartitionsWithoutPerInputLoop: class " <> _ = reason, ^s} =

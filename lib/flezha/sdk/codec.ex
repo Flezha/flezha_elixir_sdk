@@ -158,6 +158,19 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
+  @doc """
+  The `OperatorExited` command tuple for an instance whose process exited
+  abnormally; the reason is rendered for a log line, bounded.
+  """
+  @spec operator_exited_command(String.t(), term()) :: {atom(), struct()}
+  def operator_exited_command(operator_id, reason) do
+    {:operator_exited,
+     %RunnerCommands.OperatorExited{
+       operator_id: operator_id,
+       reason: inspect(reason, limit: 20, printable_limit: 256)
+     }}
+  end
+
   @doc "The `TaskCommit` command tuple for one completed stage."
   @spec task_commit_command(
           String.t(),
