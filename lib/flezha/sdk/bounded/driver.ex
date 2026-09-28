@@ -2,17 +2,17 @@ defmodule Flezha.SDK.Bounded.Driver do
   @moduledoc """
   One process per bounded instance: the stage driver. A pass walks the chain
   of the entry channel its message arrived on, or of the tasklet whose timer
-  fired, frontier by frontier: a tasklet
-  becomes runnable once every producer feeding it in that chain has committed,
-  so a fan-in is dispatched exactly once with the accumulated batch of this
-  pass's producers. It commits each stage durably and ends by shipping
-  `BoundedCompleted`.
+  fired: a tasklet becomes runnable once every producer feeding it in that
+  chain has committed, so a fan-in is dispatched exactly once with the
+  accumulated batch of this pass's producers. Each stage commits durably as
+  soon as its Cells have drained, whatever its siblings are still doing, and
+  the run ends by shipping `BoundedCompleted`.
 
   It presents the same contract to an `Flezha.SDK.Cell` that
   `Flezha.SDK.Operator` does: a Cell casts its emits to its `operator`
   pid and knows nothing else about it. So every Cell mechanism — the state,
   the records, the retry ladder — is reused as it stands, and what is written
-  here is only what a *bounded* run adds: the frontier, the barrier and the
+  here is only what a *bounded* run adds: the stages, the barrier and the
   journal.
 
   The reference drives a chain on a pool thread that blocks on each barrier.
@@ -53,8 +53,10 @@ defmodule Flezha.SDK.Bounded.Driver do
       :runner,
       # the unbounded operator's Cell set, minted per mode and swept between passes
       :cells,
-      # the stage barrier refs this frontier still owes
+      # the stage barrier refs the running stages still owe, and how many
+      # each forward stage owes, so its last one is seen without a scan
       awaiting: %{},
+      owed: %{},
       # node_ref => what its cells released this iteration
       collected: %{},
       # node_ref => the keys of the Cells its stage dispatched to
@@ -62,7 +64,8 @@ defmodule Flezha.SDK.Bounded.Driver do
       # node_ref => cell identity => the effect records that Cell wrote for the
       # stage, which its commit (or undo) names
       written: %{},
-      # node_ref => accumulating input batch until every producer committed
+      # node_ref => producer task_idx => what it handed that node, until
+      # every producer committed
       pending: %{},
       # node_ref => producers still owed
       waiting: %{},
@@ -70,9 +73,9 @@ defmodule Flezha.SDK.Bounded.Driver do
       completed: [],
       # committed iterations, each a list of stage records
       committed: [],
-      # the frontier being run, and the one it opens
-      frontier: [],
-      next: [],
+      # stages whose Cells have drained, in the order they did, each owing
+      # its commit; the head's is the one in flight
+      finished: [],
       # the stage whose barrier is in flight, and the ladder it is on
       barrier: nil,
       carry: nil,
@@ -241,8 +244,8 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # A tasklet asked to end the instance. Each tasklet keeps the request of
   # its Cell whose key sorts last, so which Cell answered first never
-  # decides the result; the iteration ends with the tasklet latest in the
-  # chain's commit order (`completion/1`).
+  # decides the result; the iteration ends with the tasklet latest in DAG
+  # order, the highest `task_idx` (`completion/1`).
   def handle_cast({:complete, node_ref, cell_key, result}, %State{} = s) do
     task_idx = Map.fetch!(s.spec.dag.pos, node_ref)
 
@@ -297,8 +300,9 @@ defmodule Flezha.SDK.Bounded.Driver do
         {:noreply, s}
 
       {node_ref, awaiting} ->
-        s = note_written(%{s | awaiting: awaiting}, node_ref, written)
-        settle(stage_settled(s))
+        s = %{s | awaiting: awaiting, owed: owe_less(s.owed, node_ref)}
+        s = note_written(s, node_ref, written)
+        settle(stage_settled(s, node_ref))
     end
   end
 
@@ -447,7 +451,7 @@ defmodule Flezha.SDK.Bounded.Driver do
         completions: start.completions
     }
 
-    dispatch_frontier(s, start.ready)
+    open_stages(s, start.ready)
   end
 
   defp fresh_seed(%State{} = s) do
@@ -515,7 +519,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   end
 
   defp start_pass(%State{} = s, channel, frontier),
-    do: dispatch_frontier(%{fresh_iteration(s) | pass_channel: channel, origin: nil}, frontier)
+    do: open_stages(%{fresh_iteration(s) | pass_channel: channel, origin: nil}, frontier)
 
   # A firing's pass: the one Cell whose timer fired, at its tasklet, whose
   # chain the pass runs. The entry channel and consumed offset stay the last
@@ -529,13 +533,11 @@ defmodule Flezha.SDK.Bounded.Driver do
       fresh_iteration(s)
       | origin: %{firing: firing, carry: s.carry},
         carry: nil,
-        frontier: [{firing.node_ref, []}],
-        next: [],
-        awaiting: %{}
+        awaiting: %{},
+        owed: %{}
     }
 
-    s = dispatch_firing(s, firing)
-    if map_size(s.awaiting) == 0, do: stage_settled(s), else: s
+    s |> dispatch_firing(firing) |> finish_if_drained(firing.node_ref) |> pass_step()
   end
 
   # The firing on its Cell with a barrier behind it, counted with its stage.
@@ -547,16 +549,34 @@ defmodule Flezha.SDK.Bounded.Driver do
       s
       | cells: cells,
         collected: Map.put_new(s.collected, node_ref, []),
-        ran: Map.update(s.ran, node_ref, keys, &Enum.uniq(&1 ++ keys)),
-        awaiting: Enum.into(awaiting, s.awaiting)
+        ran: Map.update(s.ran, node_ref, keys, &Enum.uniq(&1 ++ keys))
     }
+    |> await(node_ref, awaiting)
   end
 
   # A stage still waiting for its Cells can take a firing of its own tasklet.
   defp joinable?(%State{unwind: %{status: nil}, cancel: nil} = s, node_ref),
-    do: Enum.any?(s.awaiting, fn {_ref, awaited} -> awaited == node_ref end)
+    do: running?(s, node_ref)
 
   defp joinable?(%State{}, _node_ref), do: false
+
+  defp running?(%State{owed: owed}, node_ref), do: Map.has_key?(owed, node_ref)
+
+  defp await(%State{} = s, _node_ref, []), do: s
+
+  defp await(%State{} = s, node_ref, awaiting) do
+    count = length(awaiting)
+    owed = Map.update(s.owed, node_ref, count, &(&1 + count))
+    %{s | awaiting: Enum.into(awaiting, s.awaiting), owed: owed}
+  end
+
+  # An undo's barrier names no forward stage, so it owes nothing here.
+  defp owe_less(owed, node_ref) do
+    case Map.get(owed, node_ref) do
+      n when is_integer(n) and n > 1 -> Map.put(owed, node_ref, n - 1)
+      _last_or_none -> Map.delete(owed, node_ref)
+    end
+  end
 
   # An empty inbox is waited on as the reference waits: for the tail a
   # rehydrating bind still owes, else for the idle window, and the loop parks
@@ -641,32 +661,26 @@ defmodule Flezha.SDK.Bounded.Driver do
         pending: %{},
         waiting: %{},
         completed: [],
-        next: [],
+        finished: [],
         completions: %{}
     }
 
-  # --- one frontier ---
+  # --- the stages of one pass ---
 
-  defp dispatch_frontier(%State{} = s, []), do: seal_iteration(s)
-
-  defp dispatch_frontier(%State{cancel: reason} = s, _frontier) when reason != nil,
+  defp open_stages(%State{cancel: reason} = s, _ready) when reason != nil,
     do: unwind(s, "cancelled", "")
 
-  # A frontier whose stages handed nothing to any Cell has no barrier to wait
-  # for, so it settles at once.
-  defp dispatch_frontier(%State{} = s, frontier) do
-    s = %{s | frontier: frontier, next: [], awaiting: %{}}
-
-    s =
-      Enum.reduce(frontier, s, fn {node_ref, batch}, acc ->
-        dispatch_stage(acc, node_ref, batch)
-      end)
-
-    if map_size(s.awaiting) == 0, do: stage_settled(s), else: s
+  defp open_stages(%State{} = s, ready) do
+    ready
+    |> Enum.reduce(%{s | awaiting: %{}, owed: %{}}, fn {node, batch}, acc ->
+      dispatch_stage(acc, node, batch)
+    end)
+    |> pass_step()
   end
 
   # The stage ran on exactly the Cells it handed a value to: that is what its
-  # commit and its undo name, whether or not they emit.
+  # commit and its undo name, whether or not they emit. One that handed
+  # nothing to any Cell has no barrier to wait for, so it is finished at once.
   defp dispatch_stage(%State{} = s, node_ref, batch) do
     {keys, awaiting, cells} = Stage.dispatch(s.cells, node_ref, batch, self())
 
@@ -674,28 +688,40 @@ defmodule Flezha.SDK.Bounded.Driver do
       s
       | cells: cells,
         collected: Map.put_new(s.collected, node_ref, []),
-        ran: Map.put(s.ran, node_ref, keys),
-        awaiting: Enum.into(awaiting, s.awaiting)
+        ran: Map.put(s.ran, node_ref, keys)
     }
+    |> await(node_ref, awaiting)
+    |> finish_if_drained(node_ref)
   end
 
-  # Every Cell of this frontier has drained past its barrier: commit the
-  # stages in DAG order, then accumulate what each released into its children.
-  defp stage_settled(%State{awaiting: awaiting} = s) when map_size(awaiting) > 0, do: s
+  defp finish_if_drained(%State{} = s, node_ref) do
+    if running?(s, node_ref), do: s, else: %{s | finished: s.finished ++ [node_ref]}
+  end
 
-  defp stage_settled(%State{unwind: %{status: st}} = s) when st != nil,
-    do: unwind_step(s, &Compensation.commit/1)
+  # One of a stage's Cells drained past its barrier. The unwind waits for its
+  # whole group; a forward stage is finished once its last Cell has drained.
+  defp stage_settled(%State{unwind: %{status: st}, awaiting: awaiting} = s, _node_ref)
+       when st != nil do
+    if map_size(awaiting) == 0, do: unwind_step(s, &Compensation.commit/1), else: s
+  end
 
-  defp stage_settled(%State{cancel: reason} = s) when reason != nil,
-    do: unwind(s, "cancelled", "")
+  defp stage_settled(%State{} = s, node_ref), do: s |> finish_if_drained(node_ref) |> pass_step()
 
-  defp stage_settled(%State{} = s), do: commit_next_stage(s)
+  # One `TaskCommit` at a time, in the order the stages finished: a child is
+  # dispatched only on its producers' successful replies, so a crash re-runs
+  # exactly the stages that had not committed. A cancelled pass commits
+  # nothing more and unwinds once its running stages have drained; one with
+  # nothing running and nothing owed ends its iteration.
+  defp pass_step(%State{barrier: barrier} = s) when barrier != nil, do: s
 
-  # One `TaskCommit` at a time: the driver starts the next tasklet only on
-  # the successful reply, so a crash between them re-runs the uncommitted one.
-  defp commit_next_stage(%State{frontier: []} = s), do: dispatch_frontier(s, s.next)
+  defp pass_step(%State{cancel: reason, awaiting: awaiting} = s) when reason != nil,
+    do: if(map_size(awaiting) == 0, do: unwind(s, "cancelled", ""), else: s)
 
-  defp commit_next_stage(%State{frontier: [{node_ref, _batch} | _]} = s) do
+  defp pass_step(%State{finished: [node_ref | _]} = s), do: commit_stage(s, node_ref)
+  defp pass_step(%State{awaiting: awaiting} = s) when map_size(awaiting) > 0, do: s
+  defp pass_step(%State{} = s), do: seal_iteration(s)
+
+  defp commit_stage(%State{} = s, node_ref) do
     task_idx = Map.fetch!(s.spec.dag.pos, node_ref)
     batch = Map.get(s.collected, node_ref, [])
     ran = s.ran |> Map.get(node_ref, []) |> Enum.map(&Cells.wire_identity(s.cells, node_ref, &1))
@@ -737,34 +763,46 @@ defmodule Flezha.SDK.Bounded.Driver do
       | completed: s.completed ++ [%{node_ref: node_ref, task_idx: task_idx, cells: ran}]
     }
 
-  # The committed stage's release accumulates into each child, which becomes
-  # runnable once every producer feeding it in this pass's chain has
-  # committed; a producer of another chain is not running and is never
-  # waited for.
-  defp advance(%State{frontier: [{node_ref, _} | rest]} = s) do
+  # The committed stage's release accumulates into each child, which is
+  # dispatched once every producer feeding it in this pass's chain has
+  # committed, over their releases in DAG order whichever committed first,
+  # as a resume rebuilds it; a producer of another chain is not running and
+  # is never waited for.
+  defp advance(%State{finished: [node_ref | rest]} = s) do
     batch = Map.get(s.collected, node_ref, [])
     children = Map.fetch!(s.spec.dag.children, node_ref)
+    idx = Map.fetch!(s.spec.dag.pos, node_ref)
 
     s =
-      Enum.reduce(children, s, fn child, acc ->
+      Enum.reduce(children, %{s | finished: rest}, fn child, acc ->
         owed = Map.get(acc.waiting, child, chain_parents(acc, child)) - 1
         mapped = through_edge(acc, node_ref, child, batch)
-        pending = Map.update(acc.pending, child, mapped, &(&1 ++ mapped))
+        bank = acc.pending |> Map.get(child, %{}) |> Map.put(idx, mapped)
 
-        if owed == 0 do
-          %{
+        cond do
+          owed > 0 ->
+            %{
+              acc
+              | waiting: Map.put(acc.waiting, child, owed),
+                pending: Map.put(acc.pending, child, bank)
+            }
+
+          acc.cancel ->
             acc
-            | waiting: Map.delete(acc.waiting, child),
-              pending: Map.delete(pending, child),
-              next: acc.next ++ [{child, Map.get(pending, child, [])}]
-          }
-        else
-          %{acc | waiting: Map.put(acc.waiting, child, owed), pending: pending}
+
+          true ->
+            acc = %{
+              acc
+              | waiting: Map.delete(acc.waiting, child),
+                pending: Map.delete(acc.pending, child)
+            }
+
+            dispatch_stage(acc, child, Resume.in_producer_order(bank))
         end
       end)
 
     s = if children == [], do: %{s | carry: (s.carry || []) ++ batch}, else: s
-    commit_next_stage(%{s | frontier: rest})
+    pass_step(s)
   end
 
   # --- the iteration boundary ---
@@ -804,8 +842,8 @@ defmodule Flezha.SDK.Bounded.Driver do
     end
   end
 
-  # The completion the iteration ends with: the tasklet latest in the chain's
-  # commit order.
+  # The completion the iteration ends with: the tasklet latest in DAG order,
+  # whichever committed first.
   defp completion(%State{completions: completions}) when completions == %{}, do: nil
 
   defp completion(%State{completions: completions}),
@@ -884,9 +922,9 @@ defmodule Flezha.SDK.Bounded.Driver do
   defp do_unwind(%State{} = s, status, error) do
     s = %{
       s
-      | frontier: [],
-        next: [],
+      | finished: [],
         awaiting: %{},
+        owed: %{},
         barrier: nil,
         unwind: %{s.unwind | status: {status, error}}
     }
@@ -938,7 +976,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # The stage that served firings committed: each Cell it ran writes the
   # removals it held.
-  defp release_firings(%State{frontier: [{node_ref, _batch} | _]} = s) do
+  defp release_firings(%State{finished: [node_ref | _]} = s) do
     for key <- Map.get(s.ran, node_ref, []),
         pid = Cells.pid(s.cells, node_ref, key),
         pid != nil,

@@ -93,20 +93,21 @@ flz operator start order_executor --id order_too_big --namespace trading \
 ```
 
 `confirm_fill` refuses it after ten seconds, is tried three times, ten seconds
-each, and then the order ends in failure. The book is written once the last
-try is spent, and then every step that had finished is undone, in reverse: the
-order is cancelled, then the money is released. `record_order` has no undo, so
+each, and then the order ends in failure. The booking prints at once, beside
+the tries, and once the last try is spent every step that had finished is
+undone, in reverse: the order is cancelled, then the money is released. `record_order` has no undo, so
 the booking stays. The tries are logged at the `debug` level, which a
 `mix run` in the `dev` environment shows:
 
 ```
-17:57:34.082 [debug] [Flezha.SDK] order_too_big/node/single attempt 1/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
-
-17:57:44.150 [debug] [Flezha.SDK] order_too_big/node/single attempt 2/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
 [book] EUR/USD 500 as ord-e015c2df9402f4625d9cef4def51f243
+
+20:31:32.672 [debug] [Flezha.SDK] order_too_big/node/single attempt 1/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
+
+20:31:42.717 [debug] [Flezha.SDK] order_too_big/node/single attempt 2/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
 [undo] cancelled ord-e015c2df9402f4625d9cef4def51f243
 
-17:57:54.287 [debug] [Flezha.SDK] order_too_big compensating task 1
+20:31:52.825 [debug] [Flezha.SDK] order_too_big compensating task 1
 [undo] released res-e0d09a3a6a33661df98dd0a4768bb45a
 ```
 

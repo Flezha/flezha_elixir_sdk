@@ -143,15 +143,27 @@ defmodule Flezha.SDK.Bounded.Resume do
     do: Enum.map(carry(journal), &{&1, nil})
 
   # What every committed producer of `node` released, each through its own
-  # edge — the same application the live pass made.
+  # edge — the same application the live pass made — by producer `task_idx`.
   defp banked(journal, dag, done, node, through_edge) do
-    Enum.flat_map(done, fn parent ->
-      journal.task_handoffs
-      |> Map.get(Map.fetch!(dag.pos, parent), [])
-      |> Enum.map(fn {_id, payload} -> decode(payload) end)
-      |> then(&through_edge.(parent, node, &1))
+    Map.new(done, fn parent ->
+      idx = Map.fetch!(dag.pos, parent)
+      decoded = journal.task_handoffs |> Map.get(idx, []) |> Enum.map(&decode(elem(&1, 1)))
+      {idx, through_edge.(parent, node, decoded)}
     end)
   end
+
+  @doc """
+  A join's input from its producers' banked releases, in DAG order: the one
+  order a live pass and a resumed one both build, whichever producer finished
+  first.
+  """
+  @spec in_producer_order(%{non_neg_integer() => list()}) :: list()
+  def in_producer_order(bank), do: bank |> Enum.sort() |> Enum.flat_map(&elem(&1, 1))
+
+  # A child runs over its producers' release even when it is empty, as the
+  # live pass runs it; only a root with nothing to run over is left out.
+  defp seeded(acc, node, %{} = bank, []),
+    do: %{acc | ready: acc.ready ++ [{node, in_producer_order(bank)}]}
 
   defp seeded(acc, _node, [], []), do: acc
   defp seeded(acc, node, batch, []), do: %{acc | ready: acc.ready ++ [{node, batch}]}

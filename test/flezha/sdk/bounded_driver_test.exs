@@ -455,6 +455,143 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     assert %{status: "ok"} = completion(drain())
   end
 
+  defmodule HeldFanFlow do
+    def factory_id, do: "held_fan_flow"
+
+    def channels(c) do
+      fan = c |> Channels.input("in") |> Channels.into(Tagger)
+      fan |> Channels.into(HeldLeft)
+      fan |> Channels.into(Right)
+    end
+  end
+
+  # The held arm runs until the test releases it, so the instant arm's commit
+  # arriving first proves it did not wait for its sibling.
+  test "a step commits as soon as it finishes, while its sibling in the level still runs" do
+    driver = start_driver(HeldFanFlow, [])
+    Inbox.input(driver, nil, "go", %{})
+    instant = Resume.encode("r:a:go")
+    held_payload = Resume.encode("held_left:a:go")
+
+    assert_receive {:running, "held_left", held}, 5_000
+    assert_receive {:shipped, {:task_commit, %{handoff: [%{payload: ^instant}]}}}, 2_000
+    refute_received {:shipped, {:task_commit, %{handoff: [%{payload: ^held_payload}]}}}
+
+    ref = Process.monitor(driver)
+    send(held, :release)
+    assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
+    messages = drain()
+    assert %{handoff: [%{payload: ^held_payload}]} = messages |> commits() |> List.last()
+    assert %{status: "ok"} = completion(messages)
+  end
+
+  # Each tasklet's `task_idx`, by the name it declares.
+  defp positions(module) do
+    {:ok, spec} = Spec.build(module)
+    Map.new(spec.dag.pos, fn {node_ref, idx} -> {Spec.tasklet_name(spec, node_ref), idx} end)
+  end
+
+  defp join_batch(messages, join_idx) do
+    messages
+    |> commits()
+    |> Enum.find(&(&1.task_idx == join_idx))
+    |> Map.fetch!(:handoff)
+    |> Enum.map(&Resume.decode(&1.payload))
+  end
+
+  defmodule HeldJoinFlow do
+    def factory_id, do: "held_join_flow"
+
+    def channels(c) do
+      fan = c |> Channels.input("in") |> Channels.into(Tagger)
+      fan |> Channels.into(HeldLeft) |> Channels.into(Join)
+      fan |> Channels.into(Right) |> Channels.into(Join)
+    end
+  end
+
+  # A join's batch is its producers' releases in their DAG position, whichever
+  # finished first, which is the order a resumed join rebuilds from the journal.
+  test "a join takes its producers' batches in DAG order, not the order they finished" do
+    pos = positions(HeldJoinFlow)
+    assert pos["held_left"] < pos["right"]
+    driver = start_driver(HeldJoinFlow, [])
+    Inbox.input(driver, nil, "go", %{})
+    instant = Resume.encode("r:a:go")
+
+    assert_receive {:running, "held_left", held}, 5_000
+    assert_receive {:shipped, {:task_commit, %{handoff: [%{payload: ^instant}]}}}, 2_000
+
+    ref = Process.monitor(driver)
+    send(held, :release)
+    assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
+
+    assert join_batch(drain(), pos["join"]) == ["j:held_left:a:go", "j:r:a:go"]
+  end
+
+  test "a resumed join keeps DAG order when its later producer committed before the crash" do
+    pos = positions(DiamondFlow)
+    assert pos["left"] < pos["right"]
+
+    messages =
+      resume(DiamondFlow, %{
+        committed_task_idxs: [pos["tagger"], pos["right"]],
+        iter: 0,
+        task_handoffs: %{
+          pos["tagger"] => [{pos["tagger"], Resume.encode("a:j")}],
+          pos["right"] => [{pos["right"], Resume.encode("r:a:j")}]
+        },
+        committed_tasks: []
+      })
+
+    assert join_batch(messages, pos["join"]) == ["j:l:a:j", "j:r:a:j"]
+  end
+
+  defmodule HeldUndo do
+    use Flezha.SDK.Tasklet, name: "held_undo"
+
+    @impl true
+    def run(input, state, ctx) do
+      HeldArm.run(name(), input, ctx)
+      {:ok, state}
+    end
+
+    @impl true
+    def compensate(_outputs, state, _ctx) do
+      send(:bounded_driver_test_collector, {:undone, name()})
+      {:ok, state}
+    end
+  end
+
+  defmodule HeldSagaFlow do
+    def factory_id, do: "held_saga_flow"
+
+    def channels(c) do
+      fan = c |> Channels.input("in") |> Channels.into(Undoable)
+      fan |> Channels.into(HeldUndo)
+      fan |> Channels.into(Undoable2)
+    end
+  end
+
+  test "a stop while one arm runs undoes the committed steps, latest first" do
+    pos = positions(HeldSagaFlow)
+    driver = start_driver(HeldSagaFlow, [])
+    Inbox.input(driver, nil, "go", %{})
+    committed = pos["undoable2"]
+
+    assert_receive {:running, "held_undo", held}, 5_000
+    assert_receive {:shipped, {:task_commit, %{task_idx: ^committed}}}, 2_000
+    Driver.stop_bounded(driver)
+    ref = Process.monitor(driver)
+    send(held, :release)
+    assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
+
+    messages = drain()
+    undone = for {:undone, name} <- messages, name in ["undoable2", "undoable"], do: name
+    assert undone == ["undoable2", "undoable"]
+    refute Enum.any?(commits(messages), &(&1.task_idx == pos["held_undo"]))
+    assert %{status: "cancelled"} = completion(messages)
+  end
+
   # --- failure and the saga ---
 
   test "a failing tasklet ends the run as an error naming it" do
@@ -957,6 +1094,21 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     assert [only] = commits(messages)
     assert only.task_idx == 1
     assert Enum.map(only.handoff, & &1.payload) == [Resume.encode("j:a:journaled")]
+    assert %{status: "ok"} = completion(messages)
+  end
+
+  # A live pass runs a child over an empty release too, so its own children
+  # are not left waiting on it.
+  test "a child whose committed producer released nothing still runs on resume" do
+    messages =
+      resume(LinearFlow, %{
+        committed_task_idxs: [0],
+        iter: 0,
+        task_handoffs: %{0 => []},
+        committed_tasks: [%{task_idx: 0, iter: 0, cells_ran: []}]
+      })
+
+    assert [%{task_idx: 1, handoff: []}] = commits(messages)
     assert %{status: "ok"} = completion(messages)
   end
 

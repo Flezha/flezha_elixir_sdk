@@ -42,11 +42,11 @@ defmodule Tradedesk.OrderExecutor do
   being a line: confirming the fill and booking the order are two
   consequences of it, so the placed channel is used twice, once for each.
 
-  The driver runs the chain level by level: every step of a level commits
-  before any of its children run, so the desk's order of events is fixed
-  rather than a race. The two steps of the last level run side by side. A
-  step that fails poisons its whole level, which is why a refusal of the fill
-  unwinds the steps before it.
+  A step's children run only once it has committed, so the desk's order of
+  events is fixed rather than a race. The two arms run side by side, and each
+  commits as soon as it finishes, so a crash while the fill is confirmed does
+  not book the order again. A step that fails ends the order, which is why a
+  refusal of the fill unwinds the steps before it.
 
   Nothing ends on a sink: the last step ends the instance with its result,
   which `flz operator info` shows.
