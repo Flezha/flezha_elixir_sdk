@@ -23,10 +23,10 @@ defmodule Flezha.SDK.Bounded.Stage do
   Hand `batch` — `{value, key}` pairs, the key the edge gave each value — to
   the stage's Cells and queue one barrier behind each Cell that received one.
   Answers the keys of those Cells in the order they were first reached, the
-  `{ref, node_ref}` pairs the driver waits on, and the Cell set.
+  `{ref, {node_ref, cell_pid}}` pairs the driver waits on, and the Cell set.
   """
   @spec dispatch(Cells.t(), reference(), [{term(), String.t() | nil}], pid()) ::
-          {[String.t() | nil], [{reference(), reference()}], Cells.t()}
+          {[String.t() | nil], [{reference(), {reference(), pid()}}], Cells.t()}
   def dispatch(%Cells{} = cells, node_ref, batch, reply_to) do
     {reached, cells} =
       Enum.reduce(batch, {[], cells}, fn {value, key}, {reached, cells} ->
@@ -43,8 +43,9 @@ defmodule Flezha.SDK.Bounded.Stage do
     awaiting =
       Enum.map(reached, fn key ->
         ref = make_ref()
-        Cell.barrier(Map.fetch!(keyed, key), ref, reply_to)
-        {ref, node_ref}
+        pid = Map.fetch!(keyed, key)
+        Cell.barrier(pid, ref, reply_to)
+        {ref, {node_ref, pid}}
       end)
 
     {reached, awaiting, cells}
@@ -56,7 +57,7 @@ defmodule Flezha.SDK.Bounded.Stage do
   gone, and its timers with it.
   """
   @spec fire(Cells.t(), reference(), String.t() | nil, struct(), pid()) ::
-          {[String.t() | nil], [{reference(), reference()}], Cells.t()}
+          {[String.t() | nil], [{reference(), {reference(), pid()}}], Cells.t()}
   def fire(%Cells{} = cells, node_ref, key, fire, reply_to) do
     case Cells.pid(cells, node_ref, key) do
       nil ->
@@ -66,7 +67,7 @@ defmodule Flezha.SDK.Bounded.Stage do
         ref = make_ref()
         Cell.fire(pid, fire)
         Cell.barrier(pid, ref, reply_to)
-        {[key], [{ref, node_ref}], cells}
+        {[key], [{ref, {node_ref, pid}}], cells}
     end
   end
 end

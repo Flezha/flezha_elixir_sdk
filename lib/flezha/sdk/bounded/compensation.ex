@@ -224,6 +224,6 @@ defmodule Flezha.SDK.Bounded.Compensation do
     ref = make_ref()
     Cell.barrier(pid, ref, self())
     Logger.debug("[Flezha.SDK] #{state.operator_id} compensating task #{stage.task_idx}")
-    %{state | awaiting: Map.put(state.awaiting, ref, stage.node_ref)}
+    %{state | awaiting: Map.put(state.awaiting, ref, {stage.node_ref, pid})}
   end
 end

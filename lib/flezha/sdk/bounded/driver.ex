@@ -53,8 +53,9 @@ defmodule Flezha.SDK.Bounded.Driver do
       :runner,
       # the unbounded operator's Cell set, minted per mode and swept between passes
       :cells,
-      # the stage barrier refs the running stages still owe, and how many
-      # each forward stage owes, so its last one is seen without a scan
+      # the stage barrier refs the running stages still owe, each with its
+      # node and Cell, and how many each forward stage owes, so its last one
+      # is seen without a scan
       awaiting: %{},
       owed: %{},
       # node_ref => what its cells released this iteration
@@ -294,17 +295,8 @@ defmodule Flezha.SDK.Bounded.Driver do
     end
   end
 
-  def handle_info({:stage_done, ref, _pid, written}, %State{} = s) do
-    case Map.pop(s.awaiting, ref) do
-      {nil, _} ->
-        {:noreply, s}
-
-      {node_ref, awaiting} ->
-        s = %{s | awaiting: awaiting, owed: owe_less(s.owed, node_ref)}
-        s = note_written(s, node_ref, written)
-        settle(stage_settled(s, node_ref))
-    end
-  end
+  def handle_info({:stage_done, ref, _pid, written}, %State{} = s),
+    do: settle(drained(s, ref, written))
 
   def handle_info({:barrier_ack, ref, _result, error}, %State{barrier: %{ref: ref}} = s),
     do: settle(barrier_settled(s, error))
@@ -323,8 +315,13 @@ defmodule Flezha.SDK.Bounded.Driver do
   def handle_info({:secondaries, secondaries}, %State{} = s),
     do: {:noreply, %{s | cells: Cells.rebind(s.cells, secondaries)}}
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s),
-    do: {:noreply, %{s | cells: Cells.down(s.cells, pid, reason)}}
+  # A Cell that exits never answers a barrier it holds: that stage fails as
+  # an exhausted ladder fails it, and the barrier counts as drained.
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s) do
+    s = %{s | cells: Cells.down(s.cells, pid, reason)}
+    lost = for {ref, {_node_ref, ^pid}} <- s.awaiting, do: ref
+    settle(Enum.reduce(lost, s, &lose_barrier(&2, &1, reason)))
+  end
 
   # The sweep runs only while the loop waits for its next message, and keeps
   # every Cell a rollback of the class's mode could still reach.
@@ -1026,6 +1023,29 @@ defmodule Flezha.SDK.Bounded.Driver do
   # ends the process, and nothing else does.
   defp settle(%State{terminal: nil} = s), do: {:noreply, s}
   defp settle(%State{} = s), do: {:stop, :normal, s}
+
+  defp drained(%State{} = s, ref, written) do
+    case Map.pop(s.awaiting, ref) do
+      {nil, _} ->
+        s
+
+      {{node_ref, _pid}, awaiting} ->
+        s = %{s | awaiting: awaiting, owed: owe_less(s.owed, node_ref)}
+        s |> note_written(node_ref, written) |> stage_settled(node_ref)
+    end
+  end
+
+  # A forward failure clears every barrier, so a later one of the same Cell
+  # may be gone already.
+  defp lose_barrier(%State{awaiting: awaiting} = s, ref, reason) do
+    case awaiting do
+      %{^ref => {node_ref, _pid}} ->
+        s |> fail(node_ref, "cell exited: #{inspect(reason)}") |> drained(ref, nil)
+
+      _cleared ->
+        s
+    end
+  end
 
   # --- projections ---
 
