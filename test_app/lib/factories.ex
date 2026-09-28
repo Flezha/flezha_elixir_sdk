@@ -710,7 +710,7 @@ defmodule ElixirRunner.SpawnOnceRequesterTask do
   # handle's answer; the spawned pass proves itself on stdout too.
   @impl true
   def run(input, s, ctx) do
-    handle = spawn_bounded(ctx, "typed_once_bounded", Jason.encode!(%{"text" => input}))
+    handle = spawn_bounded(ctx, "typed_once_bounded", %{"text" => input})
     ElixirRunner.SpawnRequesterTask.report("once", Spawn.await(handle))
     {:ok, s}
   end

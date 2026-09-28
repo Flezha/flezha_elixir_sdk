@@ -23,9 +23,8 @@ defmodule Tradedesk.BuyAboveAverage do
       # A stronger move buys more.
       quantity = round(percent * @units_per_percent)
 
-      order = Jason.encode!(%{symbol: symbol, quantity: quantity})
       # One bounded operator per order.
-      spawn_bounded(ctx, "order_executor", order)
+      spawn_bounded(ctx, "order_executor", %{symbol: symbol, quantity: quantity})
 
       emit(
         ctx,

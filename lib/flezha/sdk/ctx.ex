@@ -201,7 +201,8 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   Request spawn-or-deliver of a bounded instance of `factory_id` in this
-  runner's namespace, with `payload` as its first input. Answers a
+  runner's namespace, with `payload` as its first input: bytes as they are,
+  anything else as JSON, and a term with no JSON form raises. Answers a
   `Flezha.SDK.Spawn` handle without waiting, read with
   `Flezha.SDK.Spawn.await/2` or `Flezha.SDK.Spawn.try_result/1` inside this
   invocation, or not at all.
@@ -219,8 +220,9 @@ defmodule Flezha.SDK.Ctx do
   instance the first ask started. Pass `id:` for at most one instance, or for
   the id on a replay.
   """
-  @spec spawn_bounded(t(), String.t(), binary(), [Spawn.option()]) :: Spawn.t()
+  @spec spawn_bounded(t(), String.t(), term(), [Spawn.option()]) :: Spawn.t()
   def spawn_bounded(%__MODULE__{} = ctx, factory_id, payload, opts \\ []) do
+    payload = plain_payload(payload)
     identity = spawn_identity(ctx, factory_id, payload)
     Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts, identity)
   end
@@ -248,7 +250,8 @@ defmodule Flezha.SDK.Ctx do
   result its completion reports. The rest of the iteration still runs and
   commits; once that commit is durable the instance ends instead of waiting
   for its next input, re-seeding a chained loop or parking. In a `:once`
-  bounded operator it only sets the result the pass ends with.
+  bounded operator it only sets the result the pass ends with. `result` is
+  encoded as `spawn_bounded/4` encodes its payload; `nil` carries no result.
 
   Called more than once in one iteration, the instance ends once, with the
   result of the tasklet latest in the chain's order and, within it, of the
@@ -258,11 +261,16 @@ defmodule Flezha.SDK.Ctx do
   An unbounded operator never completes: an unbounded tasklet calling this fails its input,
   without a retry, with an error beginning `CompleteOutsideBounded`.
   """
-  @spec complete(t(), binary()) :: :ok
-  def complete(%__MODULE__{ref: ref}, result) when is_binary(result) do
-    Process.put(completion_key(ref), result)
+  @spec complete(t(), term()) :: :ok
+  def complete(%__MODULE__{ref: ref}, result) do
+    Process.put(completion_key(ref), if(is_nil(result), do: "", else: plain_payload(result)))
     :ok
   end
+
+  # Read by a runner in any language, so unlike a sink's default this never
+  # falls back to Erlang terms: a term with no JSON form raises.
+  defp plain_payload(v) when is_binary(v), do: v
+  defp plain_payload(v), do: Jason.encode!(v)
 
   @doc false
   @spec completion(t()) :: binary() | nil
