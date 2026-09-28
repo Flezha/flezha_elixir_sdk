@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Topology do
        sink, a transform after a key, a second key, a chain nothing closes, a
        repeated plugin wire, an edge re-declared where either side carries a
        link, a merge over fewer than two distinct sources or over one source
-       twice;
+       twice, a branch of fewer than two arms;
     2. the derivation those chains determine — the consumer edges in chain
        order, the plugin wire, the channel's `named/2` name applied once for
        every terminator, and the checkpoint granularity `Channels` implies
@@ -22,9 +22,7 @@ defmodule Flezha.SDK.Topology do
     3. the topology and class facts over the derived shape.
 
   `test/fixtures/reference_topologies.txt` is the contract both this and the
-  core are measured against. One of its rows names a surface the v1 subset
-  does not carry (`branch`), so `BranchTooFewArms` is absent here by design
-  rather than missing. One more of its class-fact rows this SDK does not
+  core are measured against. One of its class-fact rows this SDK does not
   judge: the checkpoint-hold flag cannot be written without its delay, because
   `outputs_at_checkpoint/2` takes both.
 
@@ -255,6 +253,13 @@ defmodule Flezha.SDK.Topology do
   defp walk_link(acc, chain, {:merge, node_ref, group}, {state, steps, walk}) do
     state = %{state | merges: [{{group, node_ref}, chain.channel} | state.merges]}
     close_on_node(acc, chain, node_ref, true, {state, steps, walk})
+  end
+
+  # The branch sugar's arity closes a chain of its own; its arms are ordinary
+  # chains off the same handle.
+  defp walk_link(_acc, _chain, {:branch, arms}, {state, steps, walk}) do
+    state = if arms < 2, do: issue(state, {:BranchTooFewArms, arms}), else: state
+    {state, steps, %{walk | closed?: true}}
   end
 
   defp close_on_node(acc, chain, node_ref, declares?, {state, steps, walk}) do

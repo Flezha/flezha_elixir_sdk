@@ -484,6 +484,13 @@ defmodule ElixirRunner.Conformance do
     %{acc | handles: Map.put(acc.handles, role, out)}
   end
 
+  # `branch(<x>, <n>)`: the arms wire nothing, since the row states only how many.
+  defp step("branch(" <> _ = step, acc) do
+    [source, arms] = step |> argument() |> String.split(",") |> Enum.map(&String.trim/1)
+    _ = Channels.branch(Map.fetch!(acc.handles, source), List.duplicate(& &1, integer(arms)))
+    acc
+  end
+
   defp step(step, acc) do
     [head | links] = String.split(step, ".")
     dotted(head, links, acc)

@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Channels do
   identity on the plugin wire the handle reaches) and the class-level tier
   declarations (`effectively_once`, the three checkpoint options and the two
   correction options, which take and answer the token itself). Fan-out is
-  handle reuse.
+  handle reuse, or `branch` over a list of arms.
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
   to the chain its handle carries — a transform, a key, a plugin sink, an edge
@@ -44,6 +44,7 @@ defmodule Flezha.SDK.Channels do
           | {:sink, String.t(), (term() -> binary())}
           | {:into, reference()}
           | {:merge, reference(), non_neg_integer()}
+          | {:branch, non_neg_integer()}
 
   # --- build lifecycle (used by Topology.build/2) ---
 
@@ -318,6 +319,22 @@ defmodule Flezha.SDK.Channels do
 
   def named(%Stream{source: {:node, node_ref}, builder: ref} = s, name) when is_binary(name) do
     update(ref, fn acc -> claim_name(acc, name, node_ref) end)
+    s
+  end
+
+  @doc """
+  Fan out: call each arm with this same stream, which builds exactly the
+  topology the arms' calls off one held handle would, and answer the stream.
+
+      placed |> branch([&into(&1, ConfirmFill), &into(&1, RecordOrder)])
+
+  The arity is recorded on a chain of its own, so the check can refuse a
+  branch of fewer than two arms as `BranchTooFewArms`.
+  """
+  @spec branch(Stream.t(), [(Stream.t() -> term())]) :: Stream.t()
+  def branch(%Stream{} = s, arms) when is_list(arms) do
+    _ = link(%{s | chain_id: nil}, {:branch, length(arms)})
+    Enum.each(arms, & &1.(s))
     s
   end
 

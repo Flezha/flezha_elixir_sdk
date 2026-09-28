@@ -40,7 +40,7 @@ defmodule Tradedesk.OrderExecutor do
   @doc """
   Two steps in order, then a fan-out. The placement is where the chain stops
   being a line: confirming the fill and booking the order are two
-  consequences of it, so the placed channel is used twice, once for each.
+  consequences of it, so `branch` gives each of them the placed channel.
 
   A step's children run only once it has committed, so the desk's order of
   events is fixed rather than a race. The two arms run side by side, and each
@@ -53,14 +53,10 @@ defmodule Tradedesk.OrderExecutor do
   """
   @impl true
   def channels(c) do
-    placed =
-      c
-      |> input_with("order", &OrderTicket.decode/1)
-      |> into(Tradedesk.ReserveFunds)
-      |> into(Tradedesk.PlaceOrder)
-
-    # Two arms on the one placed channel.
-    placed |> into(Tradedesk.ConfirmFill)
-    placed |> into(Tradedesk.RecordOrder)
+    c
+    |> input_with("order", &OrderTicket.decode/1)
+    |> into(Tradedesk.ReserveFunds)
+    |> into(Tradedesk.PlaceOrder)
+    |> branch([&into(&1, Tradedesk.ConfirmFill), &into(&1, Tradedesk.RecordOrder)])
   end
 end
