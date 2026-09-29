@@ -267,6 +267,93 @@ defmodule ElixirRunner.BoundedLoop do
     end
   end
 
+  # `failing_turn_loop_bounded`: a session whose turn can fail after `note`
+  # committed. `note` records each message and its undo moves the latest one
+  # to `undone`; `answer` replies `re:<message>` on the sink `answer`, and
+  # fails every attempt on `boom`, on `boom-once` while the release env is
+  # unset (the first runner of a crash drill), and on `boom-until-healed`
+  # until a `heal` turn set its state.
+  defmodule Note do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "note"
+
+    @impl true
+    def init_state(_), do: %{notes: [], undone: []}
+
+    defchange noted(state, message) do
+      %{state | notes: state.notes ++ [message]}
+    end
+
+    defchange undone(state) do
+      case List.pop_at(state.notes, -1) do
+        {nil, _} -> state
+        {message, notes} -> %{state | notes: notes, undone: state.undone ++ [message]}
+      end
+    end
+
+    @impl true
+    def run(input, state, ctx) do
+      state = noted(state, ctx, input)
+      emit(ctx, input)
+      {:ok, state}
+    end
+
+    @impl true
+    def compensate(_outputs, state, ctx), do: {:ok, undone(state, ctx)}
+  end
+
+  defmodule Answer do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "answer"
+
+    alias ElixirRunner.Bounded.Gate
+
+    @impl true
+    def init_state(_), do: %{healed: false}
+
+    defchange healed(state) do
+      %{state | healed: true}
+    end
+
+    @impl true
+    def run(input, state, ctx) do
+      if fails?(input, state) do
+        {:error, "answer refused " <> input}
+      else
+        state = if input == "heal", do: healed(state, ctx), else: state
+        emit(ctx, "re:" <> input)
+        {:ok, state}
+      end
+    end
+
+    defp fails?("boom", _state), do: true
+    defp fails?("boom-once", _state), do: not Gate.released?()
+    defp fails?("boom-until-healed", state), do: not state.healed
+    defp fails?(_input, _state), do: false
+  end
+
+  defmodule FailingTurnLoopBounded do
+    @moduledoc false
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "failing_turn_loop_bounded"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :keep_progress
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def channels(c), do: ElixirRunner.BoundedLoop.failing_turn_graph(c)
+  end
+
+  defmodule FailingTurnAllOrNothingBounded do
+    @moduledoc false
+    @behaviour Flezha.SDK.BoundedOperator
+    def factory_id, do: "failing_turn_all_or_nothing_bounded"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :all_or_nothing
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def channels(c), do: ElixirRunner.BoundedLoop.failing_turn_graph(c)
+  end
+
   defmodule ChatRewindBounded do
     @moduledoc false
     @behaviour Flezha.SDK.BoundedOperator
@@ -371,6 +458,8 @@ defmodule ElixirRunner.BoundedLoop do
       StatelessLoopBounded,
       KeyedLoopBounded,
       ChatRewindBounded,
+      FailingTurnLoopBounded,
+      FailingTurnAllOrNothingBounded,
       ReplyBlockLoopBounded,
       BenchChain1,
       BenchChain4,
@@ -382,4 +471,16 @@ defmodule ElixirRunner.BoundedLoop do
 
   @doc false
   def crash_turn, do: @crash_turn
+
+  @doc false
+  def failing_turn_graph(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("in")
+    |> into(ElixirRunner.BoundedLoop.Note)
+    |> named("noted")
+    |> into(ElixirRunner.BoundedLoop.Answer)
+    |> sink("answer")
+  end
 end

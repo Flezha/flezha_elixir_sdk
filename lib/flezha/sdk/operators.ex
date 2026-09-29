@@ -159,6 +159,7 @@ defmodule Flezha.SDK.Operators do
         journal: Codec.journal_facts(add.task_journal),
         owed_inbox: add.inbox_tail_count || 0,
         resume_cell_count: add.resume_cell_count || 0,
+        dead_letter_turns: add.dead_letter_turns || false,
         counters: s.counters,
         runner: self(),
         secondaries: s.secondaries,

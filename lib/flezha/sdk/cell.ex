@@ -927,8 +927,12 @@ defmodule Flezha.SDK.Cell do
   # A bounded stage's Cell does not park: its exhausted ladder fails the
   # tasklet, and the driver unwinds the run. An unbounded operator's Cell parks to the
   # DLQ, which is the only behaviour that existed before bounded operators.
-  defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, _attempts, _offset) do
-    GenServer.cast(s.operator, {:stage_failed, s.node_ref, format_error(error)})
+  defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, attempts, _offset) do
+    GenServer.cast(
+      s.operator,
+      {:stage_failed, s.node_ref, format_error(error), attempts, s.cell_key || ""}
+    )
+
     s
   end
 

@@ -138,7 +138,8 @@ defmodule Flezha.SDK.Bounded.Driver do
         Instance.new(operator_id, spec,
           journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
-          park_idle_ms: Keyword.get(opts, :park_idle_ms)
+          park_idle_ms: Keyword.get(opts, :park_idle_ms),
+          dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false)
         ),
       spec: spec,
       operator_id: operator_id,
@@ -227,9 +228,14 @@ defmodule Flezha.SDK.Bounded.Driver do
     {:noreply, s}
   end
 
-  # A Cell exhausted its ladder: the tasklet failed, so the run unwinds.
-  def handle_cast({:stage_failed, node_ref, error}, %State{} = s),
-    do: settle(fail(s, node_ref, error))
+  # A Cell exhausted its ladder: the tasklet failed. A turn of a `per_input`
+  # keep-progress loop is dead-lettered and the loop goes on; any other run
+  # unwinds.
+  def handle_cast({:stage_failed, node_ref, error, attempts, cell_key}, %State{} = s) do
+    if fails_turn?(s),
+      do: settle(dead_letter(s, node_ref, error, attempts, cell_key)),
+      else: settle(fail(s, node_ref, error))
+  end
 
   # A message off the bound data stream, through the same entrance a stream
   # operator's frame takes: an undeclared name or a parser refusal parks it,
@@ -857,6 +863,7 @@ defmodule Flezha.SDK.Bounded.Driver do
     case kind do
       :task -> s |> release_firings() |> advance()
       :iter -> next_iteration(s)
+      :dead_letter -> undo_turn(s)
       :comp -> unwind_step(s, &Compensation.commit/1)
     end
   end
@@ -888,9 +895,77 @@ defmodule Flezha.SDK.Bounded.Driver do
   # unwind was already heading for; one that gave up going forward starts it.
   defp give_up(%State{unwind: %{status: {status, _}}} = s, _error), do: complete(s, status, "")
   defp give_up(%State{unwind: %{status: :rewind}} = s, error), do: complete(s, "error", error)
+
+  defp give_up(%State{unwind: %{status: :dead_letter}} = s, error),
+    do: unwind(%{s | unwind: %{s.unwind | status: nil}}, "error", error)
+
   defp give_up(%State{} = s, error), do: unwind(s, "error", error)
 
+  # --- a failed turn ---
+
+  # Whether a tasklet's failure ends only its turn: a message-fed pass of a
+  # `per_input` keep-progress loop, running forward with no stop asked, bound
+  # by a controller that parks the turn.
+  defp fails_turn?(%State{
+         spec: %Spec{knobs: %{loop_mode: :per_input, rollback_mode: :keep_progress}},
+         instance: %Instance{dead_letter_turns: true},
+         unwind: %{status: nil},
+         cancel: nil,
+         origin: nil
+       }),
+       do: true
+
+  defp fails_turn?(%State{}), do: false
+
+  # The pass stops as an unwind stops it and its iteration commits as
+  # dead-lettered, the controller parking its message first; on the ack the
+  # turn is undone. A run that journals nothing keeps no input log, so it
+  # parks the turn itself, without bytes, and undoes it at once.
+  defp dead_letter(%State{} = s, node_ref, error, attempts, cell_key) do
+    tasklet = Spec.tasklet_name(s.spec, node_ref)
+    s = stop_pass(s, :dead_letter)
+
+    if journals?(s) do
+      ref = make_ref()
+
+      command =
+        Commit.iter(s.runner, self(), ref,
+          operator_id: s.operator_id,
+          iter: s.iter,
+          consumed_offset: s.consumed_offset,
+          entry_channel: s.pass_channel,
+          handoff: [],
+          dead_letter: %{tasklet: tasklet, attempts: attempts, error: error, cell_key: cell_key}
+        )
+
+      arm(s, ref, :dead_letter, command)
+    else
+      Inbox.park_pre_dispatch(
+        s.runner,
+        s.operator_id,
+        "_turn",
+        s.pass_channel,
+        "tasklet `#{tasklet}` failed after #{attempts} attempt(s): #{error}",
+        nil,
+        cell_key: "_turn",
+        attempts: attempts
+      )
+
+      undo_turn(s)
+    end
+  end
+
+  # The failed turn's iteration is committed: what it ran is undone as a
+  # rewind undoes an iteration, and the loop takes its next message.
+  defp undo_turn(%State{} = s) do
+    stages = Enum.map(s.completed, &Map.put(&1, :iter, s.iter))
+    rewind(%{s | iter: s.iter + 1}, stages)
+  end
+
   # --- terminal paths ---
+
+  # A later Cell of a pass whose turn already failed has nothing to add.
+  defp fail(%State{unwind: %{status: :dead_letter}} = s, _node_ref, _error), do: s
 
   defp fail(%State{unwind: %{status: st}} = s, node_ref, error) when st != nil do
     Logger.warning(
@@ -920,20 +995,25 @@ defmodule Flezha.SDK.Bounded.Driver do
   defp unwind(%State{} = s, _status, _error), do: s
 
   defp do_unwind(%State{} = s, status, error) do
-    s = %{
-      s
-      | finished: [],
-        awaiting: %{},
-        owed: %{},
-        barrier: nil,
-        unwind: %{s.unwind | status: {status, error}}
-    }
+    s = stop_pass(s, {status, error})
 
     case Compensation.begin(s) do
       :nothing_to_undo -> complete(s, status, error)
       outcome -> unwind_step(s, fn _ -> outcome end)
     end
   end
+
+  # No stage of the pass commits or is waited on any more; the run is now
+  # heading for `status`.
+  defp stop_pass(%State{} = s, status),
+    do: %{
+      s
+      | finished: [],
+        awaiting: %{},
+        owed: %{},
+        barrier: nil,
+        unwind: %{s.unwind | status: status}
+    }
 
   # Each step of the unwind is `Compensation`'s to decide; the driver only
   # carries the terminal it was already heading for.

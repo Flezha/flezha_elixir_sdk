@@ -98,6 +98,9 @@ defmodule Flezha.SDK.Bounded.Instance do
             # journal released, raised by every message that arrives.
             taken: nil,
             park_idle_ms: nil,
+            # The controller parks a failed turn of a `per_input` keep-progress
+            # loop, so the loop goes on past it rather than ending.
+            dead_letter_turns: false,
             stage_cells: %{},
             journal: nil,
             iter: 0,
@@ -118,6 +121,7 @@ defmodule Flezha.SDK.Bounded.Instance do
       inbox: :queue.new(),
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
       park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:park_idle_ms),
+      dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false),
       journal: journal,
       taken: journal && Map.get(journal, :released_offset),
       iter: if(journal, do: journal.iter, else: 0),

@@ -27,7 +27,7 @@ defmodule ElixirRunner.Bounded.Gate do
   on the second.
   """
   def block_until_released do
-    if System.get_env(@release_env) do
+    if released?() do
       :ok
     else
       receive do
@@ -35,6 +35,9 @@ defmodule ElixirRunner.Bounded.Gate do
       end
     end
   end
+
+  @doc "Whether this runner was booted with the release env set."
+  def released?, do: System.get_env(@release_env) != nil
 
   @doc "Park at `point` when this runner was booted to hold there, until the release."
   def hold_at(point) do

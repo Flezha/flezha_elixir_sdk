@@ -175,15 +175,17 @@ defmodule Flezha.SDK.Operator.Inbox do
   `tasklet_id` is the identity slot, which the controller turns into a
   DIRECTORY under the dead-letter root, so it is always a value this side
   chose. `channel` is the row's attribution and may be a name off the wire.
+  A bounded driver parks a failed turn here too, under its `_turn` slot:
+  `opts` then name the `cell_key` and the `attempts` it failed after.
   """
-  def park_pre_dispatch(runner, operator_id, tasklet_id, channel, error, payload) do
+  def park_pre_dispatch(runner, operator_id, tasklet_id, channel, error, payload, opts \\ []) do
     park_id = "#{operator_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
 
     Park.ship(
       runner,
       self(),
-      Park.identity(operator_id, tasklet_id, ""),
-      Park.body(park_id, channel, error, 1, payload)
+      Park.identity(operator_id, tasklet_id, Keyword.get(opts, :cell_key, "")),
+      Park.body(park_id, channel, error, Keyword.get(opts, :attempts, 1), payload)
     )
 
     :ok

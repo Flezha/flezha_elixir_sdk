@@ -55,7 +55,9 @@ defmodule Flezha.SDK.Bounded.Commit do
   chain the iteration ran, which a resumed chained loop re-enters;
   `completes` marks the iteration a tasklet ended the instance in, and
   `result` is what it ends with, so a resume after this commit ends the
-  instance rather than waiting.
+  instance rather than waiting. `dead_letter` (`tasklet`, `attempts`,
+  `error`, `cell_key`) marks an iteration whose turn failed: the controller
+  parks its message before it commits it.
   """
   @spec iter(pid(), pid(), reference(), keyword()) :: tuple()
   def iter(runner, driver, ref, fields) do
@@ -67,7 +69,8 @@ defmodule Flezha.SDK.Bounded.Commit do
         Keyword.fetch!(fields, :handoff),
         Keyword.get(fields, :completes, false),
         Keyword.get(fields, :result, <<>>),
-        Keyword.get(fields, :entry_channel, "")
+        Keyword.get(fields, :entry_channel, ""),
+        Keyword.get(fields, :dead_letter)
       )
 
     barrier(runner, driver, ref, command)

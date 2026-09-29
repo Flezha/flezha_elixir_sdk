@@ -22,8 +22,8 @@ defmodule Flezha.SDK.Test.StubRunner do
   end
 
   # A park the entrance shipped, forwarded as the frame it would become.
-  def handle_cast({:park, _cell_pid, _identity, body}, s) do
-    send(s.test, {:shipped, {:park_payload, body}})
+  def handle_cast({:park, _cell_pid, identity, body}, s) do
+    send(s.test, {:shipped, {:park_payload, Map.put(body, :identity, identity)}})
     {:noreply, s}
   end
 

@@ -1765,4 +1765,207 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     Driver.stop_bounded(driver)
     assert %{status: "cancelled"} = completion(drain())
   end
+
+  # --- a failed turn of a per-input keep-progress loop ---
+
+  defmodule Noted do
+    use Flezha.SDK.Tasklet, name: "noted"
+
+    @impl true
+    def run(input, state, ctx) do
+      emit(ctx, input)
+      {:ok, state}
+    end
+
+    @impl true
+    def compensate(_outputs, state, _ctx) do
+      send(:bounded_driver_test_collector, {:undone, name()})
+      {:ok, state}
+    end
+  end
+
+  defmodule Answer do
+    use Flezha.SDK.Tasklet, name: "answer"
+
+    @impl true
+    def run("boom", _state, _ctx), do: {:error, {:non_retryable, "model unavailable"}}
+
+    def run(input, state, ctx) do
+      send(:bounded_driver_test_collector, {:answered, input})
+      emit(ctx, "re:" <> input)
+      {:ok, state}
+    end
+  end
+
+  # `arm` arms a timer whose firing fails.
+  defmodule FailingTimer do
+    use Flezha.SDK.Tasklet, name: "failing_timer"
+
+    @impl true
+    def run(input, state, ctx) do
+      if input == "arm", do: {:ok, _at} = timer_after(ctx, 10)
+      emit(ctx, input)
+      {:ok, state}
+    end
+
+    @impl true
+    def on_timer(_at, _kind, _state, _ctx), do: {:error, {:non_retryable, "the firing failed"}}
+  end
+
+  defmodule TurnLoop do
+    def factory_id, do: "turn_loop"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :keep_progress
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def channels(c),
+      do: c |> Channels.input("in") |> Channels.into(Noted) |> Channels.into(Answer)
+  end
+
+  defmodule AllOrNothingTurnLoop do
+    def factory_id, do: "all_or_nothing_turn_loop"
+    def loop_mode, do: :per_input
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def channels(c), do: TurnLoop.channels(c)
+  end
+
+  defmodule QuietTurnLoop do
+    def factory_id, do: "quiet_turn_loop"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :keep_progress
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+    def persistence_enabled, do: false
+
+    def channels(c), do: TurnLoop.channels(c)
+  end
+
+  defmodule ChainedTurnLoop do
+    def factory_id, do: "chained_turn_loop"
+    def loop_mode, do: :chained
+    def rollback_mode, do: :keep_progress
+    def persistence_enabled, do: false
+
+    def channels(c), do: TurnLoop.channels(c)
+  end
+
+  defmodule TimerTurnLoop do
+    def factory_id, do: "timer_turn_loop"
+    def loop_mode, do: :per_input
+    def rollback_mode, do: :keep_progress
+    def self_terminating?, do: false
+    def max_duration_ms, do: 600_000
+
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(FailingTimer)
+  end
+
+  defp send_turns(driver, turns) do
+    for {turn, offset} <- Enum.with_index(turns),
+        do: Inbox.input(driver, "in", turn, %{"flz.offset" => Integer.to_string(offset)})
+  end
+
+  defp iter_commits(messages), do: for({:shipped, {:iter_commit, c}} <- messages, do: c)
+
+  test "a failed turn is dead-lettered, undone once, and the next message is the next iteration" do
+    driver = start_loop(TurnLoop, park_idle_ms: 60_000, dead_letter_turns: true)
+    send_turns(driver, ~w(hello boom again))
+
+    assert_receive {:answered, "again"}, 5_000
+
+    assert_receive {:shipped, {:iter_commit, %{iter: 2, consumed_offset: 2, dead_letter: nil}}},
+                   5_000
+
+    Driver.stop_bounded(driver)
+    messages = drain()
+
+    assert [
+             %{iter: 0, consumed_offset: 0, dead_letter: nil},
+             %{iter: 1, consumed_offset: 1, entry_channel: "in", dead_letter: dead_letter}
+           ] = iter_commits(messages)
+
+    assert %{tasklet: "answer", attempts: 1, error: error} = dead_letter
+    assert error =~ "model unavailable"
+    assert [{:undone, "noted"}] = for({:undone, _} = m <- messages, do: m)
+
+    assert [%{task_idx: 0, iter: 1}] =
+             for(%{compensating: true} = c <- commits(messages), do: c)
+
+    assert %{status: "cancelled"} = completion(messages)
+  end
+
+  test "a resume owing a failed turn's undo runs it once and waits for input" do
+    noted = Flezha.SDK.Wire.encode_cell_id("wf-chat", "noted", "")
+    owed = %RunnerCommands.TaskCommittedTask{task_idx: 0, iter: 1, cells_ran: [noted]}
+
+    journal =
+      Codec.journal_facts(%RunnerCommands.TaskJournalState{
+        iter: 2,
+        entry_channel: "in",
+        consumed_offset: 1,
+        released_offset: 1,
+        committed_tasks: [owed],
+        rewind_undo: [owed]
+      })
+
+    driver = start_loop(TurnLoop, park_idle_ms: 60_000, dead_letter_turns: true, journal: journal)
+    assert_receive {:undone, "noted"}, 5_000
+    assert_receive {:shipped, {:task_commit, %{compensating: true, task_idx: 0, iter: 1}}}, 5_000
+
+    Inbox.input(driver, "in", "again", %{"flz.offset" => "2"})
+    assert_receive {:shipped, {:iter_commit, %{iter: 2, consumed_offset: 2}}}, 5_000
+    Driver.stop_bounded(driver)
+    messages = drain()
+    refute Enum.any?(messages, &match?({:undone, _}, &1))
+    assert %{status: "cancelled"} = completion(messages)
+  end
+
+  test "a failure the dead letter does not cover still ends the run" do
+    for {module, turns} <- [
+          {AllOrNothingTurnLoop, ["boom"]},
+          {ChainedTurnLoop, ["boom"]},
+          {TimerTurnLoop, ["arm"]}
+        ] do
+      messages = drive(module, message: hd(turns), dead_letter_turns: true)
+      Process.unregister(:bounded_driver_test_collector)
+      assert %{status: "error"} = completion(messages), inspect(module)
+      assert Enum.all?(iter_commits(messages), &(&1.dead_letter == nil)), inspect(module)
+    end
+
+    # A controller that does not park a turn, and a stage commit it refuses.
+    for opts <- [[], [error: %{code: "commit.not_owner", message: "refused"}]] do
+      messages =
+        drive(TurnLoop, Keyword.merge([message: "boom", dead_letter_turns: opts != []], opts))
+
+      Process.unregister(:bounded_driver_test_collector)
+      assert %{status: "error"} = completion(messages)
+      assert Enum.all?(iter_commits(messages), &(&1.dead_letter == nil))
+    end
+  end
+
+  test "a stop while a turn runs ends the run cancelled" do
+    driver = start_loop(TurnLoop, park_idle_ms: 60_000, dead_letter_turns: true)
+    send_turns(driver, ~w(hello))
+    assert_receive {:shipped, {:iter_commit, %{iter: 0}}}, 5_000
+    Driver.stop_bounded(driver)
+    messages = drain()
+    assert %{status: "cancelled"} = completion(messages)
+    assert Enum.all?(iter_commits(messages), &(&1.dead_letter == nil))
+  end
+
+  test "a loop that journals nothing parks its failed turn without bytes and answers the next" do
+    driver = start_loop(QuietTurnLoop, park_idle_ms: 0, dead_letter_turns: true)
+    send_turns(driver, ~w(boom again))
+
+    assert_receive {:shipped, {:park_payload, park}}, 5_000
+    assert park.identity == Park.identity("wf-chat", "_turn", "_turn")
+    assert %{channel: "in", payload: nil, origin_offset: nil, attempts: 1} = park
+    assert park.error =~ "tasklet `answer` failed after 1 attempt(s): "
+    assert_receive {:undone, "noted"}, 5_000
+    assert_receive {:answered, "again"}, 5_000
+    Driver.stop_bounded(driver)
+    assert %{status: "cancelled"} = completion(drain())
+  end
 end

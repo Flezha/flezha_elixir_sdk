@@ -248,7 +248,8 @@ defmodule Flezha.SDK.Codec do
         handoff,
         completes,
         result,
-        entry_channel
+        entry_channel,
+        dead_letter \\ nil
       ) do
     {:iter_commit,
      %RunnerCommands.IterCommit{
@@ -258,7 +259,8 @@ defmodule Flezha.SDK.Codec do
        handoff: handoff_items(handoff),
        completes: completes,
        result: result,
-       entry_channel: entry_channel
+       entry_channel: entry_channel,
+       dead_letter: dead_letter && struct(RunnerCommands.DeadLetter, dead_letter)
      }}
   end
 
