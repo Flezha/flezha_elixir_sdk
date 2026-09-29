@@ -29,7 +29,7 @@ defmodule Flezha.SDK.RunnerServer.Waiters do
   end
 
   @doc "Answer the caller waiting on `reference_id` and forget it; `:unknown` when none waits."
-  @spec settle(t(), String.t(), term(), String.t()) :: {:ok, t()} | :unknown
+  @spec settle(t(), String.t(), term(), Flezha.SDK.Error.t() | nil) :: {:ok, t()} | :unknown
   def settle(waiters, reference_id, result, error) do
     case Map.pop(waiters, reference_id) do
       {nil, _waiters} ->

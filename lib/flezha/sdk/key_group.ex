@@ -54,17 +54,6 @@ defmodule Flezha.SDK.KeyGroup do
   @spec group_of(binary()) :: non_neg_integer()
   def group_of(key) when is_binary(key), do: band(fnv1a128(key), @key_groups - 1)
 
-  @doc """
-  Why a bounded class that reads one message cannot run partitioned: the
-  sentence the SDK's bind and the controller's preflight both refuse with.
-  """
-  @spec one_message_refusal(String.t(), atom(), pos_integer()) :: String.t()
-  def one_message_refusal(class, loop_mode, partitions) do
-    "PartitionsWithoutPerInputLoop: class #{class} reads one message (loop_mode #{loop_mode}), " <>
-      "so its #{partitions} partitions would each wait for a message that reaches one of " <>
-      "them; declare loop_mode per_input before partitioning"
-  end
-
   @doc "Decode `{partition_index, partition_count, key_group_from, key_group_to}`."
   @spec decode(non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: t()
   def decode(index, count, from, to) do

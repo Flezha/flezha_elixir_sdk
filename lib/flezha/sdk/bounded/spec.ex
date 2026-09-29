@@ -67,7 +67,7 @@ defmodule Flezha.SDK.Bounded.Spec do
   Compile `module` into a bounded spec, or refuse it. A class that declares
   no `channels/1` has no body to run and is refused `NoBoundedBody`.
   """
-  @spec build(module()) :: {:ok, t()} | {:error, {:invalid_bounded, [term()]}}
+  @spec build(module()) :: {:ok, t()} | {:error, Flezha.SDK.Error.t()}
   def build(module) do
     knobs = BoundedOperator.knobs(module)
     base = %__MODULE__{factory_id: module.factory_id(), module: module, knobs: knobs}
@@ -83,9 +83,9 @@ defmodule Flezha.SDK.Bounded.Spec do
   end
 
   defp structured(module, %__MODULE__{} = spec, issues) do
-    case Topology.build(module, :bounded) do
-      {:error, {:invalid_topology, topology_issues}} ->
-        refuse(Enum.map(topology_issues, &{:Topology, &1}) ++ issues)
+    case Topology.judge(module, :bounded) do
+      {:issues, topology_issues} ->
+        refuse(Enum.reverse(topology_issues) ++ issues)
 
       {:ok, topo} ->
         {dag, shape_issues} = shape(spec.factory_id, topo, spec.knobs)
@@ -121,10 +121,10 @@ defmodule Flezha.SDK.Bounded.Spec do
   # terminal batch, which a chain with several leaves does not define; every
   # chain the loop can enter is judged.
   defp check_chained_loop(is, factory_id, dag, %{loop_mode: :chained}) do
-    Enum.reduce(dag.chains, is, fn {_channel, chain}, is ->
+    Enum.reduce(dag.chains, is, fn {channel, chain}, is ->
       case chain.leaves do
         [_one] -> is
-        many -> [{:BranchingChainedLoop, factory_id, length(many)} | is]
+        many -> [{:BranchingChainedLoop, factory_id, channel, length(many)} | is]
       end
     end)
   end
@@ -205,5 +205,5 @@ defmodule Flezha.SDK.Bounded.Spec do
 
   defp mod_name(module), do: inspect(module)
 
-  defp refuse(issues), do: {:error, {:invalid_bounded, Enum.reverse(issues)}}
+  defp refuse(issues), do: {:error, Topology.refusal(Enum.reverse(issues))}
 end

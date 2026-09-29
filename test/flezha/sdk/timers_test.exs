@@ -83,8 +83,10 @@ defmodule Flezha.SDK.TimersTest do
       session = Timers.session(Timers.new(), %{@policy | cap: 1}, 1_000)
       {:ok, 31_000, session} = Timers.register_after(session, 30_000)
 
-      assert {:error, {:timer_cap_exceeded, "counter_probe_tasklet", 1}, session} =
-               Timers.register_after(session, 60_000)
+      assert {:error, %Flezha.SDK.Error{code: "runtime.timer_cap_exceeded", details: details},
+              session} = Timers.register_after(session, 60_000)
+
+      assert details == %{"tasklet" => "counter_probe_tasklet", "max" => 1}
 
       # Re-registering a pending timestamp is not an allocation.
       assert {:ok, 31_000, session} = Timers.register_after(session, 30_000)
@@ -96,8 +98,10 @@ defmodule Flezha.SDK.TimersTest do
       session = Timers.session(Timers.new(), @policy, 1_000)
 
       assert {:error,
-              {:event_time_timer_without_event_time_clock, "counter_probe_tasklet", :wall},
-              session} = Timers.register(session, :event_time, 5_000)
+              %Flezha.SDK.Error{
+                code: "runtime.event_time_timer_without_event_time_clock",
+                details: %{"tasklet" => "counter_probe_tasklet", "clock" => "wall"}
+              }, session} = Timers.register(session, :event_time, 5_000)
 
       assert {pending, [], %{refused: 1}} = Timers.commit(session)
       assert Timers.empty?(pending)
@@ -145,10 +149,11 @@ defmodule Flezha.SDK.TimersTest do
     test "with timers unavailable every timer call is refused and nothing is armed" do
       ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy, timers: :unavailable)
 
-      assert Ctx.timer_after(ctx, 1_000) == {:error, :timers_unavailable}
-      assert Ctx.timer_at_event_time(ctx, 5) == {:error, :timers_unavailable}
-      assert Ctx.cancel_processing_time_timer(ctx, 2_000) == {:error, :timers_unavailable}
-      assert Ctx.cancel_event_time_timer(ctx, 5) == {:error, :timers_unavailable}
+      unavailable = {:error, Flezha.SDK.Error.new("runtime.timers_unavailable")}
+      assert Ctx.timer_after(ctx, 1_000) == unavailable
+      assert Ctx.timer_at_event_time(ctx, 5) == unavailable
+      assert Ctx.cancel_processing_time_timer(ctx, 2_000) == unavailable
+      assert Ctx.cancel_event_time_timer(ctx, 5) == unavailable
       assert {pending, [], _tally} = Ctx.take_timers(ctx)
       assert Timers.empty?(pending)
     end

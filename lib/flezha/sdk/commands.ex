@@ -18,18 +18,15 @@ defmodule Flezha.SDK.Commands do
 
   require Logger
 
-  alias Flezha.SDK.{Call, Codec, Credit, Cell, Hold, Knob, Operator}
+  alias Flezha.SDK.{Call, Codec, Credit, Cell, Error, Hold, Knob, Operator}
   alias Flezha.SDK.Wire
   # A serialise's wait for a mid-dispatch Cell, and the serialise bound of a
   # graceful shutdown: inside a container's grace period.
   @change_seq_key Wire.change_seq_key()
   @whole %{tasklet: nil, cell_key: nil}
   # One refusal, and each surface adds the prefix its siblings carry.
-  @router_silent "cell_busy: the operator did not answer"
-  @marker_silent "cell_busy: the operator did not take the restore"
-
   @typedoc "How a command answers: status, errors, raw_data, the reply frame's metadata."
-  @type respond :: (String.t(), [String.t()], binary(), map() -> any())
+  @type respond :: (String.t(), [Error.t()], binary(), map() -> any())
 
   @doc "Answer `tag`'s `cmd` for the runner in `s` through `respond`."
   @spec dispatch(atom(), map(), respond(), map()) :: :ok
@@ -41,12 +38,13 @@ defmodule Flezha.SDK.Commands do
           land(s, cmd, respond, answer)
 
         {:error, :bad_cell_id} ->
-          respond.("error", ["restore_init_state: malformed cell_id"], response(cmd, 0), %{})
+          error = Error.new("state.bad_cell_path", path: Base.encode16(cmd.cell_id, case: :lower))
+          respond.("error", [error], response(cmd, 0), %{})
 
         # A router that did not answer is not a Cell that is not there: the
         # ack below would tell the Controller its state was covered.
         {:error, :operator_busy} ->
-          respond.("error", ["restore_init_state: " <> @router_silent], response(cmd, 0), %{})
+          respond.("error", [operator_busy(cmd.cell_id)], response(cmd, 0), %{})
 
         # No Cell to rebuild — a tasklet the class dropped, a key its cap
         # refuses: the controller's terminal covers what it shipped, and the
@@ -71,7 +69,7 @@ defmodule Flezha.SDK.Commands do
         {:error, reason} ->
           respond.(
             "error",
-            ["compact_cell: #{describe(reason)}"],
+            [snapshot_refusal(reason)],
             Codec.encode_compact_response(cmd.cell_id, 0, 0),
             %{}
           )
@@ -130,11 +128,11 @@ defmodule Flezha.SDK.Commands do
   read that names one Cell answers its failure.
   """
   @spec state_json(map(), String.t(), map()) ::
-          {:ok, binary(), non_neg_integer() | nil} | {:error, String.t()}
+          {:ok, binary(), non_neg_integer() | nil} | {:error, Error.t()}
   def state_json(s, operator_id, selector) do
     with {:ok, op} <- operator(s, operator_id),
          :ok <- check_selector(selector),
-         {:ok, all} <- nodes(op),
+         {:ok, all} <- nodes(op, operator_id),
          {:ok, nodes} <- select_nodes(all, operator_id, selector.tasklet),
          {:ok, top, seqs} <- collect(op, nodes, selector.cell_key),
          {:ok, json} <- to_json(top) do
@@ -148,14 +146,19 @@ defmodule Flezha.SDK.Commands do
   Single node takes its value, a Static node its declared keys' values; a key
   that names no Tasklet or no declared Cell is logged and ignored.
   """
-  @spec apply_json(pid(), String.t(), binary() | nil) :: :ok | {:error, String.t()}
+  @spec apply_json(pid(), String.t(), binary() | nil) :: :ok | {:error, Error.t()}
   def apply_json(_op, _operator_id, json) when json in [nil, ""], do: :ok
 
   def apply_json(op, operator_id, json) do
     case Jason.decode(json) do
-      {:ok, %{} = top} -> with {:ok, nodes} <- nodes(op), do: apply_top(nodes, operator_id, top)
-      {:ok, _other} -> {:error, "init_values: not a JSON object"}
-      {:error, e} -> {:error, "init_values: #{Exception.message(e)}"}
+      {:ok, %{} = top} ->
+        with {:ok, nodes} <- nodes(op, operator_id), do: apply_top(nodes, operator_id, top)
+
+      {:ok, other} ->
+        {:error, Error.new("state.init_values_not_object", kind: json_kind(other))}
+
+      {:error, e} ->
+        {:error, Error.new("state.init_values_invalid_json", reason: Exception.message(e))}
     end
   end
 
@@ -199,7 +202,7 @@ defmodule Flezha.SDK.Commands do
         {"success", [], Codec.encode_restore_response(cmd.cell_id, terminal, migrated)}
 
       {:error, reason} ->
-        {"error", ["restore_init_state: #{reason}"], response(cmd, 0)}
+        {"error", [Error.new("state.restore_failed", reason: describe(reason))], response(cmd, 0)}
     end
   end
 
@@ -219,7 +222,7 @@ defmodule Flezha.SDK.Commands do
     landed =
       with {:ok, {operator_id, _tasklet, _key}} <- Wire.decode_cell_id(cmd.cell_id),
            {:ok, op} <- operator(s, operator_id) do
-        Call.control(op, {:restore_landed, cmd.cell_id, intent, done}, {:error, @marker_silent})
+        Call.control(op, {:restore_landed, cmd.cell_id, intent, done}, {:error, operator_id})
       else
         # No operator to count it: nothing waits on this frame.
         _unaddressable -> :ok
@@ -229,8 +232,13 @@ defmodule Flezha.SDK.Commands do
       :ok ->
         respond.(status, errors, raw, %{})
 
-      {:error, reason} ->
-        respond.("error", ["restore_init_state: " <> reason], response(cmd, 0), %{})
+      {:error, operator_id} ->
+        respond.(
+          "error",
+          [Error.new("runtime.operator_busy", operator: operator_id)],
+          response(cmd, 0),
+          %{}
+        )
     end
   end
 
@@ -249,28 +257,37 @@ defmodule Flezha.SDK.Commands do
   defp operator(%{operators: operators}, operator_id) do
     case Map.get(operators, operator_id) do
       {pid, _factory_id} -> {:ok, pid}
-      nil -> {:error, "UnboundedOperator instance with id #{operator_id} not found"}
+      nil -> {:error, Error.new("runtime.operator_not_found", operator: operator_id)}
     end
   end
 
-  # The router's nodes, or its refusal in the words the Controller matches as a
-  # prefix. `[]` would be a lie: a walk that read it would report a live
-  # operator as empty.
-  defp nodes(op) do
+  # The router's nodes, or its refusal. `[]` would be a lie: a walk that read
+  # it would report a live operator as empty.
+  defp nodes(op, operator_id) do
     case Operator.cells(op) do
-      {:error, :operator_busy} -> {:error, @router_silent}
-      nodes -> {:ok, nodes}
+      {:error, :operator_busy} ->
+        {:error, Error.new("runtime.operator_busy", operator: operator_id)}
+
+      nodes ->
+        {:ok, nodes}
     end
+  end
+
+  defp operator_busy(cell_id) do
+    operator_id =
+      case Wire.decode_cell_id(cell_id) do
+        {:ok, {operator_id, _tasklet, _key}} -> operator_id
+        _unreadable -> ""
+      end
+
+    Error.new("runtime.operator_busy", operator: operator_id)
   end
 
   defp selector(cmd),
     do: %{tasklet: blank_to_nil(cmd.tasklet), cell_key: blank_to_nil(cmd.cell_key)}
 
   defp check_selector(%{tasklet: nil, cell_key: key}) when key != nil,
-    do:
-      {:error,
-       "cell_key_without_tasklet: a Cell key is unique only within its Tasklet — " <>
-         "name the Tasklet as well"}
+    do: {:error, Error.new("state.cell_key_without_tasklet")}
 
   defp check_selector(_selector), do: :ok
 
@@ -279,7 +296,7 @@ defmodule Flezha.SDK.Commands do
   defp select_nodes(nodes, operator_id, tasklet) do
     case Enum.filter(nodes, fn {name, _mode, _cells} -> name == tasklet end) do
       [] ->
-        {:error, "tasklet_not_found: operator `#{operator_id}` has no Tasklet named `#{tasklet}`"}
+        {:error, Error.new("state.tasklet_not_found", operator: operator_id, tasklet: tasklet)}
 
       some ->
         {:ok, some}
@@ -330,7 +347,8 @@ defmodule Flezha.SDK.Commands do
             {:ok, %{key => state}, [seq]}
 
           {:error, :busy} ->
-            {:error, "cell_busy: Tasklet `#{name}` Cell `#{key}` is mid-dispatch"}
+            seconds = div(Knob.get(:sdk_serialize_wait_ms), 1000)
+            {:error, Error.new("state.cell_busy", cell: "#{name}/#{key}", seconds: seconds)}
 
           {:error, :gone} ->
             {:error, missing(op, name, key)}
@@ -356,20 +374,22 @@ defmodule Flezha.SDK.Commands do
   # Evicted and never-existed serve the same absence; the diagnosis differs,
   # and the Operator's trace is what tells them apart.
   defp missing(op, name, key) do
-    case Operator.lookup(op, name, key) do
-      {:error, :cell_evicted} ->
-        "cell_evicted: Cell `#{key}` of tasklet `#{name}` was idle-evicted; eviction is " <>
-          "destructive, so there is no durable value to serve"
+    code =
+      case Operator.lookup(op, name, key) do
+        {:error, :cell_evicted} -> "state.cell_evicted"
+        _ -> "state.cell_not_found"
+      end
 
-      _ ->
-        "cell_not_found: Tasklet `#{name}` has no live Cell `#{key}`"
-    end
+    Error.new(code, tasklet: name, cell_key: key)
   end
 
   defp to_json(top) do
     case Jason.encode(top) do
-      {:ok, json} -> {:ok, json}
-      {:error, e} -> {:error, "state is not JSON: #{Exception.message(e)}"}
+      {:ok, json} ->
+        {:ok, json}
+
+      {:error, e} ->
+        {:error, Error.new("state.serialize_failed", tasklet: "", reason: Exception.message(e))}
     end
   end
 
@@ -399,7 +419,7 @@ defmodule Flezha.SDK.Commands do
     end)
     |> case do
       [] -> :ok
-      errors -> {:error, Enum.join(errors, " | ")}
+      errors -> {:error, Error.new("state.apply_failed", reason: Enum.join(errors, "; "))}
     end
   end
 
@@ -460,7 +480,7 @@ defmodule Flezha.SDK.Commands do
   end
 
   defp ship(hold, {:ok, {operator_id, {:error, reason}}}) do
-    Logger.warning("[Flezha.SDK] shutdown could not serialize #{operator_id}: #{reason}")
+    Logger.warning("[Flezha.SDK] shutdown could not serialize #{operator_id}: #{reason.message}")
     {[], hold}
   end
 
@@ -498,9 +518,9 @@ defmodule Flezha.SDK.Commands do
       try do
         fun.()
       rescue
-        e -> respond.("error", [Exception.message(e)], <<>>, %{})
+        e -> respond.("error", [crashed(Exception.message(e))], <<>>, %{})
       catch
-        :exit, reason -> respond.("error", ["exit: #{inspect(reason)}"], <<>>, %{})
+        :exit, reason -> respond.("error", [crashed("exit: #{inspect(reason)}")], <<>>, %{})
       end
     end)
 
@@ -509,6 +529,18 @@ defmodule Flezha.SDK.Commands do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp crashed(reason), do: Error.new("runtime.command_crashed", reason: reason)
+
+  defp snapshot_refusal(%Error{} = error), do: error
+  defp snapshot_refusal(reason), do: Error.new("state.snapshot_failed", reason: describe(reason))
+
+  # The JSON type word the reference core names.
+  defp json_kind(value) when is_list(value), do: "array"
+  defp json_kind(value) when is_binary(value), do: "string"
+  defp json_kind(value) when is_number(value), do: "number"
+  defp json_kind(value) when is_boolean(value), do: "bool"
+  defp json_kind(nil), do: "null"
 
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason), do: to_string(reason)

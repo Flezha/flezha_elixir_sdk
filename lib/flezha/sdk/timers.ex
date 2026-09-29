@@ -14,15 +14,16 @@ defmodule Flezha.SDK.Timers do
   telemetry's, from the tally a commit answers.
   """
 
+  alias Flezha.SDK.Error
+
   defstruct event_time: :gb_sets.empty(), processing_time: :gb_sets.empty()
 
   @type kind :: :event_time | :processing_time
   @type op :: %{kind: kind(), scheduled_at: non_neg_integer(), register: boolean()}
   @typedoc "What a Tasklet declares about its timers: the names a refusal reports, the cap, its clock."
   @type policy :: %{tasklet: String.t(), cap: pos_integer(), clock: atom()}
-  @type refusal ::
-          {:event_time_timer_without_event_time_clock, String.t(), atom()}
-          | {:timer_cap_exceeded, String.t(), pos_integer()}
+  @typedoc "`runtime.event_time_timer_without_event_time_clock` or `runtime.timer_cap_exceeded`."
+  @type refusal :: Error.t()
   @type tally :: %{
           registered: non_neg_integer(),
           fired: non_neg_integer(),
@@ -111,10 +112,19 @@ defmodule Flezha.SDK.Timers do
   def register(%Session{policy: policy} = s, kind, at) do
     cond do
       kind == :event_time and policy.clock != :event_time ->
-        refuse(s, {:event_time_timer_without_event_time_clock, policy.tasklet, policy.clock})
+        refuse(
+          s,
+          Error.new("runtime.event_time_timer_without_event_time_clock",
+            tasklet: policy.tasklet,
+            clock: policy.clock
+          )
+        )
 
       not contains?(s.pending, kind, at) and size(s.pending) >= policy.cap ->
-        refuse(s, {:timer_cap_exceeded, policy.tasklet, policy.cap})
+        refuse(
+          s,
+          Error.new("runtime.timer_cap_exceeded", tasklet: policy.tasklet, max: policy.cap)
+        )
 
       true ->
         {_changed?, s} = note(s, register_op(kind, at))

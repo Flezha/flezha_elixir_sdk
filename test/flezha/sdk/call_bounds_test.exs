@@ -82,22 +82,28 @@ defmodule Flezha.SDK.CallBoundsTest do
           answers(refusing_sites(ctx), @budget)
         end)
 
+      silent =
+        {:error,
+         Flezha.SDK.Error.new("runtime.local_run_unanswered",
+           budget_ms: Flezha.SDK.Knob.get(:sdk_control_call_ms)
+         )}
+
       assert answers == %{
                commands_landed:
                  {:answered,
-                  {"error",
-                   ["restore_init_state: cell_busy: the operator did not take the restore"]}},
+                  {"error", [Flezha.SDK.Error.new("runtime.operator_busy", operator: "op-1")]}},
                credit_session: {:answered, nil},
                cell_apply_state: {:answered, {:error, "cell_busy: the Cell did not answer"}},
                cell_evict: {:answered, :busy},
                cell_idle_for: {:answered, false},
                cell_read: {:answered, {:error, :busy}},
                cell_restore: {:answered, {:error, "cell_busy: the Cell did not answer"}},
-               local_feed: {:answered, {:error, "the local run did not answer"}},
-               local_on_sink: {:answered, {:error, "the local run did not answer"}},
+               local_feed: {:answered, silent},
+               local_on_sink: {:answered, silent},
                local_operator: {:answered, nil},
                local_until_idle:
-                 {:answered, {:error, "the local run did not answer within 50ms"}},
+                 {:answered,
+                  {:error, Flezha.SDK.Error.new("runtime.local_run_unanswered", budget_ms: 50)}},
                operator_cells: {:answered, {:error, :operator_busy}},
                operator_lookup: {:answered, {:error, :operator_busy}},
                runner_define: {:answered, {:error, :runner_busy}},

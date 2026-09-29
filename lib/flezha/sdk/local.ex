@@ -36,7 +36,9 @@ defmodule Flezha.SDK.Local do
   alias Flezha.SDK.{
     Call,
     Counters,
+    Error,
     KeyGroup,
+    Knob,
     LocalStream,
     Operator,
     Spawn,
@@ -45,8 +47,6 @@ defmodule Flezha.SDK.Local do
   }
 
   alias Flezha.SDK.Operator.Inbox
-
-  @silent "the local run did not answer"
 
   @notice "[flezha] LOCAL MODE: state is held in memory and NOTHING is durable — " <>
             "no write-ahead log, no snapshots, no dead-letter queue. Everything this run " <>
@@ -90,7 +90,7 @@ defmodule Flezha.SDK.Local do
   anything, a declaration that asks for something only a controller can answer.
   `:operator_id` names the run (default `"<factory_id>-local"`).
   """
-  @spec start(module(), keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start(module(), keyword()) :: {:ok, pid()} | {:error, Error.t()}
   def start(module, opts \\ []) do
     with :ok <- refuse_controller_only(module),
          {:ok, topology} <- Topology.build(module),
@@ -103,29 +103,34 @@ defmodule Flezha.SDK.Local do
   Deliver every value released on the sink `channel` to `fun`, in release order.
   Refuses a name the declaration does not carry as a sink.
   """
-  @spec on_sink(pid(), String.t(), (Output.t() -> any())) :: :ok | {:error, String.t()}
+  @spec on_sink(pid(), String.t(), (Output.t() -> any())) :: :ok | {:error, Error.t()}
   def on_sink(run, channel, fun) when is_function(fun, 1),
-    do: Call.control(run, {:on_sink, channel, fun}, {:error, @silent})
+    do: Call.control(run, {:on_sink, channel, fun}, {:error, silent()})
 
   @doc """
   Feed one value to a declared entry channel — the bytes a controller would
   forward, decoded by that channel's own parser and admitted as deployed.
   Refuses a name the declaration does not carry as an entry.
   """
-  @spec feed(pid(), String.t(), term()) :: :ok | {:error, String.t()}
+  @spec feed(pid(), String.t(), term()) :: :ok | {:error, Error.t()}
   def feed(run, channel, payload),
-    do: Call.control(run, {:feed, channel, payload}, {:error, @silent})
+    do: Call.control(run, {:feed, channel, payload}, {:error, silent()})
 
   @doc """
   Block until every Cell has drained and nothing is in flight, or `budget_ms`
   elapses — which is reported rather than passed off as done.
   """
-  @spec run_until_idle(pid(), non_neg_integer()) :: :ok | {:error, String.t()}
+  @spec run_until_idle(pid(), non_neg_integer()) :: :ok | {:error, Error.t()}
   def run_until_idle(run, budget_ms) do
     case settle(run, System.monotonic_time(:millisecond) + budget_ms, {0, :unread}) do
-      :ok -> :ok
-      {:working, nil} -> {:error, "the local run did not answer within #{budget_ms}ms"}
-      {:working, id} -> {:error, "operator `#{id}` was still working after #{budget_ms}ms"}
+      :ok ->
+        :ok
+
+      {:working, nil} ->
+        {:error, Error.new("runtime.local_run_unanswered", budget_ms: budget_ms)}
+
+      {:working, id} ->
+        {:error, Error.new("runtime.local_run_busy", operator: id, budget_ms: budget_ms)}
     end
   end
 
@@ -245,7 +250,7 @@ defmodule Flezha.SDK.Local do
   # A tasklet's spawn request. Local mode has no control plane, so it is
   # answered as a runner whose session is down answers it.
   def handle_cast({:spawn, caller, spawn, _payload, _if_running}, s) do
-    Spawn.answer(caller, spawn, :unavailable, "")
+    Spawn.answer(caller, spawn, :unavailable, nil)
     {:noreply, s}
   end
 
@@ -319,8 +324,13 @@ defmodule Flezha.SDK.Local do
 
   defp refuse_topology_facts(%Topology{}), do: :ok
 
-  defp needs_controller(class, capability, why),
-    do: {:error, "class `#{class}` declares #{capability}, which requires a controller: #{why}"}
+  defp needs_controller(class, capability, why) do
+    {:error,
+     Error.new("runtime.local_needs_controller", factory: class, capability: capability, why: why)}
+  end
+
+  defp silent,
+    do: Error.new("runtime.local_run_unanswered", budget_ms: Knob.get(:sdk_control_call_ms))
 
   # The declared channel of that kind; the refusal names the channel and the
   # operator, because a name nothing matches is otherwise a value that vanishes.
@@ -331,8 +341,12 @@ defmodule Flezha.SDK.Local do
       do: :ok,
       else:
         {:error,
-         "operator `#{s.id}` has no #{kind} channel `#{channel}`; " <>
-           "it declares #{inspect(names)}"}
+         Error.new("runtime.channel_undeclared",
+           operator: s.id,
+           channel: channel,
+           kind: kind,
+           channels: names
+         )}
   end
 
   defp channel_names(%Topology{entries: entries}, :entry), do: Map.keys(entries)

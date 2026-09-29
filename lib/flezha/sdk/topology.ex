@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Topology do
   @moduledoc """
   Judges the record `Flezha.SDK.Channels` wrote and compiles it into a routing
-  topology, accumulating every refusal into one `{:error, {:invalid_topology,
-  issues}}` (never a raise). An `UndefinedFunctionError` inside the declaration
+  topology, accumulating every refusal into one `{:error, %Flezha.SDK.Error{}}`
+  (never a raise): the first issue's code, and every issue in `details.issues`. An `UndefinedFunctionError` inside the declaration
   body — a deferred builder surface — is caught and reported as a registration
   error naming the module.
 
@@ -33,7 +33,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Graph, Knob, Tasklet, UnboundedOperator, BoundedOperator}
+  alias Flezha.SDK.{Channels, Error, Graph, Knob, Tasklet, UnboundedOperator, BoundedOperator}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -73,9 +73,17 @@ defmodule Flezha.SDK.Topology do
   `kind` (`:unbounded` or `:bounded`, the class's own) decides which class facts
   apply.
   """
-  @spec build(module(), :unbounded | :bounded) ::
-          {:ok, t()} | {:error, {:invalid_topology, [term()]}}
+  @spec build(module(), :unbounded | :bounded) :: {:ok, t()} | {:error, Error.t()}
   def build(module, kind \\ :unbounded) do
+    with {:issues, issues} <- judge(module, kind), do: {:error, refusal(issues)}
+  end
+
+  @doc """
+  `build/2` before its refusal is rendered: the topology, or the issues found,
+  which a bounded class's own shape issues join.
+  """
+  @spec judge(module(), :unbounded | :bounded) :: {:ok, t()} | {:issues, [tuple()]}
+  def judge(module, kind) do
     c = Channels.new()
 
     case declare_on(module, c) do
@@ -84,8 +92,77 @@ defmodule Flezha.SDK.Topology do
 
       {:deferred, message} ->
         _ = Channels.take(c)
-        {:error, {:invalid_topology, [{:DeferredBuilderSurface, module, message}]}}
+        {:issues, [{:DeferredBuilderSurface, inspect(module), message}]}
     end
+  end
+
+  # The detail keys of each issue's positional fields, in order; the issue's
+  # code is `topology.` and its name in snake case.
+  @issue_details %{
+    BranchTooFewArms: [:arms],
+    BranchingChainedLoop: [:factory_id, :channel, :leaves],
+    CellsForMissing: [:name],
+    ChannelNameTooLong: [:channel, :len, :max],
+    ChannelNamedTwice: [:channel, :named, :sink],
+    CheckpointAckWithoutTier: [:factory_id],
+    CheckpointEveryZero: [:factory_id],
+    CheckpointMaxDelayZero: [:factory_id],
+    CheckpointOnBounded: [:factory_id],
+    CorrectionWindowOnBounded: [:factory_id],
+    CorrectionWindowZero: [:factory_id],
+    CorrectionWithoutEventTime: [:tasklet, :clock_type],
+    CorrectionWithoutTier: [:factory_id],
+    Cycle: [:tasklet],
+    DanglingTransformChain: [:channel],
+    DeferredBuilderSurface: [:module, :reason],
+    DroppingPolicyUnderEffectivelyOnce: [:channel, :policy],
+    DuplicateChannel: [:channel],
+    DuplicateKeyBy: [:channel],
+    DuplicateMergeSource: [:channel],
+    DuplicatePersistentTasklet: [:tasklet],
+    DuplicatePluginSink: [:channel, :plugin],
+    DuplicateSinkName: [:channel],
+    EdgeAlreadyWired: [:channel, :tasklet],
+    EffectivelyOnceOnBounded: [:factory_id],
+    ExternalStopOnly: [:factory_id],
+    InvalidMode: [:factory_id, :knob, :value],
+    KeyByOnUnkeyableTarget: [:tasklet, :channel],
+    KeyedChannelWithoutPluginWire: [:channel],
+    KeyedOnEntry: [:channel],
+    MailboxCapacityTooLarge: [:tasklet, :value],
+    MailboxCapacityZero: [:tasklet, :value],
+    MergeTooFewSources: [:tasklet, :sources],
+    NamedOnEntry: [:channel],
+    NoBoundedBody: [:factory_id],
+    NoEntryChannel: [:factory_id],
+    NodeIdentityCollision: [:name],
+    RetiredCallback: [:tasklet, :callback, :instead],
+    RetryMaxZero: [:channel],
+    SleepWithoutPersistence: [:factory_id],
+    SyncDurabilityOnUnbounded: [:factory_id],
+    TransformAfterKeyBy: [:channel],
+    TransformAfterTerminal: [:channel],
+    TwoClocks: [:tasklet],
+    UnkeyedChannelUnderEffectivelyOnce: [:channel],
+    UnkeyedEdgeIntoDynamicTasklet: [:tasklet, :channel],
+    UnreachableTasklet: [:tasklet],
+    UnservableClock: [:tasklet, :clock_type]
+  }
+
+  @doc """
+  `issues` as one error, as the reference core renders a verdict: the first
+  issue's code and details, and every issue in `details.issues`.
+  """
+  @spec refusal([tuple(), ...]) :: Error.t()
+  def refusal(issues) do
+    [first | _] = listed = Enum.map(issues, &issue_error/1)
+    %{first | details: Error.plain_details(Map.put(first.details, "issues", listed))}
+  end
+
+  defp issue_error(issue) do
+    [tag | fields] = Tuple.to_list(issue)
+    keys = Map.fetch!(@issue_details, tag)
+    Error.new("topology." <> Macro.underscore(Atom.to_string(tag)), Enum.zip(keys, fields))
   end
 
   defp declare_on(module, c) do
@@ -130,7 +207,7 @@ defmodule Flezha.SDK.Topology do
          correction: acc.tier.correction
        }}
     else
-      {:error, {:invalid_topology, issues}}
+      {:issues, issues}
     end
   end
 
@@ -396,9 +473,12 @@ defmodule Flezha.SDK.Topology do
     end)
   end
 
+  # Each tasklet's inbound edges, each naming the channel it leaves.
   defp incoming(channels) do
     for channel <- channels, edge <- channel.consumers, reduce: %{} do
-      m -> Map.update(m, edge.to, [edge], &[edge | &1])
+      m ->
+        edge = Map.put(edge, :channel, channel.name)
+        Map.update(m, edge.to, [edge], &[edge | &1])
     end
   end
 
@@ -456,7 +536,7 @@ defmodule Flezha.SDK.Topology do
   defp over_long_names(names) do
     for name <- Enum.uniq(names),
         byte_size(name) > @max_channel_name_bytes,
-        do: {:ChannelNameTooLong, name}
+        do: {:ChannelNameTooLong, name, byte_size(name), @max_channel_name_bytes}
   end
 
   defp duplicates(names, issue) when is_function(issue, 1) do
@@ -493,17 +573,19 @@ defmodule Flezha.SDK.Topology do
     do: [{:UnreachableTasklet, node.name || mod_name(node.module)} | is]
 
   defp check_static_keying(is, module, :static, in_edges) do
-    if Enum.any?(in_edges, &(&1.key_by != nil)),
-      do: [{:KeyByOnUnkeyableTarget, mod_name(module)} | is],
-      else: is
+    case Enum.find(in_edges, &(&1.key_by != nil)) do
+      nil -> is
+      edge -> [{:KeyByOnUnkeyableTarget, mod_name(module), edge.channel} | is]
+    end
   end
 
   defp check_static_keying(is, _module, _mode, _in), do: is
 
   defp check_dynamic_keying(is, module, :dynamic, in_edges) do
-    if Enum.any?(in_edges, &(&1.key_by == nil)),
-      do: [{:UnkeyedEdgeIntoDynamicTasklet, mod_name(module)} | is],
-      else: is
+    case Enum.find(in_edges, &(&1.key_by == nil)) do
+      nil -> is
+      edge -> [{:UnkeyedEdgeIntoDynamicTasklet, mod_name(module), edge.channel} | is]
+    end
   end
 
   defp check_dynamic_keying(is, _module, _mode, _in), do: is
@@ -518,7 +600,7 @@ defmodule Flezha.SDK.Topology do
     if Tasklet.exports?(module, :mailbox_capacity, 0) do
       case Tasklet.validate_capacity(module.mailbox_capacity(), module) do
         :ok -> is
-        {found, _} -> [{found, mod_name(module)} | is]
+        {found, _} -> [{found, mod_name(module), module.mailbox_capacity()} | is]
       end
     else
       is
@@ -535,7 +617,7 @@ defmodule Flezha.SDK.Topology do
         [{:TwoClocks, mod_name(module)} | is]
 
       Tasklet.clock(module) == :logical and not Tasklet.changeful?(module) ->
-        [{:UnservableClock, mod_name(module)} | is]
+        [{:UnservableClock, mod_name(module), "logical"} | is]
 
       true ->
         is

@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Test.StubRunner do
   alias Flezha.SDK.Spawn
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, Map.new(opts))
-  def init(opts), do: {:ok, Map.put_new(opts, :error, "")}
+  def init(opts), do: {:ok, Map.put_new(opts, :error, nil)}
 
   def handle_cast({:barrier, driver, ref, command}, s) do
     send(s.test, {:shipped, command})
@@ -30,7 +30,7 @@ defmodule Flezha.SDK.Test.StubRunner do
   # A spawn request, answered as a controller that started the instance would.
   def handle_cast({:spawn, caller, spawn, payload, if_running}, s) do
     send(s.test, {:spawn_requested, payload, if_running})
-    Spawn.answer(caller, %{spawn | claimed?: true}, {"spawned", spawn.instance_id}, "")
+    Spawn.answer(caller, %{spawn | claimed?: true}, {"spawned", spawn.instance_id}, nil)
     {:noreply, s}
   end
 

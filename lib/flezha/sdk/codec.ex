@@ -5,6 +5,7 @@ defmodule Flezha.SDK.Codec do
   `Flezha.SDK.Proto` generates.
   """
 
+  alias Flezha.SDK.Error
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Topology
   alias Flezha.SDK.Bounded.Spec
@@ -29,12 +30,12 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc "Encode a `CommandResponse` reply (protobuf bytes for the control frame)."
-  @spec encode_response(String.t(), String.t(), [String.t()], binary()) :: binary()
+  @spec encode_response(String.t(), String.t(), [Error.t()], binary()) :: binary()
   def encode_response(reference_id, status, errors \\ [], raw_data \\ <<>>) do
     response = %RunnerCommands.CommandResponse{
       reference_id: reference_id,
       status: status,
-      errors: errors,
+      errors: Enum.map(errors, &wire_error/1),
       raw_data: raw_data
     }
 
@@ -347,5 +348,16 @@ defmodule Flezha.SDK.Codec do
   defp encode(message) do
     {:ok, iodata, _size} = Protox.encode(message)
     IO.iodata_to_binary(iodata)
+  end
+
+  # An error as the wire's `Error` message.
+  defp wire_error(%Error{} = error) do
+    %RunnerCommands.Error{
+      code: error.code,
+      class: Atom.to_string(error.class),
+      message: error.message,
+      details_json: Error.details_json(error),
+      hint: error.hint || ""
+    }
   end
 end

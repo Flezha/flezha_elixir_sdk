@@ -18,6 +18,7 @@ defmodule Flezha.SDK.Admin do
   same ones every other SDK sends.
   """
 
+  alias Flezha.SDK.Error
   alias Flezha.SDK.RunnerServer
 
   @typedoc "A runner handle, or the server behind one."
@@ -88,11 +89,14 @@ defmodule Flezha.SDK.Admin do
   list kept here. `args` are the call's arguments other than the namespace,
   which the controller fills from the connection.
   """
-  @spec call(runner(), String.t(), [term()]) :: {:ok, term()} | {:error, term()}
+  @spec call(runner(), String.t(), [term()]) :: {:ok, term()} | {:error, Error.t()}
   def call(runner, verb, args) when is_binary(verb) and is_list(args) do
     with {:ok, server} <- server(runner),
          {:ok, json} <- RunnerServer.admin_call(server, verb, Jason.encode!(args)) do
-      Jason.decode(json)
+      case Jason.decode(json) do
+        {:ok, answer} -> {:ok, answer}
+        {:error, _not_json} -> {:error, Error.new("admin.unreadable_answer", verb: verb)}
+      end
     end
   end
 
@@ -104,7 +108,7 @@ defmodule Flezha.SDK.Admin do
   defp started(%{"id" => id, "outcome" => "already_running"}),
     do: {:ok, %{id: id, outcome: :already_running}}
 
-  defp started(other), do: {:error, "controller answered an unreadable start: #{inspect(other)}"}
+  defp started(_other), do: {:error, Error.new("admin.unreadable_answer", verb: "Operator.start")}
 
   defp put_given(fields, _key, nil), do: fields
   defp put_given(fields, key, value), do: Map.put(fields, key, value)

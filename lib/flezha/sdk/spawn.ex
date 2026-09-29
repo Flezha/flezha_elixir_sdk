@@ -17,6 +17,7 @@ defmodule Flezha.SDK.Spawn do
 
   require Logger
 
+  alias Flezha.SDK.Error
   alias Flezha.SDK.Knob
 
   @enforce_keys [:reference_id, :instance_id, :factory_id]
@@ -51,15 +52,15 @@ defmodule Flezha.SDK.Spawn do
   """
   @type option :: {:id, String.t()} | {:if_running, if_running()}
 
+  @typedoc """
+  What a handle resolves to: the instance reached, or the refusal, carrying
+  the controller's own code (`operator.already_running`,
+  `operator.factory_unknown`, `operator.factory_not_bounded`, ...) or one the
+  runner decides itself: `spawn.timeout`, `spawn.unavailable`.
+  """
   @type result ::
           {:ok, %{id: String.t(), outcome: :spawned | :delivered | :skipped_on_replay}}
-          | {:error,
-             {:already_running, String.t()}
-             | {:factory_unknown, String.t()}
-             | {:factory_not_bounded, String.t()}
-             | {:refused, String.t()}
-             | :timeout
-             | :unavailable}
+          | {:error, Error.t()}
 
   @doc false
   @spec request(pid() | nil, boolean(), String.t(), binary(), [option()], String.t()) :: t()
@@ -79,7 +80,7 @@ defmodule Flezha.SDK.Spawn do
         %{handle | result: {:ok, %{id: instance_id, outcome: :skipped_on_replay}}}
 
       runner == nil ->
-        %{handle | result: {:error, :unavailable}}
+        %{handle | result: {:error, refused(handle, "spawn.unavailable")}}
 
       true ->
         deadline = System.monotonic_time(:millisecond) + Knob.get(:sdk_spawn_reply_ms)
@@ -118,7 +119,7 @@ defmodule Flezha.SDK.Spawn do
 
   @doc """
   Wait for the answer, up to `timeout` milliseconds and never past the
-  request's deadline; `{:error, :timeout}` when nothing arrived. The answer is
+  request's deadline; `spawn.timeout` when nothing arrived. The answer is
   taken from the caller's mailbox, so a second read waits out what is left of
   the deadline.
   """
@@ -128,7 +129,7 @@ defmodule Flezha.SDK.Spawn do
   def await(%__MODULE__{result: nil} = handle, timeout)
       when is_integer(timeout) and timeout >= 0 do
     left = max(handle.deadline - System.monotonic_time(:millisecond), 0)
-    take(handle, min(timeout, left), {:error, :timeout})
+    take(handle, min(timeout, left), {:error, refused(handle, "spawn.timeout")})
   end
 
   def await(%__MODULE__{result: result}, _timeout), do: result
@@ -143,16 +144,16 @@ defmodule Flezha.SDK.Spawn do
   # disagree: the runner server's settle, its refusal with no control plane and
   # local mode all answer through here. A controller's reply is its outcome word
   # and the instance id the request resolved to.
-  @spec answer(pid(), t(), {String.t(), String.t()} | :timeout | :unavailable, String.t()) ::
+  @spec answer(pid(), t(), {String.t(), String.t()} | :timeout | :unavailable, Error.t() | nil) ::
           :ok
   def answer(caller, %__MODULE__{} = spawn, reply, error) do
     send(caller, {:spawn_reply, spawn.reference_id, reply, error})
 
     with false <- spawn.claimed?,
-         {:error, reason} <- interpret(spawn, reply, error) do
+         {:error, refusal} <- interpret(spawn, reply, error) do
       Logger.warning(
         "[Flezha.SDK] spawn_bounded(factory `#{spawn.factory_id}`, " <>
-          "id `#{spawn.instance_id}`) failed: " <> inspect(reason)
+          "id `#{spawn.instance_id}`) failed: #{refusal.message} (#{refusal.code})"
       )
     end
 
@@ -171,26 +172,24 @@ defmodule Flezha.SDK.Spawn do
     end
   end
 
-  # As the reference maps a reply: an error is a refusal whatever the outcome
-  # says, a success carries the id the controller resolved, `already_running`,
-  # `factory_unknown` and `factory_not_bounded` name the id they are about,
-  # and a word this SDK does not know is a refusal naming it.
-  defp interpret(_spawn, reply, _error) when reply in [:timeout, :unavailable],
-    do: {:error, reply}
+  # As the reference maps a reply: the controller's error is the refusal
+  # whatever the outcome says, a success carries the id the controller
+  # resolved, and a word this SDK does not know is an unreadable reply.
+  defp interpret(spawn, :timeout, _error), do: {:error, refused(spawn, "spawn.timeout")}
+  defp interpret(spawn, :unavailable, _error), do: {:error, refused(spawn, "spawn.unavailable")}
+  defp interpret(_spawn, _reply, %Error{} = error), do: {:error, error}
+  defp interpret(_spawn, {"spawned", id}, nil), do: {:ok, %{id: id, outcome: :spawned}}
+  defp interpret(_spawn, {"delivered", id}, nil), do: {:ok, %{id: id, outcome: :delivered}}
 
-  defp interpret(_spawn, _reply, error) when error != "", do: {:error, {:refused, error}}
-  defp interpret(_spawn, {"spawned", id}, _error), do: {:ok, %{id: id, outcome: :spawned}}
-  defp interpret(_spawn, {"delivered", id}, _error), do: {:ok, %{id: id, outcome: :delivered}}
+  defp interpret(_spawn, {other, _id}, nil),
+    do: {:error, Error.new("runtime.unreadable_reply", reply: "spawn outcome '#{other}'")}
 
-  defp interpret(spawn, {"already_running", _id}, _error),
-    do: {:error, {:already_running, spawn.instance_id}}
-
-  defp interpret(spawn, {"factory_unknown", _id}, _error),
-    do: {:error, {:factory_unknown, spawn.factory_id}}
-
-  defp interpret(spawn, {"factory_not_bounded", _id}, _error),
-    do: {:error, {:factory_not_bounded, spawn.factory_id}}
-
-  defp interpret(_spawn, {other, _id}, _error),
-    do: {:error, {:refused, "unknown outcome `#{other}`"}}
+  # The two refusals the runner decides itself, naming the request.
+  defp refused(spawn, code) do
+    Error.new(code,
+      factory: spawn.factory_id,
+      instance: spawn.instance_id,
+      seconds: div(Knob.get(:sdk_spawn_reply_ms), 1000)
+    )
+  end
 end

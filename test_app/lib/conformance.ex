@@ -42,7 +42,7 @@ defmodule ElixirRunner.Conformance.StaticTask do
   # The role is "the static declaration missing its other half". In this SDK
   # `cells_for/1` defaults to the whole keyset, so keys without a router are
   # complete and a router without keys is the incomplete half — the mirror of
-  # the reference's, and the shape `CellsForMissing` names here.
+  # the reference's, and the shape `topology.cells_for_missing` names here.
   @impl true
   def run(_input, state, _ctx), do: {:ok, state}
   @impl true
@@ -250,15 +250,15 @@ defmodule ElixirRunner.Conformance do
   defp registered(module) do
     case "conformance" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(module) do
       %Flezha.SDK{classes: [{^module, class}]} -> {:ok, topology(class)}
-      {:error, {_invalid, issues}} when is_list(issues) -> {:error, issues}
+      {:error, %Flezha.SDK.Error{} = refusal} -> {:error, refusal}
     end
   end
 
   defp topology(%Spec{topology: topology}), do: topology
   defp topology(topology), do: topology
 
-  defp rejection(topology, issues),
-    do: "topology rejected [#{Enum.join(names(issues), ", ")}] declaring #{topology}"
+  defp rejection(topology, refusal),
+    do: "topology rejected [#{Enum.join(names(refusal), ", ")}] declaring #{topology}"
 
   defp die(message) do
     IO.puts(:stderr, "[elixir_runner] #{message}")
@@ -301,8 +301,8 @@ defmodule ElixirRunner.Conformance do
           "derived" => derived(topology, entry_order(module))
         }
 
-      {:error, issues} ->
-        %{"topology" => row.topology, "outcome" => "refused", "names" => names(issues)}
+      {:error, refusal} ->
+        %{"topology" => row.topology, "outcome" => "refused", "names" => names(refusal)}
     end
   end
 
@@ -346,7 +346,7 @@ defmodule ElixirRunner.Conformance do
     %{topology?: body != step}
   end
 
-  defp refusal_of(%{topology?: true}), do: "ShortFormWithTopology"
+  defp refusal_of(%{topology?: true}), do: "topology.short_form_with_topology"
 
   defp judge_shorthand(row, [_one]) do
     %{
@@ -374,8 +374,7 @@ defmodule ElixirRunner.Conformance do
 
     case handle do
       %Flezha.SDK{} -> :ok
-      {:error, {:duplicate_factory_id, _id}} -> {:error, "DuplicateFactoryId"}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, %Flezha.SDK.Error{code: code}} -> {:error, code}
     end
   end
 
@@ -395,13 +394,11 @@ defmodule ElixirRunner.Conformance do
     end
   end
 
-  # The refusal names, read off the verdict as data: a refusal is a tagged
-  # tuple whose tag IS the reference's name. A bounded operator carries a refusal its
-  # topology raised as `{:Topology, issue}`, which names the issue.
-  defp names(issues), do: Enum.map(issues, &name/1)
+  # The refusal codes, read off the verdict as data: every issue it lists.
+  defp names(%Flezha.SDK.Error{details: %{"issues" => issues}}),
+    do: Enum.map(issues, & &1["code"])
 
-  defp name({:Topology, issue}), do: name(issue)
-  defp name(issue), do: issue |> elem(0) |> Atom.to_string()
+  defp names(%Flezha.SDK.Error{code: code}), do: [code]
 
   # --- the derived declaration ---
 

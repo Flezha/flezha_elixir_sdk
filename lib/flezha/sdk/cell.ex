@@ -44,7 +44,7 @@ defmodule Flezha.SDK.Cell do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Counters, Ctx, Hold, Knob, Park, Prefix, Tasklet, Timers}
+  alias Flezha.SDK.{Call, Counters, Ctx, Error, Hold, Knob, Park, Prefix, Tasklet, Timers}
   alias Flezha.SDK.Cell.{Clock, Records, Room, State, Tier}
   alias Flezha.SDK.Operator.Inbox
 
@@ -1012,9 +1012,7 @@ defmodule Flezha.SDK.Cell do
 
   defp format_error(reason) when is_binary(reason), do: reason
 
-  # The ctx's timer refusal in a `compensate` hook, under the name every SDK gives it.
-  defp format_error(:timers_unavailable),
-    do: "TimersUnavailable: a compensate hook cannot register or cancel a timer"
+  defp format_error(%Error{code: code, message: message}), do: "#{code}: #{message}"
 
   defp format_error(reason), do: inspect(reason)
 end

@@ -53,7 +53,8 @@ defmodule Flezha.SDK.LocalTest do
     @impl true
     def run(instance_id, state, ctx) do
       handle = spawn_bounded(ctx, "worker", "payload", id: instance_id)
-      emit(ctx, inspect(Spawn.await(handle, 5_000)))
+      {:error, refusal} = Spawn.await(handle, 5_000)
+      emit(ctx, refusal.code)
       {:ok, state}
     end
   end
@@ -388,18 +389,26 @@ defmodule Flezha.SDK.LocalTest do
   test "an unknown channel is refused, naming the channel and the operator" do
     run = start_run(WordCount)
 
-    assert {:error, entry} = Local.feed(run, "lynes", "x")
+    assert {:error, %{code: "runtime.channel_undeclared", message: entry}} =
+             Local.feed(run, "lynes", "x")
+
     assert entry =~ "lynes" and entry =~ "word_count-local" and entry =~ "lines"
 
-    assert {:error, sink} = Local.on_sink(run, "totals", fn _output -> :ok end)
+    assert {:error, %{code: "runtime.channel_undeclared", message: sink}} =
+             Local.on_sink(run, "totals", fn _output -> :ok end)
+
     assert sink =~ "totals" and sink =~ "word_count-local" and sink =~ "counts"
   end
 
   test "a controller-only declaration is refused at startup, naming the capability" do
-    assert {:error, tier} = Local.start(TieredOp)
+    assert {:error, %{code: "runtime.local_needs_controller", message: tier}} =
+             Local.start(TieredOp)
+
     assert tier =~ "effectively_once" and tier =~ "requires a controller"
 
-    assert {:error, bounded} = Local.start(Job)
+    assert {:error, %{code: "runtime.local_needs_controller", message: bounded}} =
+             Local.start(Job)
+
     assert bounded =~ "a bounded operator" and bounded =~ "requires a controller"
   end
 
@@ -464,7 +473,10 @@ defmodule Flezha.SDK.LocalTest do
 
     :ok = Local.feed(run, "in", "x")
     assert_receive {:held, cell}
-    assert {:error, message} = Local.run_until_idle(run, 30)
+
+    assert {:error, %{code: "runtime.local_run_busy", message: message}} =
+             Local.run_until_idle(run, 30)
+
     assert message =~ "local_held-local" and message =~ "still working"
 
     send(cell, :release)
@@ -500,6 +512,6 @@ defmodule Flezha.SDK.LocalTest do
 
     :ok = Local.feed(run, "in", "w-local")
     assert :ok = Local.run_until_idle(run, 5_000)
-    assert payloads() == [inspect({:error, :unavailable})]
+    assert payloads() == ["spawn.unavailable"]
   end
 end

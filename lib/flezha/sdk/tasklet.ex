@@ -55,7 +55,7 @@ defmodule Flezha.SDK.Tasklet do
   the input), the logical clock (the Cell's durable change seq) when
   `logical_clock/0` answers `true`, the epoch millisecond at dispatch entry
   otherwise. A logical clock on a changeless tasklet is refused at
-  registration as `UnservableClock`, and both clocks at once as `TwoClocks`,
+  registration as `topology.unservable_clock`, and both clocks at once as `topology.two_clocks`,
   which the `use` form refuses at compile time instead. Timers:
   `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
@@ -439,7 +439,7 @@ defmodule Flezha.SDK.Tasklet do
     cond do
       run? and topology? ->
         refuse(
-          "ShortFormWithTopology: #{inspect(env.module)} defines `run/3`, the short form's " <>
+          "topology.short_form_with_topology: #{inspect(env.module)} defines `run/3`, the short form's " <>
             "tasklet body, and `channels/1`; the short form generates its topology, " <>
             "so write one or the other"
         )

@@ -52,9 +52,11 @@ defmodule Flezha.SDK.Bounded.SpecTest do
     end
   end
 
-  defp issues(module) do
-    assert {:error, {:invalid_bounded, issues}} = Spec.build(module)
-    Enum.map(issues, &elem(&1, 0))
+  defp issues(module), do: Enum.map(listed(module), & &1["code"])
+
+  defp listed(module) do
+    assert {:error, %Flezha.SDK.Error{details: %{"issues" => issues}}} = Spec.build(module)
+    issues
   end
 
   # --- the tasklet DAG ---
@@ -105,8 +107,8 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def run(_ctx, _args), do: :ok
     end
 
-    assert :NoBoundedBody in issues(Bodyless)
-    assert :NoBoundedBody in issues(OneFunction)
+    assert "topology.no_bounded_body" in issues(Bodyless)
+    assert "topology.no_bounded_body" in issues(OneFunction)
   end
 
   test "ExternalStopOnly — not self-terminating and no duration cap" do
@@ -123,7 +125,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert :ExternalStopOnly in issues(StopOnly)
+    assert "topology.external_stop_only" in issues(StopOnly)
     assert {:ok, _} = Spec.build(StopOnlyCapped)
   end
 
@@ -135,19 +137,18 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert {:error, {:invalid_bounded, issues}} = Spec.build(ForeverLoop)
-    assert {:InvalidMode, "forever_loop", :loop_mode, :forever} in issues
-    assert {:InvalidMode, "forever_loop", :rollback_mode, :best_effort} in issues
+    modes = for %{"code" => "topology.invalid_mode", "details" => d} <- listed(ForeverLoop), do: d
+
+    assert %{"factory_id" => "forever_loop", "knob" => "loop_mode", "value" => "forever"} in modes
+
+    assert %{"factory_id" => "forever_loop", "knob" => "rollback_mode", "value" => "best_effort"} in modes
   end
 
   # --- a setting of the other kind ---
 
   # A bounded class writes the same builder an unbounded operator does, so what only a
   # stream carries is refused by its own name, carried as the topology's.
-  defp kind_refusals(module) do
-    assert {:error, {:invalid_bounded, issues}} = Spec.build(module)
-    for {:Topology, issue} <- issues, do: elem(issue, 0)
-  end
+  defp kind_refusals(module), do: issues(module)
 
   test "the tier, a checkpoint setting and a correction window on a bounded operator are refused by name" do
     defmodule TierBounded do
@@ -175,10 +176,10 @@ defmodule Flezha.SDK.Bounded.SpecTest do
           |> Channels.into(TailTask)
     end
 
-    assert kind_refusals(TierBounded) == [:EffectivelyOnceOnBounded]
+    assert kind_refusals(TierBounded) == ["topology.effectively_once_on_bounded"]
     # Judged as the bounded operator's own setting, not by the stream rule that needs the tier.
-    assert kind_refusals(CheckpointBounded) == [:CheckpointOnBounded]
-    assert kind_refusals(CorrectionBounded) == [:CorrectionWindowOnBounded]
+    assert kind_refusals(CheckpointBounded) == ["topology.checkpoint_on_bounded"]
+    assert kind_refusals(CorrectionBounded) == ["topology.correction_window_on_bounded"]
   end
 
   test "synchronous durability on an unbounded operator is refused, and it keeps its tier" do
@@ -197,7 +198,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
         do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert {:error, {:invalid_topology, [{:SyncDurabilityOnUnbounded, _}]}} =
+    assert {:error, %Flezha.SDK.Error{code: "topology.sync_durability_on_unbounded"}} =
              Topology.build(SyncUnbounded)
 
     assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierUnbounded)
@@ -235,10 +236,10 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
-    assert {:error, {:invalid_topology, [{:SleepWithoutPersistence, _}]}} =
+    assert {:error, %Flezha.SDK.Error{code: "topology.sleep_without_persistence"}} =
              Topology.build(SleeplessUnbounded)
 
-    assert kind_refusals(SleeplessBounded) == [:SleepWithoutPersistence]
+    assert kind_refusals(SleeplessBounded) == ["topology.sleep_without_persistence"]
 
     assert {:ok, sleeping} = Topology.build(SleepingUnbounded)
     assert %{"sleep_when_idle" => "true"} = declared = Flezha.SDK.Declarations.for(sleeping)
@@ -271,7 +272,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def channels(_c), do: :ok
     end
 
-    assert :NoEntryChannel in issues(Empty)
+    assert "topology.no_entry_channel" in issues(Empty)
     assert {:ok, _} = Spec.build(NoEntry)
   end
 
@@ -387,7 +388,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       end
     end
 
-    assert :BranchingChainedLoop in issues(BranchingChain)
+    assert "topology.branching_chained_loop" in issues(BranchingChain)
     assert {:ok, _} = Spec.build(ConvergingChain)
   end
 
@@ -418,8 +419,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       end
     end
 
-    assert {:error, {:invalid_bounded, issues}} = Spec.build(BadTopology)
-    assert [{:Topology, {:KeyByOnUnkeyableTarget, _}}] = issues
+    assert issues(BadTopology) == ["topology.key_by_on_unkeyable_target"]
   end
 
   # --- accumulation ---
@@ -439,11 +439,19 @@ defmodule Flezha.SDK.Bounded.SpecTest do
     end
 
     found = issues(ManyProblems)
-    assert :NoBoundedBody in found
-    assert :ExternalStopOnly in found
+    assert "topology.no_bounded_body" in found
+    assert "topology.external_stop_only" in found
 
-    assert {:error, {:invalid_bounded, issues}} = Spec.build(TieredStopOnly)
-    assert {:ExternalStopOnly, "tiered_stop_only"} in issues
-    assert {:Topology, {:EffectivelyOnceOnBounded, inspect(TieredStopOnly)}} in issues
+    issues = listed(TieredStopOnly)
+
+    assert %{"factory_id" => "tiered_stop_only"} in for(
+             %{"code" => "topology.external_stop_only", "details" => d} <- issues,
+             do: d
+           )
+
+    assert %{"factory_id" => inspect(TieredStopOnly)} in for(
+             %{"code" => "topology.effectively_once_on_bounded", "details" => d} <- issues,
+             do: d
+           )
   end
 end

@@ -56,6 +56,13 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     def run(_input, _state, _ctx), do: {:error, {:non_retryable, "boom"}}
   end
 
+  defmodule Refused do
+    use Flezha.SDK.Tasklet, name: "refused"
+    @impl true
+    def run(_input, _state, _ctx),
+      do: {:error, {:non_retryable, Flezha.SDK.Error.new("runtime.timers_unavailable")}}
+  end
+
   defmodule Undoable do
     use Flezha.SDK.Tasklet, name: "undoable"
 
@@ -114,6 +121,12 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     def channels(c) do
       c |> Channels.input("in") |> Channels.into(Undoable) |> Channels.into(Boom)
     end
+  end
+
+  defmodule RefusedFlow do
+    def factory_id, do: "refused_flow"
+
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(Refused)
   end
 
   defmodule SagaFlow do
@@ -268,7 +281,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   defp start_driver(module, opts) do
     Process.register(self(), :bounded_driver_test_collector)
     assert {:ok, spec} = Spec.build(module)
-    {error, opts} = Keyword.pop(opts, :error, "")
+    {error, opts} = Keyword.pop(opts, :error)
     {:ok, runner} = StubRunner.start_link(test: self(), error: error)
     defaults = [operator_id: "wf-1", counters: Counters.new()]
 
@@ -327,11 +340,12 @@ defmodule Flezha.SDK.Bounded.DriverTest do
              inspect({:ok, %{id: "child-go", outcome: :spawned}})
   end
 
-  test "a spawn naming an unbounded factory resolves factory_not_bounded" do
+  test "a spawn naming an unbounded factory resolves the controller's own code" do
     handle = Spawn.request(self(), false, "prices", "p", [], "")
     assert_receive {:"$gen_cast", {:spawn, _caller, spawn, "p", :deliver}}
-    Spawn.answer(self(), %{spawn | claimed?: true}, {"factory_not_bounded", ""}, "")
-    assert Spawn.await(handle, 1_000) == {:error, {:factory_not_bounded, "prices"}}
+    refusal = Flezha.SDK.Error.new("operator.factory_not_bounded", factory: "prices")
+    Spawn.answer(self(), %{spawn | claimed?: true}, {"", ""}, refusal)
+    assert Spawn.await(handle, 1_000) == {:error, refusal}
   end
 
   # --- the structured chain ---
@@ -598,6 +612,12 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     messages = drive(FailingFlow)
     assert %{status: "error", error: error} = completion(messages)
     assert error =~ "boom"
+  end
+
+  test "a tasklet failing with a coded error ends the run naming its code" do
+    messages = drive(RefusedFlow)
+    assert %{status: "error", error: error} = completion(messages)
+    assert error =~ "runtime.timers_unavailable: "
   end
 
   test "a stage's ladder is the edge's: retry_max(2) runs the tasklet twice, then fails it" do
@@ -1151,8 +1171,10 @@ defmodule Flezha.SDK.Bounded.DriverTest do
   end
 
   test "a refused barrier ends the run abnormally after its ladder" do
-    messages = drive(LinearFlow, error: "disk full")
-    assert %{status: "error", error: "disk full"} = completion(messages)
+    refusal = Flezha.SDK.Error.new("commit.record_not_durable", cell: "wf-1/stage", seq: 3)
+    messages = drive(LinearFlow, error: refusal)
+    expected = "#{refusal.message} (commit.record_not_durable)"
+    assert %{status: "error", error: ^expected} = completion(messages)
     # every send the runner's fixed re-send count allows, the first included
     assert length(commits(messages)) == Flezha.SDK.Knob.barrier_resend_attempts()
   end
@@ -1684,7 +1706,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
     s = %{topologies: topologies, exited: %{}}
 
     for {factory, mode} <- [{"entry_keyed_once", "once"}, {"entry_keyed_chained", "chained"}] do
-      assert {:error, "PartitionsWithoutPerInputLoop: class " <> _ = reason, ^s} =
+      assert {:error, %{code: "topology.partitions_without_per_input_loop", message: reason}, ^s} =
                Operators.add(s, partitioned_add(factory))
 
       assert reason =~ factory
@@ -1693,7 +1715,7 @@ defmodule Flezha.SDK.Bounded.DriverTest do
       assert Declarations.for(topologies[factory])["loop_mode"] == mode
     end
 
-    assert {:error, "PartitionsWithoutKeyedTasklet" <> _, ^s} =
+    assert {:error, %{code: "topology.partitions_without_keyed_tasklet"}, ^s} =
              Operators.add(s, partitioned_add("chat_loop"))
 
     assert Declarations.for(topologies["chat_loop"])["loop_mode"] == "per_input"

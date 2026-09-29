@@ -11,7 +11,7 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{Codec, RunnerServer, UnboundedOperator, Topology, BoundedOperator}
+  alias Flezha.SDK.{Codec, Error, RunnerServer, UnboundedOperator, Topology, BoundedOperator}
   alias Flezha.SDK.Bounded.Spec
 
   @kinds [{UnboundedOperator, :unbounded}, {BoundedOperator, :bounded}]
@@ -20,7 +20,7 @@ defmodule Flezha.SDK do
   defstruct namespace: nil, transport: :native, classes: [], server: nil
 
   @type t :: %__MODULE__{}
-  @type result :: t() | {:error, term()}
+  @type result :: t() | {:error, Error.t()}
 
   # --- runner-as-handle ---
 
@@ -31,10 +31,10 @@ defmodule Flezha.SDK do
 
     cond do
       not (is_binary(namespace) and namespace != "") ->
-        {:error, {:invalid_namespace, namespace}}
+        {:error, Error.new("namespace.invalid_name", namespace: namespace)}
 
       transport not in [:native, :uds, :quic] ->
-        {:error, {:invalid_transport, transport}}
+        {:error, Error.new("runtime.invalid_transport", transport: transport)}
 
       true ->
         %__MODULE__{namespace: namespace, transport: transport}
@@ -79,7 +79,7 @@ defmodule Flezha.SDK do
     if Enum.any?(h.classes, fn {_m, t} -> t.factory_id == fid end) do
       %{h | classes: Enum.reject(h.classes, fn {_m, t} -> t.factory_id == fid end)}
     else
-      {:error, {:not_defined, fid}}
+      {:error, Error.new("runtime.class_not_registered", factory: fid)}
     end
   end
 
@@ -90,7 +90,10 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc "Claim the runner slot and connect. Loser gets `{:error, {:already_running, ns}}`."
+  @doc """
+  Claim the runner slot and connect. The loser gets `runtime.runner_already_running`
+  naming the namespace.
+  """
   @spec start(result()) :: result()
   def start({:error, _} = e), do: e
 
@@ -107,27 +110,34 @@ defmodule Flezha.SDK do
     ]
 
     case RunnerServer.start_link(opts) do
-      {:ok, pid} -> %{h | server: pid}
-      {:error, {:already_started, _pid}} -> {:error, {:already_running, h.namespace}}
-      {:error, {:connect_failed, reason}} -> {:error, {:connect_failed, reason}}
-      {:error, reason} -> {:error, reason}
+      {:ok, pid} ->
+        %{h | server: pid}
+
+      {:error, {:already_started, _pid}} ->
+        {:error, Error.new("runtime.runner_already_running", namespace: h.namespace)}
+
+      {:error, {:connect_failed, reason}} ->
+        {:error, Error.new("runner.controller_unreachable", reason: reason)}
+
+      {:error, reason} ->
+        {:error, Error.new("runtime.runner_unavailable", reason: reason)}
     end
   end
 
   @doc """
-  The live runner process behind a handle: `{:error, :not_started}` before
+  The live runner process behind a handle: `runtime.runner_not_started` before
   `start/1`, and a refused handle's own error unchanged.
 
   The one place a caller outside this module reads the handle's server, so the
   struct's shape stays this module's business.
   """
-  @spec server(result()) :: {:ok, pid()} | {:error, term()}
+  @spec server(result()) :: {:ok, pid()} | {:error, Error.t()}
   def server({:error, _reason} = e), do: e
-  def server(%__MODULE__{server: nil}), do: {:error, :not_started}
+  def server(%__MODULE__{server: nil}), do: {:error, Error.new("runtime.runner_not_started")}
   def server(%__MODULE__{server: pid}), do: {:ok, pid}
 
   @doc "Block until the runner terminates."
-  @spec await_termination(result()) :: :ok | {:error, term()}
+  @spec await_termination(result()) :: :ok | {:error, Error.t()}
   def await_termination(handle) do
     with {:ok, pid} <- server(handle) do
       ref = Process.monitor(pid)
@@ -139,7 +149,7 @@ defmodule Flezha.SDK do
   end
 
   @doc "`start/1` then `await_termination/1`."
-  @spec run(result()) :: :ok | {:error, term()}
+  @spec run(result()) :: :ok | {:error, Error.t()}
   def run({:error, _} = e), do: e
 
   def run(%__MODULE__{} = h) do
@@ -211,18 +221,18 @@ defmodule Flezha.SDK do
   The kind `module` declares, read from its `@behaviour`, which the `use`
   macros set and a hand-written module writes:
   `Flezha.SDK.UnboundedOperator` is an unbounded operator, `Flezha.SDK.BoundedOperator` a
-  bounded operator. A module declaring both is `{:AmbiguousOperatorKind, module}` and
-  one declaring neither `{:UnknownOperatorKind, module}`, the contract's names
+  bounded operator. A module declaring both is `topology.ambiguous_operator_kind`
+  and one declaring neither `topology.unknown_operator_kind`, the contract's codes
   (`docs/sdk/authoring_contract.md` §5.1).
   """
-  @spec operator_kind(module()) :: {:ok, :unbounded | :bounded} | {:error, {atom(), module()}}
+  @spec operator_kind(module()) :: {:ok, :unbounded | :bounded} | {:error, Error.t()}
   def operator_kind(module) do
     declared = if Code.ensure_loaded?(module), do: behaviours(module), else: []
 
     case for({behaviour, kind} <- @kinds, behaviour in declared, do: kind) do
       [kind] -> {:ok, kind}
-      [] -> {:error, {:UnknownOperatorKind, module}}
-      _both -> {:error, {:AmbiguousOperatorKind, module}}
+      [] -> {:error, Error.new("topology.unknown_operator_kind", module: inspect(module))}
+      _both -> {:error, Error.new("topology.ambiguous_operator_kind", module: inspect(module))}
     end
   end
 
@@ -236,7 +246,7 @@ defmodule Flezha.SDK do
 
   defp not_duplicate(%__MODULE__{classes: classes}, fid) do
     if Enum.any?(classes, fn {_m, t} -> t.factory_id == fid end),
-      do: {:error, {:duplicate_factory_id, fid}},
+      do: {:error, Error.new("topology.duplicate_factory_id", factory_id: fid)},
       else: :ok
   end
 

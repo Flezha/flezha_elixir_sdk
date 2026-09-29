@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Operators do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Commands, Declarations, KeyGroup, Operator}
+  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Operator}
   alias Flezha.SDK.Bounded.{Driver, Spec}
 
   @doc """
@@ -20,7 +20,7 @@ defmodule Flezha.SDK.Operators do
   `{:ok, s, declarations}`, or `{:error, reason, s}` for a factory this runner
   does not carry or a kind the class was not registered under.
   """
-  @spec add(map(), map()) :: {:ok, map(), map()} | {:error, String.t(), map()}
+  @spec add(map(), map()) :: {:ok, map(), map()} | {:error, Error.t(), map()}
   def add(s, add) do
     s = answered(s, add.operator_id)
     kind = if add.kind in [nil, ""], do: "unbounded", else: add.kind
@@ -49,14 +49,15 @@ defmodule Flezha.SDK.Operators do
   # The kind the controller placed under and the class registered under this
   # id must agree: a mismatch would drive an unbounded topology through the
   # bounded driver, or the reverse, and neither has the other's shape.
-  defp check_kind(nil, _kind, factory_id), do: {:error, "unknown factory #{factory_id}"}
+  defp check_kind(nil, _kind, factory_id),
+    do: {:error, Error.new("runtime.class_not_registered", factory: factory_id)}
+
   defp check_kind(%Spec{}, "bounded", _factory_id), do: :ok
 
-  defp check_kind(%Spec{}, kind, factory_id),
-    do: {:error, "factory #{factory_id} is a bounded class; kind was #{inspect(kind)}"}
+  defp check_kind(%Spec{}, kind, factory_id), do: kind_mismatch(factory_id, "bounded", kind)
 
   defp check_kind(_stream, "bounded", factory_id),
-    do: {:error, "factory #{factory_id} is an unbounded class; kind was \"bounded\""}
+    do: kind_mismatch(factory_id, "unbounded", "bounded")
 
   defp check_kind(_stream, _kind, _factory_id), do: :ok
 
@@ -68,10 +69,15 @@ defmodule Flezha.SDK.Operators do
         :ok
 
       match?(%Spec{knobs: %{loop_mode: mode}} when mode != :per_input, topo) ->
-        {:error, KeyGroup.one_message_refusal(factory_id, topo.knobs.loop_mode, range.count)}
+        {:error,
+         Error.new("topology.partitions_without_per_input_loop",
+           factory: factory_id,
+           loop_mode: topo.knobs.loop_mode,
+           partitions: range.count
+         )}
 
       unbounded_topology(topo).keyless? ->
-        {:error, "PartitionsWithoutKeyedTasklet: a partition_count >= 2 class needs a key_by"}
+        {:error, Error.new("topology.partitions_without_keyed_tasklet", factory: factory_id)}
 
       true ->
         :ok
@@ -178,7 +184,16 @@ defmodule Flezha.SDK.Operators do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Flezha.SDK] #{add.operator_id} init_values: #{reason}")
+        Logger.warning("[Flezha.SDK] #{add.operator_id} init_values: #{reason.message}")
     end
+  end
+
+  defp kind_mismatch(factory_id, declared, kind) do
+    {:error,
+     Error.new("runtime.factory_kind_mismatch",
+       factory: factory_id,
+       declared: declared,
+       kind: kind
+     )}
   end
 end

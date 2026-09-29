@@ -600,8 +600,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     left = Flezha.SDK.unregister_factory(declared, TunedBounded)
     assert Enum.map(left.classes, fn {_m, c} -> c.factory_id end) == ["upcase_twin"]
 
-    assert {:error, {:not_defined, "tuned_bounded"}} =
+    assert {:error, %Flezha.SDK.Error{code: "runtime.class_not_registered", details: details}} =
              Flezha.SDK.unregister_factory(left, TunedBounded)
+
+    assert details == %{"factory" => "tuned_bounded"}
   end
 
   # The kind is the behaviour, not the body's name: both kinds write `channels/1`.
@@ -646,17 +648,25 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     runner = Flezha.SDK.create_runner("kind_refusals_ns")
 
-    assert {:error, {:AmbiguousOperatorKind, ^both_kinds}} =
+    assert {:error, %Flezha.SDK.Error{code: "topology.ambiguous_operator_kind", details: both}} =
              Flezha.SDK.register_factory(runner, both_kinds)
 
-    assert {:error, {:UnknownOperatorKind, NeitherKind}} =
+    assert both == %{"module" => inspect(both_kinds)}
+
+    assert {:error, %Flezha.SDK.Error{code: "topology.unknown_operator_kind", details: neither}} =
              Flezha.SDK.register_factory(runner, NeitherKind)
+
+    assert neither == %{"module" => inspect(NeitherKind)}
   end
 
   test "a duplicate factory id is refused, whichever kind holds it" do
     runner = Flezha.SDK.create_runner("duplicate_ns")
 
-    assert {:error, {:duplicate_factory_id, "upcase"}} =
+    assert {:error,
+            %Flezha.SDK.Error{
+              code: "topology.duplicate_factory_id",
+              details: %{"factory_id" => "upcase"}
+            }} =
              runner
              |> Flezha.SDK.register_factory(Upcase)
              |> Flezha.SDK.register_factory(Upcase)
@@ -671,8 +681,8 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         def channels(c), do: c
         """)
 
-      assert String.starts_with?(error.description, "ShortFormWithTopology"),
-             "expected the message to begin with ShortFormWithTopology, read: #{error.description}"
+      assert String.starts_with?(error.description, "topology.short_form_with_topology"),
+             "expected the message to begin with the code, read: #{error.description}"
     end
   end
 

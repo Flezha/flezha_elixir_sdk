@@ -27,6 +27,7 @@ defmodule Flezha.SDK.RunnerServer do
     Counters,
     Credit,
     DataStream,
+    Error,
     Cell,
     Hold,
     Jitter,
@@ -117,16 +118,16 @@ defmodule Flezha.SDK.RunnerServer do
   bounded operator commit's ack does.
   """
   @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
-          {:ok, String.t()} | {:error, term()}
+          {:ok, String.t()} | {:error, Error.t()}
   def admin_call(server, verb, args, timeout \\ 30_000) do
     ref = make_ref()
     GenServer.cast(server, {:admin, self(), ref, verb, args})
 
     receive do
-      {:reply_ack, ^ref, _result, error} when error != "" -> {:error, error}
-      {:reply_ack, ^ref, result, _error} -> {:ok, result}
+      {:reply_ack, ^ref, _result, %Flezha.SDK.Error{} = error} -> {:error, error}
+      {:reply_ack, ^ref, result, nil} -> {:ok, result}
     after
-      timeout -> {:error, :timeout}
+      timeout -> {:error, Error.new("admin.timeout", verb: verb, seconds: div(timeout, 1000))}
     end
   end
 
@@ -193,7 +194,7 @@ defmodule Flezha.SDK.RunnerServer do
   @impl true
   def handle_call({:define, {fid, _, _} = factory_row, topology}, _from, %State{} = s) do
     if Map.has_key?(s.topologies, fid) do
-      {:reply, {:error, {:duplicate_factory_id, fid}}, s}
+      {:reply, {:error, Error.new("topology.duplicate_factory_id", factory_id: fid)}, s}
     else
       s = %{
         s
@@ -212,10 +213,11 @@ defmodule Flezha.SDK.RunnerServer do
 
     cond do
       not Map.has_key?(s.topologies, fid) ->
-        {:reply, {:error, {:not_defined, fid}}, s}
+        {:reply, {:error, Error.new("runtime.class_not_registered", factory: fid)}, s}
 
       live > 0 ->
-        {:reply, {:error, {:operator_type_in_use, fid, live}}, s}
+        error = Error.new("runtime.operator_type_in_use", factory_id: fid, live_instances: live)
+        {:reply, {:error, error}, s}
 
       true ->
         s = %{
@@ -333,7 +335,7 @@ defmodule Flezha.SDK.RunnerServer do
 
   # A spawn request's deadline. One already answered finds nothing to settle.
   def handle_info({:spawn_deadline, reference_id}, %State{} = s),
-    do: settle(s, reference_id, :timeout, "")
+    do: settle(s, reference_id, :timeout, nil)
 
   # An operator instance's process ended. The report is kept until answered,
   # because a control frame is never held and one written while no control
@@ -371,7 +373,7 @@ defmodule Flezha.SDK.RunnerServer do
         {:noreply, await_reply(s, reference_id, caller, ref, :reply_ack)}
 
       _refused ->
-        send(caller, {:reply_ack, ref, "", "no control plane to administer over"})
+        send(caller, {:reply_ack, ref, "", Error.new("admin.no_control_plane", verb: verb)})
         {:noreply, s}
     end
   end
@@ -396,7 +398,7 @@ defmodule Flezha.SDK.RunnerServer do
       Process.send_after(self(), {:spawn_deadline, id}, spawn.deadline, abs: true)
       {:noreply, await_reply(s, id, caller, id, spawn)}
     else
-      Spawn.answer(caller, spawn, :unavailable, "")
+      Spawn.answer(caller, spawn, :unavailable, nil)
       {:noreply, s}
     end
   end
@@ -486,7 +488,7 @@ defmodule Flezha.SDK.RunnerServer do
 
       {:error, reason} ->
         Logger.error("[Flezha.SDK] ConnectSocket failed: #{inspect(reason)}")
-        reply(s, ref, "error", [inspect(reason)])
+        reply(s, ref, "error", [Error.new("runner.data_streams_failed", reason: reason)])
         {:noreply, s}
     end
   end
@@ -525,14 +527,23 @@ defmodule Flezha.SDK.RunnerServer do
   # of the request, which is what names the process waiting on it. Nothing is
   # replied to: the reply is itself an answer. One clause for every such reply,
   # because they differ only in what rides back.
-  defp dispatch({:task_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
-  defp dispatch({:iter_commit_response, %{error: error}}, ref, s), do: settle(s, ref, "", error)
+  defp dispatch({:task_commit_response, %{error: error}}, ref, s),
+    do: settle(s, ref, "", Error.from_wire(error))
+
+  defp dispatch({:iter_commit_response, %{error: error}}, ref, s),
+    do: settle(s, ref, "", Error.from_wire(error))
 
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
-    do: settle(s, ref, result, error)
+    do: settle(s, ref, result, Error.from_wire(error))
 
   defp dispatch({:spawn_bounded_response, answer}, ref, s),
-    do: settle(s, ref, {answer.outcome, answer.instance_id}, answer.error)
+    do:
+      settle(
+        s,
+        ref,
+        {answer.outcome, answer.instance_id},
+        Error.from_wire(answer.error)
+      )
 
   # A terminal disconnect is the rung of the controller's convergence ladder
   # that ends a wedged process: nothing else clears it, and only the
@@ -572,6 +583,21 @@ defmodule Flezha.SDK.RunnerServer do
     s = teardown_streams(s)
     Transport.close(s.control_handle)
     {:noreply, %{s | control_handle: nil, stopped?: true}}
+  end
+
+  # The controller refused this connect and closes the stream next, and that
+  # close drives the reconnect as any failed session's does. Logged once per
+  # refused attempt, and never answered.
+  defp dispatch({:connect_refused, %{error: wire}}, _ref, s) do
+    error =
+      Error.from_wire(wire) ||
+        Error.new("runtime.unreadable_reply", reply: "a connect refusal without its error")
+
+    Logger.error(
+      "[Flezha.SDK] the controller refused the connect: " <> Error.render(error, :text)
+    )
+
+    {:noreply, s}
   end
 
   defp dispatch({:park_payload_ack, %{park_id: park_id}}, _ref, s) do

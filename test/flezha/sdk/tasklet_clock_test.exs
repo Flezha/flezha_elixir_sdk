@@ -81,10 +81,11 @@ defmodule Flezha.SDK.TaskletClockTest do
     assert Nochange.logical_clock() == true
     assert Tasklet.clock(Nochange) == :logical
 
-    assert {:error, {:invalid_topology, [{:UnservableClock, name}]}} =
+    assert {:error, %Flezha.SDK.Error{code: "topology.unservable_clock", details: details}} =
              Topology.build(NochangeOperator)
 
-    assert name == inspect(Nochange)
+    assert details["tasklet"] == inspect(Nochange)
+    assert length(details["issues"]) == 1
   end
 
   test "a retired option or callback does not compile, naming what replaced it" do
@@ -164,12 +165,18 @@ defmodule Flezha.SDK.TaskletClockTest do
   end
 
   test "a hand-written tasklet with two clocks, or a retired callback, is refused at registration" do
-    assert {:error, {:invalid_topology, [{:TwoClocks, two}]}} = Topology.build(TwoClocksOperator)
-    assert two == inspect(TwoClocksByHand)
+    assert {:error, %Flezha.SDK.Error{code: "topology.two_clocks", details: two}} =
+             Topology.build(TwoClocksOperator)
 
-    assert {:error, {:invalid_topology, issues}} = Topology.build(RetiredOperator)
+    assert two["tasklet"] == inspect(TwoClocksByHand)
 
-    assert for({:RetiredCallback, _name, callback, instead} <- issues, do: {callback, instead}) ==
+    assert {:error, %Flezha.SDK.Error{details: %{"issues" => issues}}} =
+             Topology.build(RetiredOperator)
+
+    assert for(
+             %{"code" => "topology.retired_callback", "details" => details} <- issues,
+             do: {details["callback"], details["instead"]}
+           ) ==
              [
                {"cell_idle_ttl_ms/0", "`idle_ttl_seconds/0`, in whole seconds"},
                {"clock/0", "`logical_clock/0` answering true, or `event_time/1` for event time"},

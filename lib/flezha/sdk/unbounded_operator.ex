@@ -58,7 +58,7 @@ defmodule Flezha.SDK.UnboundedOperator do
   options `use Flezha.SDK.Tasklet` takes (`max_cells:`, `logical_clock:`, ...)
   apply to the generated tasklet. The short form takes no class setting,
   which is the full form's. Writing `run/3`
-  and `channels/1` both is a `CompileError` beginning `ShortFormWithTopology`,
+  and `channels/1` both is a `CompileError` beginning `topology.short_form_with_topology`,
   and writing neither is one naming both.
   """
   defmacro __using__(opts) do

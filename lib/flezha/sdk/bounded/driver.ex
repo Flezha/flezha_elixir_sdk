@@ -851,7 +851,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # --- barriers ---
 
-  defp barrier_settled(%State{barrier: %{kind: kind}} = s, "") do
+  defp barrier_settled(%State{barrier: %{kind: kind}} = s, nil) do
     s = %{s | barrier: nil}
 
     case kind do
@@ -867,7 +867,7 @@ defmodule Flezha.SDK.Bounded.Driver do
     if barrier.attempt < attempts do
       Logger.warning(
         "[Flezha.SDK] #{s.operator_id} barrier attempt #{barrier.attempt}/#{attempts} " <>
-          "refused: #{error}; re-sending"
+          "refused: #{error.message} (#{error.code}); re-sending"
       )
 
       # The same bytes, not a rebuild: the controller journals a barrier once
@@ -876,8 +876,11 @@ defmodule Flezha.SDK.Bounded.Driver do
       Commit.resend(s.runner, self(), barrier.ref, barrier.command)
       %{s | barrier: %{barrier | attempt: barrier.attempt + 1}}
     else
-      Logger.warning("[Flezha.SDK] #{s.operator_id} barrier gave up: #{error}")
-      give_up(%{s | barrier: nil}, error)
+      Logger.warning(
+        "[Flezha.SDK] #{s.operator_id} barrier gave up: #{error.message} (#{error.code})"
+      )
+
+      give_up(%{s | barrier: nil}, "#{error.message} (#{error.code})")
     end
   end
 

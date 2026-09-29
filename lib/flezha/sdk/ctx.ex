@@ -34,7 +34,7 @@ defmodule Flezha.SDK.Ctx do
   once per invocation — and, inside a firing, the scheduled timestamp. Inside a
   bounded operator's tasklet timers are unavailable until they fire there: the Cell
   hands `timers: :unavailable`, and the four timer calls answer
-  `{:error, :timers_unavailable}` and arm nothing.
+  `runtime.timers_unavailable` and arm nothing.
 
   Two more slots ride the same dictionary: under the effectively-once tier
   `checkpoint/1` raises the flag the Cell reads at the invocation's end to
@@ -47,7 +47,7 @@ defmodule Flezha.SDK.Ctx do
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
 
-  alias Flezha.SDK.{Tasklet, Spawn, Timers}
+  alias Flezha.SDK.{Error, Tasklet, Spawn, Timers}
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -141,30 +141,30 @@ defmodule Flezha.SDK.Ctx do
   end
 
   @doc "Emit a value on the tasklet's outgoing channels."
-  @spec emit(t(), term()) :: :ok | {:error, term()}
+  @spec emit(t(), term()) :: :ok | {:error, Error.t()}
   def emit(%__MODULE__{} = ctx, value), do: emit_with_meta(ctx, value, %{})
 
   @doc "Emit a value with metadata. Reserved `flz.`-prefixed keys are refused."
-  @spec emit_with_meta(t(), term(), map()) :: :ok | {:error, term()}
+  @spec emit_with_meta(t(), term(), map()) :: :ok | {:error, Error.t()}
   def emit_with_meta(%__MODULE__{key_required?: true, channel: channel}, _value, _meta),
-    do: {:error, {:key_required_on_keyed_channel, channel}}
+    do: {:error, Error.new("runtime.key_required_on_keyed_channel", channel: channel)}
 
   def emit_with_meta(%__MODULE__{} = ctx, value, meta) when is_map(meta),
     do: put_emit(ctx, value, meta, nil)
 
   @doc "Emit under the output's natural key — the sink must be declared `keyed/1`."
-  @spec emit_keyed(t(), String.t(), term()) :: :ok | {:error, term()}
+  @spec emit_keyed(t(), String.t(), term()) :: :ok | {:error, Error.t()}
   def emit_keyed(%__MODULE__{} = ctx, key, value), do: emit_keyed_with_meta(ctx, key, value, %{})
 
   @doc "`emit_keyed/3` with metadata."
-  @spec emit_keyed_with_meta(t(), String.t(), term(), map()) :: :ok | {:error, term()}
+  @spec emit_keyed_with_meta(t(), String.t(), term(), map()) :: :ok | {:error, Error.t()}
   def emit_keyed_with_meta(
         %__MODULE__{keyed_sink?: false, channel: channel},
         _key,
         _value,
         _meta
       ),
-      do: {:error, {:key_not_allowed_on_non_keyed_channel, channel}}
+      do: {:error, Error.new("runtime.key_not_allowed_on_non_keyed_channel", channel: channel)}
 
   def emit_keyed_with_meta(%__MODULE__{} = ctx, key, value, meta)
       when is_binary(key) and is_map(meta),
@@ -175,25 +175,25 @@ defmodule Flezha.SDK.Ctx do
 
   @doc "Register a processing-time timer `delay_ms` after `now/1`; `{:ok, at}`, the cancellation handle."
   @spec timer_after(t(), integer()) ::
-          {:ok, non_neg_integer()} | {:error, Timers.refusal() | :timers_unavailable}
+          {:ok, non_neg_integer()} | {:error, Error.t()}
   def timer_after(%__MODULE__{} = ctx, delay_ms),
     do: with_session(ctx, &Timers.register_after(&1, delay_ms))
 
   @doc "Register an event-time timer at `at`; refused under a clock that is not `:event_time`."
   @spec timer_at_event_time(t(), non_neg_integer()) ::
-          {:ok, non_neg_integer()} | {:error, Timers.refusal() | :timers_unavailable}
+          {:ok, non_neg_integer()} | {:error, Error.t()}
   def timer_at_event_time(%__MODULE__{} = ctx, at),
     do: with_session(ctx, &Timers.register(&1, :event_time, at))
 
   @doc "Cancel the processing-time timer `timer_after/2` answered; whether one was pending."
   @spec cancel_processing_time_timer(t(), non_neg_integer()) ::
-          boolean() | {:error, :timers_unavailable}
+          boolean() | {:error, Error.t()}
   def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
     do: cancel(ctx, :processing_time, at)
 
   @doc "Cancel the event-time timer `timer_at_event_time/2` answered; whether one was pending."
   @spec cancel_event_time_timer(t(), non_neg_integer()) ::
-          boolean() | {:error, :timers_unavailable}
+          boolean() | {:error, Error.t()}
   def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
 
   @doc "The owning Cell's key, or nil for a Single Cell."
@@ -367,7 +367,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(completion_key(ref))
   end
 
-  defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, :timers_unavailable}
+  defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, timers_unavailable()}
 
   defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
     case fun.(session(ctx)) do
@@ -381,13 +381,15 @@ defmodule Flezha.SDK.Ctx do
     end
   end
 
-  defp cancel(%__MODULE__{timers: :unavailable}, _kind, _at), do: {:error, :timers_unavailable}
+  defp cancel(%__MODULE__{timers: :unavailable}, _kind, _at), do: {:error, timers_unavailable()}
 
   defp cancel(%__MODULE__{ref: ref} = ctx, kind, at) do
     {changed?, session} = Timers.cancel(session(ctx), kind, at)
     Process.put(timers_key(ref), session)
     changed?
   end
+
+  defp timers_unavailable, do: Error.new("runtime.timers_unavailable")
 
   # The session open in this invocation, or one opened now.
   defp session(%__MODULE__{ref: ref} = ctx), do: Process.get(timers_key(ref)) || open(ctx)
@@ -402,7 +404,7 @@ defmodule Flezha.SDK.Ctx do
         :ok
 
       k ->
-        {:error, {:reserved_metadata_key, k}}
+        {:error, Error.new("runtime.reserved_metadata_key", key: k)}
     end
   end
 
