@@ -56,6 +56,42 @@ fn send_frame<'a>(
     })
 }
 
+/// Queue a frame only while the writer is fewer than `max_pending` frames
+/// behind, and refuse it with `busy` otherwise: a part, never waited on and
+/// never held, is dropped rather than grow the queue of a stream that stalled.
+#[rustler::nif]
+fn try_send_frame<'a>(
+    env: Env<'a>,
+    stream: ClientStreamArc,
+    payload_id: String,
+    message: rustler::Binary<'a>,
+    metadata: HashMap<String, String>,
+    max_pending: usize,
+) -> NifResult<Term<'a>> {
+    let command = Command::Send {
+        payload_id,
+        message: message.as_slice().to_vec(),
+        metadata,
+    };
+
+    Ok(match try_queue(&stream.commands, max_pending, command) {
+        Ok(()) => atoms::ok().encode(env),
+        Err(()) => (atoms::error(), atoms::busy()).encode(env),
+    })
+}
+
+/// The bounded half of the writer's queue, for the frames that may be dropped.
+pub(crate) fn try_queue(
+    commands: &Sender<Command>,
+    max_pending: usize,
+    command: Command,
+) -> Result<(), ()> {
+    if commands.len() >= max_pending {
+        return Err(());
+    }
+    commands.send(command).map_err(|_| ())
+}
+
 #[rustler::nif]
 fn close(env: Env, stream: ClientStreamArc) -> NifResult<Term> {
     let _ = stream.commands.send(Command::Close);
@@ -73,4 +109,38 @@ fn stream_id(stream: ClientStreamArc) -> u64 {
 fn controlling_process(env: Env, stream: ClientStreamArc, new_owner: LocalPid) -> NifResult<Term> {
     *stream.owner.lock().unwrap() = new_owner;
     Ok(atoms::ok().encode(env))
+}
+
+#[cfg(test)]
+mod tests {
+    use crossbeam::channel::unbounded;
+
+    use super::*;
+
+    fn part() -> Command {
+        Command::Send {
+            payload_id: "output_part".to_string(),
+            message: b"x".to_vec(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// A writer that stopped draining: the queue fills to the bound and every
+    /// part past it is refused at once rather than queued.
+    #[test]
+    fn a_part_behind_a_stalled_writer_is_refused_at_the_bound() {
+        let (commands, stalled) = unbounded::<Command>();
+        for _ in 0..3 {
+            assert!(try_queue(&commands, 3, part()).is_ok());
+        }
+        assert!(try_queue(&commands, 3, part()).is_err());
+        assert_eq!(stalled.len(), 3, "a refused part is not queued");
+    }
+
+    #[test]
+    fn a_writer_gone_refuses_the_part() {
+        let (commands, gone) = unbounded::<Command>();
+        drop(gone);
+        assert!(try_queue(&commands, 3, part()).is_err());
+    }
 }

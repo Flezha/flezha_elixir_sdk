@@ -10,7 +10,7 @@ defmodule Flezha.SDK.HoldClassTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.Hold
+  alias Flezha.SDK.{Hold, LocalStream}
   alias Flezha.SDK.Wire
   @sdk "lib/flezha/sdk"
   @seam "#{@sdk}/hold.ex"
@@ -39,6 +39,7 @@ defmodule Flezha.SDK.HoldClassTest do
       {"control_ping", :control},
       {"connect_control_channel", :control},
       {"correction_request", :control},
+      {"output_part", :preview},
       {"data_heartbeat", :probe},
       {{:output, "op-1"}, :output}
     ]
@@ -61,6 +62,22 @@ defmodule Flezha.SDK.HoldClassTest do
 
     test "a control_command variant the table does not name is refused too" do
       assert Hold.class({"control_command", :not_a_variant}) == :error
+    end
+  end
+
+  describe "a preview" do
+    test "is refused, and never held, when it cannot be written at once" do
+      assert {{:error, :no_stream}, hold} =
+               Hold.write("output_part", Hold.new(), {"p", %{}, "op"})
+
+      assert hold.n == 0
+
+      {sdk_side, controller_side} = LocalStream.open()
+      :ok = LocalStream.close(controller_side)
+      gone = Hold.bind(Hold.new(), [sdk_side])
+
+      assert {{:error, :closed}, hold} = Hold.write("output_part", gone, {"p", %{}, "op"})
+      assert hold.n == 0
     end
   end
 

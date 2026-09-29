@@ -191,6 +191,7 @@ defmodule Flezha.SDK.Tasklet do
     emit_with_meta: 3,
     emit_keyed: 3,
     emit_keyed_with_meta: 4,
+    part: 2,
     now: 1,
     timer_after: 2,
     timer_at_event_time: 2,

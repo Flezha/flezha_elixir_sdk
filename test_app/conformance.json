@@ -45,6 +45,10 @@
       "call_split",
       "call_turn"
     ],
+    "parts": [
+      "part_echo",
+      "part_echo_bounded"
+    ],
     "runner_lifecycle": [
       "do_nothing",
       "compare_filter",

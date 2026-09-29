@@ -42,12 +42,18 @@ defmodule Flezha.SDK.Ctx do
   replay-stable id derived from the Cell's wire identity, the change seq the
   invocation started at and a per-invocation ordinal.
 
+  `part/2` sends a preview of the invocation's output at once, on the sink
+  route of the node's channel (`preview`), through the Cell's stream seam
+  (`hold`), which never holds one; its number rides the dictionary under the ref, opened by
+  the Cell for the attempt (`attempt`) and cleared by `discard/1`, which is
+  what makes a part through a kept ctx `part.outside_invocation`.
+
   `spawn_bounded/4` asks the runner for a bounded instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
 
-  alias Flezha.SDK.{Error, Tasklet, Spawn, Timers}
+  alias Flezha.SDK.{Counters, Error, Hold, Knob, Tasklet, Spawn, Timers}
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -61,7 +67,12 @@ defmodule Flezha.SDK.Ctx do
     :firing,
     :runner,
     :origin,
+    :operator_id,
+    :counters,
+    :preview,
     identity: <<>>,
+    hold: nil,
+    attempt: 1,
     seq: 0,
     replay?: false,
     keyed_sink?: false,
@@ -110,6 +121,9 @@ defmodule Flezha.SDK.Ctx do
       firing: Keyword.get(opts, :firing),
       runner: Keyword.get(opts, :runner),
       origin: Keyword.get(opts, :origin),
+      operator_id: Keyword.get(opts, :operator_id),
+      counters: Keyword.get(opts, :counters),
+      preview: Keyword.get(opts, :preview),
       identity: Keyword.get(opts, :identity, <<>>),
       seq: Keyword.get(opts, :seq, 0),
       replay?: Keyword.get(opts, :replay, false),
@@ -356,6 +370,91 @@ defmodule Flezha.SDK.Ctx do
     Timers.commit(Process.delete(timers_key(ref)) || open(ctx))
   end
 
+  @doc """
+  Send `value` as a part: a preview of this invocation's output on its
+  channel, which leaves now rather than when `run/3` returns, encoded as an
+  emit of `value` would be. It never waits: a part the wire cannot take at once
+  is dropped and counted, and an invocation of a replayed input sends none.
+
+  `:ok`, or `{:error, %Error{}}`: `part.no_sink` when the node's channel does
+  not end in a sink (a `response()` end is not one), `part.outside_invocation`
+  through a ctx whose invocation has returned.
+  """
+  @spec part(t(), term()) :: :ok | {:error, Error.t()}
+  def part(%__MODULE__{preview: nil} = ctx, _value) do
+    {:error,
+     Error.new("part.no_sink",
+       tasklet: ctx.module.name(),
+       operator: ctx.operator_id,
+       channel: ctx.channel
+     )}
+  end
+
+  def part(%__MODULE__{ref: ref} = ctx, value) do
+    case Process.get(part_key(ref)) do
+      nil ->
+        {:error, Error.new("part.outside_invocation", tasklet: ctx.module.name())}
+
+      _next when ctx.replay? ->
+        :ok
+
+      next ->
+        outputs = ctx.preview.transform.(value)
+        Process.put(part_key(ref), next + length(outputs))
+        outputs |> Enum.with_index(next) |> Enum.each(fn {out, n} -> send_part(ctx, out, n) end)
+    end
+  end
+
+  @doc false
+  # Opened by the Cell for each attempt of a node that can send parts, so a
+  # node that cannot pays nothing.
+  def open_parts(%__MODULE__{preview: nil}), do: :ok
+
+  def open_parts(%__MODULE__{ref: ref}) do
+    Process.put(part_key(ref), 0)
+    :ok
+  end
+
+  defp send_part(%__MODULE__{} = ctx, value, number) do
+    bytes = ctx.preview.serializer.(value)
+
+    # A local run's owner reads only its operator's outputs off its in-process
+    # stream, so a part sent there is dropped by the owner.
+    outcome =
+      cond do
+        not Hold.bound?(ctx.hold) ->
+          :parts_dropped_no_stream
+
+        byte_size(bytes) > Knob.get(:max_frame_bytes) ->
+          :parts_dropped_too_large
+
+        true ->
+          write_part(ctx, bytes, number)
+      end
+
+    if ctx.counters, do: Counters.inc_part(ctx.counters, outcome)
+    :ok
+  end
+
+  defp write_part(ctx, bytes, number) do
+    case Hold.write("output_part", ctx.hold, {bytes, part_stamps(ctx, number), ctx.operator_id}) do
+      {:ok, _hold} -> :parts_sent
+      {_refused, _hold} -> :parts_dropped_refused
+    end
+  end
+
+  defp part_stamps(%__MODULE__{} = ctx, number) do
+    stamps = %{
+      "channel" => ctx.preview.channel,
+      "flz.part" => Integer.to_string(number),
+      "flz.part_attempt" => Integer.to_string(ctx.attempt),
+      "flz.cell" => "#{ctx.operator_id}/#{ctx.module.name()}/#{ctx.cell_key || ""}",
+      "flz.operator" => ctx.operator_id
+    }
+
+    if ctx.cell_key, do: Map.put(stamps, "flz.key", ctx.cell_key), else: stamps
+  end
+
   @doc false
   def discard(%__MODULE__{ref: ref}) do
     Process.delete(key(ref))
@@ -365,6 +464,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(stable_id_key(ref))
     Process.delete(spawn_key(ref))
     Process.delete(completion_key(ref))
+    Process.delete(part_key(ref))
   end
 
   defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, timers_unavailable()}
@@ -422,4 +522,5 @@ defmodule Flezha.SDK.Ctx do
   defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
   defp spawn_key(ref), do: {__MODULE__, ref, :spawn}
   defp completion_key(ref), do: {__MODULE__, ref, :completion}
+  defp part_key(ref), do: {__MODULE__, ref, :part}
 end

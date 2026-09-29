@@ -22,6 +22,10 @@ defmodule Flezha.SDK.Hold do
   `:probe` carries none: a heartbeat reports a moment that has passed, so
   replaying it after a rebind is worse than losing it. Its verdict is evidence
   instead, on the same flood ladder the shared core's heartbeat feeds.
+  `:preview` carries none either and is never waited on: a part is refused
+  `:busy` once the stream's writer is as many frames behind as this hold would
+  keep, where the shared core refuses one its `Class::Preview` cannot write at
+  once.
 
   The hold is also the Operator's evicted-key trace, which uses `push/2` and
   `member?/2` alone: what a shed *means* is the caller's, and a forgotten
@@ -33,8 +37,8 @@ defmodule Flezha.SDK.Hold do
   alias Flezha.SDK.{Counters, Credit, Knob, Prefix, Transport}
   alias Flezha.SDK.Wire
 
-  @typedoc "The guarantee a frame is owed, or `:probe` for one owed none."
-  @type class :: :control | :durable | :output | :probe
+  @typedoc "The guarantee a frame is owed, or `:probe` / `:preview` for one owed none."
+  @type class :: :control | :durable | :output | :probe | :preview
 
   @typedoc """
   What a writer names: a payload id, a `control_command` and its `Command`
@@ -74,6 +78,8 @@ defmodule Flezha.SDK.Hold do
     # The controller re-raises a lost correction when the input is re-delivered,
     # so nothing is owed a hold and the refusal is the caller's to read.
     "correction_request" => :control,
+    # A part is owed nothing and never waited on: a refused one is dropped.
+    "output_part" => :preview,
     # A marker held behind a record it covers, or beside one a hold may shed,
     # would confirm what the controller never received; the next goes out anew.
     "processed_prefix" => :control,
@@ -246,6 +252,14 @@ defmodule Flezha.SDK.Hold do
 
   defp answer(:control, key, hold, {body, meta, route}),
     do: {send_one(hold, key, body, meta, route), hold}
+
+  defp answer(:preview, _key, %__MODULE__{streams: []} = hold, _payload),
+    do: {{:error, :no_stream}, hold}
+
+  defp answer(:preview, key, %__MODULE__{streams: streams} = hold, {body, meta, route}) do
+    handle = secondary_for(streams, route)
+    {Transport.try_send_frame(handle, payload_id(key), body, meta, hold.cap), hold}
+  end
 
   defp answer(:probe, key, hold, {body, meta, _route}) do
     # Delivered when ANY bound stream took it: the rule the shared core's

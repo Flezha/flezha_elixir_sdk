@@ -122,6 +122,13 @@ defmodule Flezha.SDK.Native do
   @doc "Queue one frame; `{:error, :driver_gone}` when the stream's writer has ended."
   def send_frame(_stream, _payload_id, _message, _metadata), do: :erlang.nif_error(:not_loaded)
 
+  @doc """
+  Queue a frame while the stream's writer is fewer than `max_pending` frames
+  behind, or answer `{:error, :busy}`.
+  """
+  def try_send_frame(_stream, _payload_id, _message, _metadata, _max_pending),
+    do: :erlang.nif_error(:not_loaded)
+
   @doc "Close the stream."
   def close(_stream), do: :erlang.nif_error(:not_loaded)
 

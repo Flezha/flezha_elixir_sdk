@@ -116,6 +116,18 @@ defmodule Flezha.SDK.Transport do
   def send_frame(ref, payload_id, message, metadata),
     do: Native.send_frame(ref, payload_id, message, metadata)
 
+  @doc """
+  Send one frame, or answer `{:error, :busy}` when the stream's writer is
+  `max_pending` frames behind. A local stream is in process and always takes it.
+  """
+  @spec try_send_frame(handle(), binary(), term(), map(), pos_integer()) ::
+          :ok | {:error, term()}
+  def try_send_frame(%LocalStream{} = handle, payload_id, message, metadata, _max_pending),
+    do: LocalStream.send_frame(handle, payload_id, message, metadata)
+
+  def try_send_frame(ref, payload_id, message, metadata, max_pending),
+    do: Native.try_send_frame(ref, payload_id, message, metadata, max_pending)
+
   @doc "Deliver the stream's frames to its owner. A socket stream already does, from birth."
   @spec set_active(handle()) :: :ok | {:error, term()}
   def set_active(%LocalStream{} = handle), do: LocalStream.set_active(handle)

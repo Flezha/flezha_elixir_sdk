@@ -284,7 +284,11 @@ defmodule Flezha.SDK.Cell do
       slots: slots,
       credit: credit,
       # The ctx's static facts, built once; the node's come from the Operator.
-      ctx: Ctx.template(module, cell_key, identity, Keyword.get(opts, :ctx_opts, [])),
+      ctx:
+        Ctx.template(module, cell_key, identity, [
+          {:operator_id, operator_id},
+          {:counters, counters} | Keyword.get(opts, :ctx_opts, [])
+        ]),
       timers: Clock.seed(module, slot, firing_gate(opts)),
       changeful?: changeful?,
       tier: tier,
@@ -793,7 +797,10 @@ defmodule Flezha.SDK.Cell do
   defp run_ladder(%State{} = s, item, seed, attempt) do
     outcome =
       with {:ok, ctx} <-
-             guarded(fn -> %{seed | ref: make_ref(), now_ms: clock_now(s, item)} end),
+             guarded(fn ->
+               %{seed | ref: make_ref(), now_ms: clock_now(s, item), attempt: attempt}
+             end),
+           :ok <- Ctx.open_parts(ctx),
            {:ok, result} <- guarded(fn -> call(s, item, ctx) end, ctx) do
         {:result, ctx, result}
       end
@@ -889,6 +896,7 @@ defmodule Flezha.SDK.Cell do
     %{
       s.ctx
       | seq: s.change_seq,
+        hold: s.stream,
         timers: s.timers.pending,
         firing: firing(item),
         replay?: input != nil and input.replay != nil,

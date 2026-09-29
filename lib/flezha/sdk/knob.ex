@@ -42,6 +42,7 @@ defmodule Flezha.SDK.Knob do
     {:data_heartbeat_ms, "FLEZHA_DATA_HEARTBEAT_MS", :ms, 10_000},
     {:local_stream_call_ms, nil, :ms, 5_000},
     {:mailbox_capacity, "FLEZHA_MAILBOX_CAPACITY", :positive_int, 1_024},
+    {:max_frame_bytes, "FLEZHA_MAX_FRAME_BYTES", :int, 67_108_864},
     {:namespace_secret, "FLEZHA_NAMESPACE_SECRET", :string, nil},
     {:quic_addresses, "FLEZHA_QUIC_ADDRESSES", :string, "127.0.0.1:4433"},
     # The cadence a keyed host sweeps idle cells at. Unset, the caller's own

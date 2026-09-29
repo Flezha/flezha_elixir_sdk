@@ -41,7 +41,9 @@ defmodule Flezha.SDK.Counters do
   its disarm and the Cell's own end; a Cell killed untrappably releases
   nothing, so the gauge over-states by its count until the runner restarts —
   and `timers_fired` the firings completed, the two timer keys every other
-  SDK's heartbeat carries.
+  SDK's heartbeat carries. `parts_sent` and the three `parts_dropped_*` counts
+  are the parts a tasklet sent and the ones dropped by reason, since a part is
+  a preview the runner may drop.
 
   Reporting only: nothing in the SDK changes behaviour from these values.
   """
@@ -63,7 +65,11 @@ defmodule Flezha.SDK.Counters do
       [name: :timers_fired, kind: :count],
       # A gauge: timers currently armed, released on firing and disarm.
       [name: :timers_armed, kind: :set],
-      [name: :restore_discarded_inputs, kind: :count]
+      [name: :restore_discarded_inputs, kind: :count],
+      [name: :parts_sent, kind: :count],
+      [name: :parts_dropped_no_stream, kind: :count],
+      [name: :parts_dropped_refused, kind: :count],
+      [name: :parts_dropped_too_large, kind: :count]
     ]
 
   @slots 64
@@ -124,6 +130,17 @@ defmodule Flezha.SDK.Counters do
 
   @spec credit_parked(t()) :: non_neg_integer()
   def credit_parked(ref), do: counter_get(ref, :credit_parked)
+
+  @typedoc "What became of a part: sent, or dropped for want of a stream, by the wire, or for its size."
+  @type part_outcome ::
+          :parts_sent
+          | :parts_dropped_no_stream
+          | :parts_dropped_refused
+          | :parts_dropped_too_large
+
+  @doc "Count one part by what became of it."
+  @spec inc_part(t(), part_outcome()) :: :ok
+  def inc_part(ref, outcome), do: counter_bump(ref, outcome)
 
   @spec inc_timers_fired(t()) :: :ok
   def inc_timers_fired(ref), do: counter_bump(ref, :timers_fired)
