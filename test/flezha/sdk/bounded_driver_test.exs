@@ -1957,11 +1957,13 @@ defmodule Flezha.SDK.Bounded.DriverTest do
 
   test "a loop that journals nothing parks its failed turn without bytes and answers the next" do
     driver = start_loop(QuietTurnLoop, park_idle_ms: 0, dead_letter_turns: true)
-    send_turns(driver, ~w(boom again))
+    Inbox.input(driver, "in", "boom", %{"flz.reply_to" => "w:boom"})
+    send_turns(driver, ~w(again))
 
     assert_receive {:shipped, {:park_payload, park}}, 5_000
     assert park.identity == Park.identity("wf-chat", "_turn", "_turn")
     assert %{channel: "in", payload: nil, origin_offset: nil, attempts: 1} = park
+    assert park.reply_to == "w:boom", "the pass's call"
     assert park.error =~ "tasklet `answer` failed after 1 attempt(s): "
     assert_receive {:undone, "noted"}, 5_000
     assert_receive {:answered, "again"}, 5_000

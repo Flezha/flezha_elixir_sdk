@@ -103,6 +103,7 @@ defmodule Flezha.SDK.Topology do
     BranchingChainedLoop: [:factory_id, :channel, :leaves],
     CellsForMissing: [:name],
     ChannelNameTooLong: [:channel, :len, :max],
+    ChannelEndsTwice: [:channel],
     ChannelNamedTwice: [:channel, :named, :sink],
     CheckpointAckWithoutTier: [:factory_id],
     CheckpointEveryZero: [:factory_id],
@@ -321,6 +322,10 @@ defmodule Flezha.SDK.Topology do
      %{walk | wired?: true, closed?: true}}
   end
 
+  defp walk_link(_acc, _chain, {:response, serializer}, {state, steps, walk}) do
+    {terminate_response(state, serializer, steps), steps, %{walk | closed?: true}}
+  end
+
   defp walk_link(acc, chain, {:into, node_ref}, {state, steps, walk}),
     do: close_on_node(acc, chain, node_ref, walk.transform? or walk.key?, {state, steps, walk})
 
@@ -352,21 +357,37 @@ defmodule Flezha.SDK.Topology do
   # mode is the whole of a wire's identity, and two wires sharing it are two
   # identical routes with every value delivered twice.
   defp terminate_sink(state, plugin, serializer, steps, keyed?) do
-    if Enum.any?(state.sinks, &(&1.keyed == keyed?)) do
-      issue(state, {:DuplicatePluginSink, state.name, plugin})
-    else
-      {transform, key_by} = Channels.fuse(Enum.reverse(steps))
+    cond do
+      Enum.any?(state.sinks, & &1.response) ->
+        issue(state, {:ChannelEndsTwice, state.name})
 
-      wire = %{
-        plugin: plugin,
-        serializer: serializer,
-        transform: transform,
-        key_by: key_by,
-        keyed: keyed?
-      }
+      Enum.any?(state.sinks, &(&1.keyed == keyed?)) ->
+        issue(state, {:DuplicatePluginSink, state.name, plugin})
 
-      %{state | sinks: [wire | state.sinks]}
+      true ->
+        %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, false) | state.sinks]}
     end
+  end
+
+  # A response is a plugin end like a sink, never beside one: a channel whose
+  # value both answered a caller and reached a plugin would leave twice.
+  defp terminate_response(state, serializer, steps) do
+    if state.sinks == [],
+      do: %{state | sinks: [plugin_end(nil, serializer, steps, false, true)]},
+      else: issue(state, {:ChannelEndsTwice, state.name})
+  end
+
+  defp plugin_end(plugin, serializer, steps, keyed?, response?) do
+    {transform, key_by} = Channels.fuse(Enum.reverse(steps))
+
+    %{
+      plugin: plugin,
+      serializer: serializer,
+      transform: transform,
+      key_by: key_by,
+      keyed: keyed?,
+      response: response?
+    }
   end
 
   # One consumer edge per (channel, tasklet). Re-declaring one where either
@@ -432,6 +453,7 @@ defmodule Flezha.SDK.Topology do
             key_by: wire.key_by,
             serializer: wire.serializer,
             keyed: wire.keyed,
+            response: wire.response,
             # The channel a frame off this route is named by: a static
             # property of the route's source, resolved once here.
             channel: channel.name
@@ -645,9 +667,11 @@ defmodule Flezha.SDK.Topology do
     |> Enum.reverse()
   end
 
+  # An answer is identified by its call, so a response end needs no key.
   defp check_wires_under_tier(is, channel, true) do
     Enum.reduce(channel.sinks, is, fn
       %{keyed: true}, is -> is
+      %{response: true}, is -> is
       %{keyed: false}, is -> [{:UnkeyedChannelUnderEffectivelyOnce, channel.name} | is]
     end)
   end

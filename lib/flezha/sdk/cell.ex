@@ -96,7 +96,7 @@ defmodule Flezha.SDK.Cell do
   # value, so nothing there pays for this.
   defmodule Input do
     @moduledoc false
-    defstruct [:value, :offset, :replay, forwarded?: false]
+    defstruct [:value, :offset, :call, :replay, forwarded?: false]
   end
 
   # --- API (used by the Operator router) ---
@@ -675,15 +675,17 @@ defmodule Flezha.SDK.Cell do
     Counters.dispatch_started(s.counters, identity)
     s = take(s, input)
     offset = input && input.offset
+    # The call waiting on the input rides the dispatch's facts to its outputs.
+    call = input && input.call
 
     try do
       case run_ladder(s, item, ctx_seed(s, item, input), 1) do
         {:ok, new_task_state, facts} ->
-          {s, facts} = hold_removal(s, item, facts)
+          {s, facts} = hold_removal(s, item, Map.put(facts, :call, call))
           s |> complete(new_task_state, facts, offset) |> request_completion(facts.completion)
 
         {:park, error, attempts} ->
-          s |> park_firing(item) |> exhausted(item, error, attempts, offset)
+          s |> park_firing(item) |> exhausted(item, error, attempts, {offset, call})
       end
     after
       Counters.dispatch_finished(s.counters, identity)
@@ -714,7 +716,7 @@ defmodule Flezha.SDK.Cell do
     handout_seq = s.change_seq
     s = %{s | task_state: new_task_state, timers: %{s.timers | pending: pending}}
     s = s |> Records.ship(facts.changes, ops) |> Clock.reflect(ops, tally)
-    flush_emits(s, facts.emits, handout_seq, offset)
+    flush_emits(s, facts.emits, handout_seq, {offset, facts.call})
   end
 
   # After the outputs, so the driver has them all when this stage settles. A
@@ -742,7 +744,7 @@ defmodule Flezha.SDK.Cell do
 
     if s.tier.on? and not (s.tier.edges? or s.tier.stage?),
       do: s,
-      else: flush_emits(s, facts.emits, handout_seq, offset, report)
+      else: flush_emits(s, facts.emits, handout_seq, {offset, facts.call}, report)
   end
 
   # A bounded operator firing's removal is durable when the stage that served it
@@ -927,7 +929,7 @@ defmodule Flezha.SDK.Cell do
   # A bounded stage's Cell does not park: its exhausted ladder fails the
   # tasklet, and the driver unwinds the run. An unbounded operator's Cell parks to the
   # DLQ, which is the only behaviour that existed before bounded operators.
-  defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, attempts, _offset) do
+  defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, attempts, _input) do
     GenServer.cast(
       s.operator,
       {:stage_failed, s.node_ref, format_error(error), attempts, s.cell_key || ""}
@@ -936,19 +938,21 @@ defmodule Flezha.SDK.Cell do
     s
   end
 
-  defp exhausted(%State{} = s, value, error, attempts, offset),
-    do: park(s, value, error, attempts, offset)
+  defp exhausted(%State{} = s, value, error, attempts, input),
+    do: park(s, value, error, attempts, input)
 
-  defp park(%State{} = s, value, error, attempts, offset) do
+  # A held park names the call waiting on the input in its frame; a park in a
+  # record leaves the controller to read it off the input-log record.
+  defp park(%State{} = s, value, error, attempts, {offset, call}) do
     if one_record?(s, offset),
       do: park_in_record(s, value, error, attempts, offset),
-      else: park_held(s, value, error, attempts)
+      else: park_held(s, value, error, attempts, call)
   end
 
-  defp park_held(%State{} = s, value, error, attempts) do
+  defp park_held(%State{} = s, value, error, attempts, call) do
     seq = s.park.seq
     park_id = "#{State.label(s)}##{seq}"
-    body = Park.body(park_id, park_channel(s), error, attempts, value)
+    body = Park.body(park_id, park_channel(s), error, attempts, value, call)
 
     Park.ship(
       s.operator,
@@ -975,12 +979,12 @@ defmodule Flezha.SDK.Cell do
     s
   end
 
-  defp flush_emits(s, emits, handout_seq, offset, report \\ nil)
-  defp flush_emits(%State{} = s, [], _handout_seq, _offset, _report), do: s
+  defp flush_emits(s, emits, handout_seq, input, report \\ nil)
+  defp flush_emits(%State{} = s, [], _handout_seq, _input, _report), do: s
 
-  defp flush_emits(%State{} = s, emits, handout_seq, offset, report) do
+  defp flush_emits(%State{} = s, emits, handout_seq, input, report) do
     {s, report} = routing_report(s, report)
-    Inbox.emitted(s.operator, s.node_ref, s.cell_key, emits, handout_seq, offset, report)
+    Inbox.emitted(s.operator, s.node_ref, s.cell_key, emits, handout_seq, input, report)
     s
   end
 

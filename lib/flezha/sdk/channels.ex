@@ -2,7 +2,8 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`, `merge` with `from`, and
+  (`into`/`into_named`/`sink`/`sink_with`/`response`/`response_with`, `merge`
+  with `from`, and
   `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
   identity on the plugin wire the handle reaches) and the class-level tier
@@ -42,6 +43,7 @@ defmodule Flezha.SDK.Channels do
           {:map | :filter | :flat_map | :key, (term() -> term())}
           | :keyed
           | {:sink, String.t(), (term() -> binary())}
+          | {:response, (term() -> binary())}
           | {:into, reference()}
           | {:merge, reference(), non_neg_integer()}
           | {:branch, non_neg_integer()}
@@ -285,6 +287,20 @@ defmodule Flezha.SDK.Channels do
     s = name_from_sink(s, plugin)
     %{link(s, {:sink, plugin, serializer}) | chain_id: nil}
   end
+
+  @doc """
+  Terminate the channel on the answer to the outside call its input carried,
+  with default serialization (bytes/UTF-8/JSON): every value emitted on it is
+  handed to the caller waiting on that input, never to a plugin. It takes no
+  name; the channel keeps the one it would have without it. Returns the
+  handle, so consumers may be wired after it as after `sink/2`. A channel ends
+  in one sink or one response (`ChannelEndsTwice`).
+  """
+  def response(%Stream{} = s), do: response_with(s, &default_serialize/1)
+
+  @doc "`response/1` with a custom serializer."
+  def response_with(%Stream{} = s, serializer) when is_function(serializer, 1),
+    do: %{link(s, {:response, serializer}) | chain_id: nil}
 
   # A sink that names the channel records the name where `named/2` records its
   # own, so one rule answers what a channel is called and the check can see a

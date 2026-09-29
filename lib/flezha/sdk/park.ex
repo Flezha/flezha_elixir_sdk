@@ -14,11 +14,11 @@ defmodule Flezha.SDK.Park do
   """
 
   alias Flezha.SDK.Wire
-  @spec body(binary(), binary(), binary(), non_neg_integer(), term()) :: map()
-  def body(park_id, channel, error, attempts, payload),
+  @spec body(binary(), binary(), binary(), non_neg_integer(), term(), binary() | nil) :: map()
+  def body(park_id, channel, error, attempts, payload, reply_to \\ nil),
     do:
       Map.merge(
-        %{park_id: park_id, origin_offset: nil},
+        %{park_id: park_id, origin_offset: nil, reply_to: reply_to},
         dlq_entry(channel, error, attempts, payload)
       )
 

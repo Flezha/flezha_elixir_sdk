@@ -44,7 +44,7 @@ defmodule Flezha.SDK.Operator do
   @busy {:error, :operator_busy}
   # What an entry input carries into routing: no metadata, no key, no Cell,
   # and the durable offset the controller stamped.
-  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, replay: nil}
+  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, call: nil, replay: nil}
 
   defmodule State do
     @moduledoc false
@@ -177,17 +177,18 @@ defmodule Flezha.SDK.Operator do
   # A value a restore delivers again, named by the producer's record: to the
   # one consumer it names, whose floor drops it when it already took `origin`.
   def handle_cast({:input, _channel, message, %{"flz.edge" => edge} = metadata}, %State{} = s) do
-    {offset, _replay} = frame_facts(metadata)
-    {:noreply, redeliver_edge(s, edge, message, offset)}
+    {offset, call, _replay} = frame_facts(metadata)
+    {:noreply, redeliver_edge(s, edge, message, offset, call)}
   end
 
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
 
-    case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message) do
+    {offset, call, replay} = frame_facts(metadata)
+
+    case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message, call) do
       {:ok, channel, value} ->
-        {offset, replay} = frame_facts(metadata)
-        emit = %{@entry_emit | offset: offset, replay: replay}
+        emit = %{@entry_emit | offset: offset, call: call, replay: replay}
         # Held while it routes, so the prefix reaches it even when it reaches
         # no Cell.
         held = offset && s.prefix
@@ -204,7 +205,7 @@ defmodule Flezha.SDK.Operator do
   # One invocation's emits: the ordinal counts its plugin outputs from zero.
   @impl true
   def handle_cast(
-        {:emitted, node_ref, cell_key, emits, handout_seq, offset, report},
+        {:emitted, node_ref, cell_key, emits, handout_seq, {offset, call}, report},
         %State{} = s
       ) do
     origin = %{node_ref: node_ref, cell_key: cell_key, seq: handout_seq}
@@ -215,7 +216,7 @@ defmodule Flezha.SDK.Operator do
           acc,
           {:node, node_ref},
           value,
-          %{meta: meta, key: key, origin: origin, offset: offset},
+          %{meta: meta, key: key, origin: origin, offset: offset, call: call},
           ordinal
         )
       end)
@@ -418,21 +419,26 @@ defmodule Flezha.SDK.Operator do
   end
 
   # What the controller stamped on a forwarded input: its input-log offset,
-  # and whether the frame is a member of a replayed slice.
+  # the call waiting on it, and whether the frame is a member of a replayed
+  # slice.
   defp frame_facts(metadata) when is_map(metadata),
-    do: {Inbox.input_offset(metadata), if(Map.has_key?(metadata, "flz.replay"), do: :member)}
+    do:
+      {Inbox.input_offset(metadata), Inbox.input_call(metadata),
+       if(Map.has_key?(metadata, "flz.replay"), do: :member)}
 
-  defp frame_facts(_metadata), do: {nil, nil}
+  defp frame_facts(_metadata), do: {nil, nil, nil}
 
-  # The queue item: an input with an offset carries it, the replay mark and
-  # whether the controller forwarded it, so the Cell can skip a re-forward it
-  # already took and hold a slice member back. Anything else is the raw value.
+  # The queue item: an input with an offset or a call carries them, the replay
+  # mark and whether the controller forwarded it, so the Cell can skip a
+  # re-forward it already took, hold a slice member back and answer the call.
+  # Anything else is the raw value.
   defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, emit) do
     item =
-      if topo.effectively_once? or is_integer(emit.offset),
+      if topo.effectively_once? or is_integer(emit.offset) or emit.call != nil,
         do: %Cell.Input{
           value: value,
           offset: emit.offset,
+          call: emit.call,
           replay: Map.get(emit, :replay),
           forwarded?: emit.origin == nil
         },
@@ -441,7 +447,7 @@ defmodule Flezha.SDK.Operator do
     s =
       case Cells.deliver(s.cells, node_ref, value, key, item) do
         {{:misroute, reason}, cells} ->
-          park_misroute(%{s | cells: cells}, node_ref, value, reason)
+          park_misroute(%{s | cells: cells}, node_ref, value, reason, emit.call)
 
         {_keys, cells} ->
           %{s | cells: cells}
@@ -452,14 +458,14 @@ defmodule Flezha.SDK.Operator do
 
   # The edge names its producer and consumer by node seq, as the producer's
   # record wrote it; the value was already through the route's transform.
-  defp redeliver_edge(%State{topology: topo} = s, edge, payload, offset) do
+  defp redeliver_edge(%State{topology: topo} = s, edge, payload, offset, call) do
     with [producer, consumer] <- String.split(edge, ":"),
          {producer, ""} <- Integer.parse(producer),
          {consumer, ""} <- Integer.parse(consumer),
          %{key_by: key_by, to: {:node, consumer_ref}} <- edge_route(topo, producer, consumer),
          {:ok, value} <- Record.decode_body(payload) do
       key = if key_by, do: key_by.(value)
-      emit = %{@entry_emit | origin: :redelivered, offset: offset}
+      emit = %{@entry_emit | origin: :redelivered, offset: offset, call: call}
       deliver_to_node(s, consumer_ref, value, key, emit)
     else
       _unknown ->
@@ -477,9 +483,9 @@ defmodule Flezha.SDK.Operator do
 
   # --- parking (entry-parse + partition mis-route) ---
 
-  defp park_misroute(%State{} = s, node_ref, value, reason) do
+  defp park_misroute(%State{} = s, node_ref, value, reason, call) do
     label = node_ref_label(s, node_ref)
-    Inbox.park_pre_dispatch(s.runner, s.operator_id, label, label, reason, value)
+    Inbox.park_pre_dispatch(s.runner, s.operator_id, label, label, reason, value, reply_to: call)
     s
   end
 

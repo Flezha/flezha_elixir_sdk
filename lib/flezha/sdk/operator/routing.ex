@@ -19,10 +19,13 @@ defmodule Flezha.SDK.Operator.Routing do
   @typedoc "The identity facts a keyed sink stamps with, or nil for a capture that never stamps."
   @type stamp_with :: {binary(), map()} | nil
 
-  @doc "One plugin output's frame: its metadata (channel, then the stamps) and its bytes."
+  @doc """
+  One plugin output's frame: its metadata (channel, the call a `response()`
+  output answers, then the stamps) and its bytes.
+  """
   @spec sink_frame(map(), term(), map(), non_neg_integer(), stamp_with()) :: {map(), binary()}
   def sink_frame(route, value, emit, ordinal, stamp_with) do
-    metadata = Map.put(emit.meta, "channel", route.channel)
+    metadata = emit.meta |> Map.put("channel", route.channel) |> answer(route, emit)
 
     metadata =
       case stamp_with do
@@ -35,6 +38,16 @@ defmodule Flezha.SDK.Operator.Routing do
 
     {metadata, route.serializer.(value)}
   end
+
+  @doc """
+  A `response()` output carries `flz.reply_to`: the call its input carried,
+  or an empty value when nobody waits on it. No other output carries the key.
+  """
+  @spec answer(map(), map(), map()) :: map()
+  def answer(metadata, %{response: true}, emit),
+    do: Map.put(metadata, "flz.reply_to", Map.get(emit, :call) || "")
+
+  def answer(metadata, _route, _emit), do: metadata
 
   @doc """
   The emit's own key, else the sink route's `key_by`, else the emitting

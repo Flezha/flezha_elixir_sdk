@@ -129,7 +129,7 @@ defmodule Flezha.SDK.Cell.Tier do
     effects = %{
       changes: facts.changes,
       timers: ops,
-      outputs: capture_outputs(s, facts.emits),
+      outputs: capture_outputs(s, facts.emits, Map.get(facts, :call)),
       edges: edge_records(s, facts.emits, offset),
       offset: offset,
       event_time: facts.event_time,
@@ -186,21 +186,21 @@ defmodule Flezha.SDK.Cell.Tier do
   # same key rule the router uses. No identity stamps: the controller derives
   # them at flush, and a host that also stamped would produce a second answer.
   # Off the tier the router ships them.
-  defp capture_outputs(%State{tier: %{on?: false}}, _emits), do: []
-  defp capture_outputs(%State{tier: %{sink_routes: []}}, _emits), do: []
-  defp capture_outputs(%State{}, []), do: []
+  defp capture_outputs(%State{tier: %{on?: false}}, _emits, _call), do: []
+  defp capture_outputs(%State{tier: %{sink_routes: []}}, _emits, _call), do: []
+  defp capture_outputs(%State{}, [], _call), do: []
 
-  defp capture_outputs(%State{tier: %{sink_routes: routes}} = s, emits) do
+  defp capture_outputs(%State{tier: %{sink_routes: routes}} = s, emits, call) do
     origin = %{cell_key: s.cell_key}
 
     for {value, meta, key} <- emits,
         route <- routes,
-        emit = %{meta: meta, key: key, origin: origin},
+        emit = %{meta: meta, key: key, origin: origin, call: call},
         out <- route.transform.(value) do
       %{
         channel: route.channel,
         key: Routing.sink_key(route, out, emit) || "",
-        metadata: meta |> Map.delete("channel") |> Enum.sort(),
+        metadata: meta |> Map.delete("channel") |> Routing.answer(route, emit) |> Enum.sort(),
         payload: route.serializer.(out)
       }
     end

@@ -362,10 +362,12 @@ defmodule Flezha.SDK.Wire do
   entry:         DlqEntryBody        — {channel, error, attempts, payload},
                                        the same record a tier-on park embeds
                                        in its effect record
+  reply_to:      Option<String>      — the token of the outside call waiting
+                                       on the parked input
   ```
 
-  Returned flattened (`park_id` + `origin_offset` merged into the entry
-  map) — the store consumes one shape for both park paths.
+  Returned flattened (`park_id`, `origin_offset` and `reply_to` merged into
+  the entry map) — the store consumes one shape for both park paths.
   """
   @spec decode_park_body(binary()) ::
           {:ok,
@@ -375,14 +377,17 @@ defmodule Flezha.SDK.Wire do
              origin_offset: non_neg_integer() | nil,
              error: binary(),
              attempts: non_neg_integer(),
-             payload: binary() | nil
+             payload: binary() | nil,
+             reply_to: binary() | nil
            }}
           | {:error, term()}
   def decode_park_body(body) when is_binary(body) do
     with {:ok, park_id, rest} <- decode_bytes(body),
          {:ok, origin_offset, rest} <- decode_option(rest, &decode_varint/1),
-         {:ok, entry, <<>>} <- decode_dlq_entry(rest) do
-      {:ok, Map.merge(entry, %{park_id: park_id, origin_offset: origin_offset})}
+         {:ok, entry, rest} <- decode_dlq_entry(rest),
+         {:ok, reply_to, <<>>} <- decode_option(rest, &decode_bytes/1) do
+      {:ok,
+       Map.merge(entry, %{park_id: park_id, origin_offset: origin_offset, reply_to: reply_to})}
     else
       {:ok, _, _trailing} -> {:error, :trailing_bytes}
       {:error, _} = err -> err
@@ -394,7 +399,7 @@ defmodule Flezha.SDK.Wire do
   `decode_park_body/1`, byte-compatible with the cross-language fixture
   (`flz_core/src/park.rs`, `test/flezha/state/wire_test.exs`). The map carries
   the flattened DLQ entry: `park_id`, `origin_offset`, `channel`, `error`,
-  `attempts`, `payload`. Sharing the module's postcard helpers is what keeps the
+  `attempts`, `payload`, `reply_to`. Sharing the module's postcard helpers is what keeps the
   SDK's park frame from drifting from the decoder.
   """
   @spec encode_park_body(%{
@@ -403,7 +408,8 @@ defmodule Flezha.SDK.Wire do
           required(:channel) => binary(),
           required(:error) => binary(),
           required(:attempts) => non_neg_integer(),
-          optional(:payload) => binary() | nil
+          optional(:payload) => binary() | nil,
+          optional(:reply_to) => binary() | nil
         }) :: binary()
   def encode_park_body(
         %{park_id: park_id, channel: channel, error: error, attempts: attempts} = body
@@ -418,7 +424,8 @@ defmodule Flezha.SDK.Wire do
     IO.iodata_to_binary([
       encode_bytes(park_id),
       encode_option(Map.get(body, :origin_offset), &encode_varint/1),
-      encode_dlq_entry(entry)
+      encode_dlq_entry(entry),
+      encode_option(Map.get(body, :reply_to), &encode_bytes/1)
     ])
   end
 

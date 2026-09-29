@@ -67,7 +67,7 @@ defmodule ElixirRunner.Application do
         BenchFactories.all() ++
           ElixirRunner.Factories.all() ++
           ElixirRunner.Factories.shorthand() ++
-          ElixirRunner.Bounded.all() ++ ElixirRunner.BoundedLoop.all()
+          ElixirRunner.Bounded.all() ++ ElixirRunner.BoundedLoop.all() ++ ElixirRunner.Call.all()
 
       topology ->
         ElixirRunner.Conformance.boot_classes(topology)

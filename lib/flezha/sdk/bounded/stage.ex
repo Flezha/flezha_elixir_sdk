@@ -22,15 +22,19 @@ defmodule Flezha.SDK.Bounded.Stage do
   @doc """
   Hand `batch` — `{value, key}` pairs, the key the edge gave each value — to
   the stage's Cells and queue one barrier behind each Cell that received one.
-  Answers the keys of those Cells in the order they were first reached, the
-  `{ref, {node_ref, cell_pid}}` pairs the driver waits on, and the Cell set.
+  Each item carries `call`, the outside call the pass answers, so a Cell that
+  records its own outputs stamps a `response()` one. Answers the keys of those
+  Cells in the order they were first reached, the `{ref, {node_ref, cell_pid}}`
+  pairs the driver waits on, and the Cell set.
   """
-  @spec dispatch(Cells.t(), reference(), [{term(), String.t() | nil}], pid()) ::
+  @spec dispatch(Cells.t(), reference(), [{term(), String.t() | nil}], binary() | nil, pid()) ::
           {[String.t() | nil], [{reference(), {reference(), pid()}}], Cells.t()}
-  def dispatch(%Cells{} = cells, node_ref, batch, reply_to) do
+  def dispatch(%Cells{} = cells, node_ref, batch, call, reply_to) do
     {reached, cells} =
       Enum.reduce(batch, {[], cells}, fn {value, key}, {reached, cells} ->
-        case Cells.deliver(cells, node_ref, value, key, value) do
+        item = if call, do: %Cell.Input{value: value, call: call}, else: value
+
+        case Cells.deliver(cells, node_ref, value, key, item) do
           {{:misroute, _reason}, cells} -> {reached, cells}
           {keys, cells} -> {reached ++ keys, cells}
         end

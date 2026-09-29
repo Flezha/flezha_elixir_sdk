@@ -88,6 +88,9 @@ defmodule Flezha.SDK.Bounded.Driver do
       origin: nil,
       # the input-log offset of the input this pass consumed, `nil` for none
       consumed_offset: nil,
+      # the outside call that input carried, which every `response()` output
+      # of the pass answers; `nil` for a timer- or carry-fed pass
+      pass_call: nil,
       iter: 0,
       cancel: nil,
       # task_idx => {cell_key, result}: each tasklet's completion this
@@ -204,7 +207,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   # rather than routed: a bounded operator hands a batch on at the barrier, not per
   # value, so the whole stage's release is what the journal records.
   @impl true
-  def handle_cast({:emitted, node_ref, cell_key, emits, seq, _offset, report}, %State{} = s) do
+  def handle_cast({:emitted, node_ref, cell_key, emits, seq, _input, report}, %State{} = s) do
     origin = %{node_ref: node_ref, cell_key: cell_key, seq: seq}
     values = Enum.map(emits, fn {value, _meta, _key} -> value end)
 
@@ -216,7 +219,7 @@ defmodule Flezha.SDK.Bounded.Driver do
           acc,
           node_ref,
           value,
-          %{meta: meta, key: key, origin: origin},
+          %{meta: meta, key: key, origin: origin, call: acc.pass_call},
           ordinal
         )
       end)
@@ -271,7 +274,14 @@ defmodule Flezha.SDK.Bounded.Driver do
   # first.
   # The entrance for a message this instance has not taken before.
   defp enter(%State{} = s, channel, message, metadata) do
-    case Inbox.enter(s.runner, s.operator_id, s.spec.topology, channel, message) do
+    case Inbox.enter(
+           s.runner,
+           s.operator_id,
+           s.spec.topology,
+           channel,
+           message,
+           Inbox.input_call(metadata)
+         ) do
       {:ok, channel, value} ->
         s = %{s | instance: Instance.push_inbox(s.instance, channel, value, metadata)}
         if s.idle, do: settle(begin_iteration(%{s | idle: nil})), else: {:noreply, s}
@@ -536,6 +546,7 @@ defmodule Flezha.SDK.Bounded.Driver do
       fresh_iteration(s)
       | origin: %{firing: firing, carry: s.carry},
         carry: nil,
+        pass_call: nil,
         awaiting: %{},
         owed: %{}
     }
@@ -608,13 +619,13 @@ defmodule Flezha.SDK.Bounded.Driver do
         {:firing, %{s | instance: instance}, firing}
 
       {:ok, item, instance} ->
-        {:message, %{s | instance: instance, consumed_offset: item.offset}, item}
+        {:message, message_pass(s, instance, item), item}
 
       {:empty, _instance} ->
         cond do
           message_fed?(s) -> :wait
           s.carry in [nil, []] -> {:done, s}
-          true -> {:carry, %{s | carry: nil, consumed_offset: nil}, s.carry}
+          true -> {:carry, %{s | carry: nil, consumed_offset: nil, pass_call: nil}, s.carry}
         end
     end
   end
@@ -622,12 +633,15 @@ defmodule Flezha.SDK.Bounded.Driver do
   defp pop_message(%State{} = s) do
     case Instance.pop_inbox(s.instance) do
       {:ok, item, instance} ->
-        {:message, %{s | instance: instance, consumed_offset: item.offset}, item}
+        {:message, message_pass(s, instance, item), item}
 
       {:empty, _instance} ->
         :wait
     end
   end
+
+  defp message_pass(%State{} = s, instance, item),
+    do: %{s | instance: instance, consumed_offset: item.offset, pass_call: item.call}
 
   # Every pass of a `:per_input` loop takes a message; any loop's first pass
   # does; a chained loop's later passes are carry-fed.
@@ -685,7 +699,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   # commit and its undo name, whether or not they emit. One that handed
   # nothing to any Cell has no barrier to wait for, so it is finished at once.
   defp dispatch_stage(%State{} = s, node_ref, batch) do
-    {keys, awaiting, cells} = Stage.dispatch(s.cells, node_ref, batch, self())
+    {keys, awaiting, cells} = Stage.dispatch(s.cells, node_ref, batch, s.pass_call, self())
 
     %{
       s
@@ -948,7 +962,8 @@ defmodule Flezha.SDK.Bounded.Driver do
         "tasklet `#{tasklet}` failed after #{attempts} attempt(s): #{error}",
         nil,
         cell_key: "_turn",
-        attempts: attempts
+        attempts: attempts,
+        reply_to: s.pass_call
       )
 
       undo_turn(s)

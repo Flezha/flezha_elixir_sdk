@@ -20,15 +20,16 @@ defmodule Flezha.SDK.Bounded.Instance do
   defmodule Item do
     @moduledoc """
     One message through the entrance: the entry channel it named, its value as
-    that channel's parser made it, and its input-log offset (`nil` when
-    unjournaled).
+    that channel's parser made it, its input-log offset (`nil` when
+    unjournaled) and the outside call waiting on it (`nil` when none).
     """
-    defstruct [:channel, :payload, :offset]
+    defstruct [:channel, :payload, :offset, :call]
 
     @type t :: %__MODULE__{
             channel: String.t(),
             payload: term(),
-            offset: non_neg_integer() | nil
+            offset: non_neg_integer() | nil,
+            call: binary() | nil
           }
   end
 
@@ -150,7 +151,13 @@ defmodule Flezha.SDK.Bounded.Instance do
   @doc "Append one message on `channel`, at the input-log offset its metadata carries."
   @spec push_inbox(t(), String.t(), term(), map()) :: t()
   def push_inbox(%__MODULE__{} = i, channel, payload, metadata) do
-    item = %Item{channel: channel, payload: payload, offset: Inbox.input_offset(metadata)}
+    item = %Item{
+      channel: channel,
+      payload: payload,
+      offset: Inbox.input_offset(metadata),
+      call: Inbox.input_call(metadata)
+    }
+
     %{i | inbox: :queue.in(item, i.inbox)}
   end
 

@@ -34,10 +34,17 @@
     "branch",
     "sync_durability",
     "merge",
-    "shorthand"
+    "shorthand",
+    "response"
   ],
   "deferred": [],
   "fixtures": {
+    "call_response": [
+      "call_echo",
+      "call_downstream",
+      "call_split",
+      "call_turn"
+    ],
     "runner_lifecycle": [
       "do_nothing",
       "compare_filter",

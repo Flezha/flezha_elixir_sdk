@@ -421,12 +421,13 @@ defmodule ElixirRunner.Conformance do
 
   defp channel({source, name, producer}, topology) do
     routes = Map.get(topology.routes, source, [])
-    sinks = for %{to: {:sink, plugin}} <- routes, do: plugin
+    ends = for %{to: {:sink, _}} = route <- routes, do: route
+    sinks = for %{response: false, to: {:sink, plugin}} <- ends, do: plugin
     consumers = for %{to: {:node, ref}} <- routes, do: Map.fetch!(topology.node_seq, ref)
 
     cond do
       producer == nil -> line(name, "entry", nil, consumers, sinks)
-      sinks == [] and consumers == [] -> nil
+      ends == [] and consumers == [] -> nil
       consumers == [] -> line(name, "plugin", producer, consumers, sinks)
       true -> line(name, "inter_task", producer, consumers, sinks)
     end
@@ -531,6 +532,7 @@ defmodule ElixirRunner.Conformance do
   defp stream_link("named", name, stream), do: Channels.named(stream, name)
   defp stream_link("sink", "", stream), do: Channels.sink(stream)
   defp stream_link("sink", name, stream), do: Channels.sink(stream, name)
+  defp stream_link("response", _, stream), do: Channels.response(stream)
   defp stream_link("retry_max", n, stream), do: Channels.retry_max(stream, integer(n))
   defp stream_link("on_full", policy, stream), do: Channels.on_full(stream, overflow(policy))
 

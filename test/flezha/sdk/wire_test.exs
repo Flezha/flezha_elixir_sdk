@@ -207,7 +207,7 @@ defmodule Flezha.SDK.WireTest do
       # Java DlqRetryTest fixture.
       fixture =
         <<0x03, ?s, ?#, ?0, 0x01, 0x07, 0x02, ?i, ?n, 0x04, ?b, ?o, ?o, ?m, 0x03, 0x01, 0x02,
-          0x01, 0x02>>
+          0x01, 0x02, 0x01, 0x03, ?w, ?:, ?t>>
 
       assert {:ok, park} = Wire.decode_park_body(fixture)
       assert park.park_id == "s#0"
@@ -216,6 +216,7 @@ defmodule Flezha.SDK.WireTest do
       assert park.error == "boom"
       assert park.attempts == 3
       assert park.payload == <<1, 2>>
+      assert park.reply_to == "w:t"
 
       # encode is the byte-exact inverse — the SDK's park frame cannot drift.
       assert fixture ==
@@ -225,10 +226,11 @@ defmodule Flezha.SDK.WireTest do
                  channel: "in",
                  error: "boom",
                  attempts: 3,
-                 payload: <<1, 2>>
+                 payload: <<1, 2>>,
+                 reply_to: "w:t"
                })
 
-      assert byteless_fixture = <<0x01, ?x, 0x00, 0x02, ?i, ?n, 0x01, ?e, 0x01, 0x00>>
+      assert byteless_fixture = <<0x01, ?x, 0x00, 0x02, ?i, ?n, 0x01, ?e, 0x01, 0x00, 0x00>>
 
       assert byteless_fixture ==
                Wire.encode_park_body(%{
@@ -240,10 +242,11 @@ defmodule Flezha.SDK.WireTest do
                  payload: nil
                })
 
-      byteless = <<0x01, ?x, 0x00, 0x02, ?i, ?n, 0x01, ?e, 0x01, 0x00>>
+      byteless = <<0x01, ?x, 0x00, 0x02, ?i, ?n, 0x01, ?e, 0x01, 0x00, 0x00>>
       assert {:ok, park} = Wire.decode_park_body(byteless)
       assert park.origin_offset == nil
       assert park.payload == nil
+      assert park.reply_to == nil
 
       assert {:error, :trailing_bytes} = Wire.decode_park_body(fixture <> <<0>>)
       assert {:error, _} = Wire.decode_park_body(binary_part(fixture, 0, 5))

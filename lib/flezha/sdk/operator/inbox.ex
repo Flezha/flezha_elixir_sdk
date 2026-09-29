@@ -32,21 +32,38 @@ defmodule Flezha.SDK.Operator.Inbox do
     end
   end
 
+  @doc """
+  The token of the outside call waiting on an input (`flz.reply_to`), `nil`
+  when nobody waits on it.
+  """
+  @spec input_call(map()) :: binary() | nil
+  def input_call(metadata) do
+    case Map.get(metadata, "flz.reply_to") do
+      token when is_binary(token) and token != "" -> token
+      _none -> nil
+    end
+  end
+
   @doc "Route a raw input frame arriving on an entry channel."
   def input(pid, channel, message, metadata),
     do: GenServer.cast(pid, {:input, channel, message, metadata})
 
   @doc """
   A Cell finished a dispatch: its emits as `{value, metadata, key}`, the
-  change seq the dispatch started at — what a keyed sink's stamps read — and
-  the durable offset of the input that produced them, which an
-  inter-tasklet push inherits under the effectively-once tier.
+  change seq the dispatch started at — what a keyed sink's stamps read — the
+  durable offset of the input that produced them, which an inter-tasklet push
+  inherits under the effectively-once tier, and the call waiting on that
+  input, which every push inherits and a `response()` output answers.
 
   `report` is `{cell_pid, ref}` when the Cell is holding that invocation's
   effect record until every push lands, and nil when it owes nothing.
   """
-  def emitted(pid, node_ref, cell_key, emits, handout_seq, offset, report),
-    do: GenServer.cast(pid, {:emitted, node_ref, cell_key, emits, handout_seq, offset, report})
+  def emitted(pid, node_ref, cell_key, emits, handout_seq, {offset, call}, report),
+    do:
+      GenServer.cast(
+        pid,
+        {:emitted, node_ref, cell_key, emits, handout_seq, {offset, call}, report}
+      )
 
   @doc """
   A bounded stage's Cell has a processing-time timer due: the driver decides
@@ -77,11 +94,18 @@ defmodule Flezha.SDK.Operator.Inbox do
   One frame through the entrance: `{:ok, channel, value}` once the name
   resolved and the channel's parser read the bytes, or `:parked` when the
   frame named a channel `topo` does not declare or the parser rejected it,
-  parked under that name, on `runner`, with `operator_id`'s identity.
+  parked under that name, on `runner`, with `operator_id`'s identity and the
+  `call` waiting on the frame.
   """
-  @spec enter(pid(), String.t(), Flezha.SDK.Topology.t(), String.t() | nil, binary()) ::
-          {:ok, String.t(), term()} | :parked
-  def enter(runner, operator_id, topo, channel, message) do
+  @spec enter(
+          pid(),
+          String.t(),
+          Flezha.SDK.Topology.t(),
+          String.t() | nil,
+          binary(),
+          binary() | nil
+        ) :: {:ok, String.t(), term()} | :parked
+  def enter(runner, operator_id, topo, channel, message, call) do
     case resolve_channel(topo, channel) do
       {:unresolved, requested} ->
         park_pre_dispatch(
@@ -90,7 +114,8 @@ defmodule Flezha.SDK.Operator.Inbox do
           @unresolved_tasklet_id,
           requested,
           unresolved_entry_error(topo, requested),
-          message
+          message,
+          reply_to: call
         )
 
         :parked
@@ -107,7 +132,8 @@ defmodule Flezha.SDK.Operator.Inbox do
               channel,
               channel,
               "entry parse failed: #{inspect(reason)}",
-              message
+              message,
+              reply_to: call
             )
 
             :parked
@@ -177,6 +203,7 @@ defmodule Flezha.SDK.Operator.Inbox do
   chose. `channel` is the row's attribution and may be a name off the wire.
   A bounded driver parks a failed turn here too, under its `_turn` slot:
   `opts` then name the `cell_key` and the `attempts` it failed after.
+  `opts[:reply_to]` is the call waiting on the parked input, if any.
   """
   def park_pre_dispatch(runner, operator_id, tasklet_id, channel, error, payload, opts \\ []) do
     park_id = "#{operator_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
@@ -185,7 +212,14 @@ defmodule Flezha.SDK.Operator.Inbox do
       runner,
       self(),
       Park.identity(operator_id, tasklet_id, Keyword.get(opts, :cell_key, "")),
-      Park.body(park_id, channel, error, Keyword.get(opts, :attempts, 1), payload)
+      Park.body(
+        park_id,
+        channel,
+        error,
+        Keyword.get(opts, :attempts, 1),
+        payload,
+        Keyword.get(opts, :reply_to)
+      )
     )
 
     :ok
