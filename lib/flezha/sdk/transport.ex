@@ -13,6 +13,8 @@ defmodule Flezha.SDK.Transport do
 
   alias Flezha.SDK.{Connect, Hold, Knob, LocalStream, Native}
 
+  require Logger
+
   @typedoc "A stream handle: an in-node stream, or a socket stream of this package's NIF."
   @type handle :: LocalStream.t() | reference()
 
@@ -63,6 +65,22 @@ defmodule Flezha.SDK.Transport do
   @spec diagnosis(:native | :uds | :quic) :: String.t()
   def diagnosis(:native), do: "in-node transport; no socket is involved"
   def diagnosis(mode), do: Native.connect_diagnosis(mode)
+
+  @doc """
+  Say, once per runner start, that the transport is experimental. Called where
+  the runner server starts rather than in `connect/3`, which a reconnect calls
+  again. A stable transport says nothing.
+  """
+  @spec announce(:native | :uds | :quic) :: :ok
+  def announce(:quic) do
+    Logger.warning(
+      "[Flezha.SDK] the QUIC transport is experimental: its settings and behaviour may " <>
+        "change drastically or it may be removed without a compatibility break. " <>
+        "See docs/publishing/maturity.md#quic"
+    )
+  end
+
+  def announce(_stable), do: :ok
 
   @doc """
   Establish `count` primary+secondary data stream pairs. Returns

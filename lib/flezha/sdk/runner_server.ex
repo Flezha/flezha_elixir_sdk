@@ -137,6 +137,7 @@ defmodule Flezha.SDK.RunnerServer do
   def init(opts) do
     Process.flag(:trap_exit, true)
     state = initial_state(opts)
+    Transport.announce(state.transport)
 
     case do_connect(state) do
       {:ok, state} ->
