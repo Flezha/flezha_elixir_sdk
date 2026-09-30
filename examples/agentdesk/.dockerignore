@@ -1,0 +1,3 @@
+# The runner's image needs the release only, not the rest of _build/.
+*
+!_build/prod/rel/agentdesk
