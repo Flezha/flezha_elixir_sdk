@@ -3,7 +3,7 @@ defmodule Flezha.SDK.PartTest do
   `part/2`: a preview of an invocation's output, sent from inside `run/3` on
   the node's sink route. Parts are numbered per attempt from `0`, carry the
   attempt, the Cell and its key, leave before `run/3` returns, and are refused
-  on a channel with no sink (a `response()` end included) and through a ctx
+  on a channel with no sink (a `response()` or a `call` end included) and through a ctx
   whose invocation has returned. The frames match the shared fixture the core
   produces.
   """
@@ -116,6 +116,13 @@ defmodule Flezha.SDK.PartTest do
     def channels(c), do: c |> input("in") |> into(Refused) |> response()
   end
 
+  defmodule CallOp do
+    use Flezha.SDK.UnboundedOperator, factory_id: "part_call"
+
+    def channels(c),
+      do: c |> input("in") |> into(Refused) |> call("pricing", deadline_ms: 500) |> into(Log)
+  end
+
   defmodule KeepOp do
     use Flezha.SDK.UnboundedOperator, factory_id: "part_keep"
     def channels(c), do: c |> input("in") |> into(Refused) |> sink("answer")
@@ -211,6 +218,14 @@ defmodule Flezha.SDK.PartTest do
       assert error.details["channel"] not in [nil, ""]
       refute_received {:flz_data, _, "output_part", _, _}
     end
+  end
+
+  test "a channel that ends in a call refuses a part: only a sink end satisfies one" do
+    op = start(CallOp, "part_call_op")
+    Inbox.input(op, "in", "x", %{})
+    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
+    assert error.details["channel"] == "refused"
+    refute_received {:flz_data, _, "output_part", _, _}
   end
 
   test "a ctx kept past its invocation is refused" do

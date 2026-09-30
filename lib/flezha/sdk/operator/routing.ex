@@ -19,13 +19,16 @@ defmodule Flezha.SDK.Operator.Routing do
   @typedoc "The identity facts a keyed sink stamps with, or nil for a capture that never stamps."
   @type stamp_with :: {binary(), map()} | nil
 
+  @end_keys ~w(flz.reply_to flz.call flz.call_create flz.call_response flz.deadline_at
+               flz.call_channel flz.key)
+
   @doc """
   One plugin output's frame: its metadata (channel, the call a `response()`
-  output answers, then the stamps) and its bytes.
+  output answers or a call end's stamps, then the identity stamps) and its bytes.
   """
   @spec sink_frame(map(), term(), map(), non_neg_integer(), stamp_with()) :: {map(), binary()}
   def sink_frame(route, value, emit, ordinal, stamp_with) do
-    metadata = emit.meta |> Map.put("channel", route.channel) |> answer(route, emit)
+    metadata = emit.meta |> Map.put("channel", route.channel) |> answer(route, emit, value)
 
     metadata =
       case stamp_with do
@@ -40,20 +43,43 @@ defmodule Flezha.SDK.Operator.Routing do
   end
 
   @doc """
-  A `response()` output carries `flz.reply_to`: the call its input carried,
-  or an empty value when nobody waits on it. No other output carries the key.
+  The keys an output's end stamps, and only that end: a `response()` output's
+  `flz.reply_to`, the call its input carried or an empty value when nobody
+  waits on it; a call end's callee, its Response channel, its deadline (wall
+  clock at the emit) and the chain's key. Every other output drops them.
   """
-  @spec answer(map(), map(), map()) :: map()
-  def answer(metadata, %{response: true}, emit),
-    do: Map.put(metadata, "flz.reply_to", Map.get(emit, :call) || "")
+  @spec answer(map(), map(), map(), term()) :: map()
+  def answer(metadata, route, emit, value) do
+    metadata = Map.drop(metadata, @end_keys)
 
-  def answer(metadata, _route, _emit), do: metadata
+    case route do
+      %{response: true} -> Map.put(metadata, "flz.reply_to", Map.get(emit, :call) || "")
+      %{call: %{} = call} -> call_stamps(metadata, call, route.key_by && route.key_by.(value))
+      _plain -> metadata
+    end
+  end
+
+  defp call_stamps(metadata, call, key) do
+    [
+      {"flz.call", call.target},
+      {"flz.call_create", if(call.create, do: nil, else: "false")},
+      {"flz.call_response", call.response},
+      {"flz.deadline_at", Integer.to_string(System.system_time(:millisecond) + call.deadline_ms)},
+      {"flz.call_channel", call.channel},
+      {"flz.key", key}
+    ]
+    |> Enum.reject(&match?({_key, nil}, &1))
+    |> Enum.into(metadata)
+  end
 
   @doc """
   The emit's own key, else the sink route's `key_by`, else the emitting
-  Cell's — the reference's `emit_keyed` and then the cell-key default.
+  Cell's — the reference's `emit_keyed` and then the cell-key default. A call
+  end's key is its chain's alone, or none.
   """
   @spec sink_key(map(), term(), map()) :: binary() | nil
+  def sink_key(%{call: %{}} = route, value, _emit), do: route.key_by && route.key_by.(value)
+
   def sink_key(route, value, emit) do
     cond do
       emit.key -> emit.key

@@ -162,7 +162,7 @@ defmodule Flezha.SDK.Topology do
 
   defp issue_error(issue) do
     [tag | fields] = Tuple.to_list(issue)
-    keys = Map.fetch!(@issue_details, tag)
+    keys = @issue_details[tag] || Flezha.SDK.CallEnd.issue_details(tag)
     Error.new("topology." <> Macro.underscore(Atom.to_string(tag)), Enum.zip(keys, fields))
   end
 
@@ -199,7 +199,7 @@ defmodule Flezha.SDK.Topology do
          node_knobs: node_knobs(channels),
          routes: routes,
          order: Map.keys(acc.nodes),
-         keyless?: keyless?(acc, node_mode),
+         keyless?: keyless?(acc, channels, node_mode),
          persistence_enabled?: UnboundedOperator.persistence_enabled?(module),
          sleep_when_idle?: sleeps?(module, kind),
          compact_after_bytes: compact_after_bytes(acc),
@@ -323,7 +323,13 @@ defmodule Flezha.SDK.Topology do
   end
 
   defp walk_link(_acc, _chain, {:response, serializer}, {state, steps, walk}) do
-    {terminate_response(state, serializer, steps), steps, %{walk | closed?: true}}
+    wire = plugin_end(nil, serializer, steps, false, :response)
+    {Flezha.SDK.CallEnd.terminate(state, wire, walk.key?), steps, %{walk | closed?: true}}
+  end
+
+  defp walk_link(_acc, _chain, {:call, call, serializer}, {state, steps, walk}) do
+    wire = plugin_end(nil, serializer, steps, false, call)
+    {Flezha.SDK.CallEnd.terminate(state, wire, walk.key?), steps, %{walk | closed?: true}}
   end
 
   defp walk_link(acc, chain, {:into, node_ref}, {state, steps, walk}),
@@ -349,7 +355,7 @@ defmodule Flezha.SDK.Topology do
     {wire(acc, state, edge, steps), steps, %{walk | closed?: true}}
   end
 
-  defp terminated?(state, walk), do: walk.closed? or state.sinks != []
+  defp terminated?(state, walk), do: walk.closed? or Enum.any?(state.sinks, &is_nil(&1.call))
 
   # A channel may still carry more than one plugin wire — the keyed wire beside
   # the plain one, which stamps and does not. What it may not carry is two
@@ -358,26 +364,19 @@ defmodule Flezha.SDK.Topology do
   # identical routes with every value delivered twice.
   defp terminate_sink(state, plugin, serializer, steps, keyed?) do
     cond do
-      Enum.any?(state.sinks, & &1.response) ->
+      Enum.any?(state.sinks, &(&1.response or &1.call != nil)) ->
         issue(state, {:ChannelEndsTwice, state.name})
 
       Enum.any?(state.sinks, &(&1.keyed == keyed?)) ->
         issue(state, {:DuplicatePluginSink, state.name, plugin})
 
       true ->
-        %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, false) | state.sinks]}
+        %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, :sink) | state.sinks]}
     end
   end
 
-  # A response is a plugin end like a sink, never beside one: a channel whose
-  # value both answered a caller and reached a plugin would leave twice.
-  defp terminate_response(state, serializer, steps) do
-    if state.sinks == [],
-      do: %{state | sinks: [plugin_end(nil, serializer, steps, false, true)]},
-      else: issue(state, {:ChannelEndsTwice, state.name})
-  end
-
-  defp plugin_end(plugin, serializer, steps, keyed?, response?) do
+  # `ends` is `:sink`, `:response` or the call end a `call` link carries.
+  defp plugin_end(plugin, serializer, steps, keyed?, ends) do
     {transform, key_by} = Channels.fuse(Enum.reverse(steps))
 
     %{
@@ -386,7 +385,8 @@ defmodule Flezha.SDK.Topology do
       transform: transform,
       key_by: key_by,
       keyed: keyed?,
-      response: response?
+      response: ends == :response,
+      call: if(is_map(ends), do: ends)
     }
   end
 
@@ -454,6 +454,7 @@ defmodule Flezha.SDK.Topology do
             serializer: wire.serializer,
             keyed: wire.keyed,
             response: wire.response,
+            call: wire.call,
             # The channel a frame off this route is named by: a static
             # property of the route's source, resolved once here.
             channel: channel.name
@@ -513,7 +514,7 @@ defmodule Flezha.SDK.Topology do
       sleep_facts(module, kind) ++
       kind_facts(module, kind, acc, mod_name(module)) ++
       cycles(acc, shape.routes) ++
-      changeful_identity(acc)
+      changeful_identity(acc) ++ Flezha.SDK.CallEnd.unread(shape.channels)
   end
 
   # One namespace per operator for channels and one for node identities: a
@@ -667,13 +668,11 @@ defmodule Flezha.SDK.Topology do
     |> Enum.reverse()
   end
 
-  # An answer is identified by its call, so a response end needs no key.
+  # An answer or a call is identified by its call, so neither end needs a key.
   defp check_wires_under_tier(is, channel, true) do
-    Enum.reduce(channel.sinks, is, fn
-      %{keyed: true}, is -> is
-      %{response: true}, is -> is
-      %{keyed: false}, is -> [{:UnkeyedChannelUnderEffectivelyOnce, channel.name} | is]
-    end)
+    for %{keyed: false, response: false, call: nil} <- channel.sinks,
+        reduce: is,
+        do: (is -> [{:UnkeyedChannelUnderEffectivelyOnce, channel.name} | is])
   end
 
   defp check_wires_under_tier(is, _channel, _tier?), do: is
@@ -869,10 +868,11 @@ defmodule Flezha.SDK.Topology do
 
   defp mod_name(module), do: inspect(module)
 
-  # A topology with no tasklet that would create a keyed Cell is "keyless"
-  # for the controller's partitioned-start preflight.
-  defp keyless?(acc, node_mode) do
-    acc.nodes != %{} and
-      Enum.all?(node_mode, fn {_ref, mode} -> mode == :single end)
+  # A topology whose entry channels feed no tasklet that creates a keyed Cell
+  # is "keyless" for the controller's partitioned-start preflight: a key
+  # routes an input only where it enters, as `flz_core` judges it.
+  defp keyless?(acc, channels, node_mode) do
+    fed = for %{source: {:entry, _}} = c <- channels, edge <- c.consumers, do: edge.to
+    acc.nodes != %{} and Enum.all?(fed, &(Map.fetch!(node_mode, &1) == :single))
   end
 end

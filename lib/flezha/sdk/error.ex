@@ -76,19 +76,27 @@ defmodule Flezha.SDK.Error do
   @spec from_document(String.t()) :: t() | nil
   def from_document(document) do
     case Jason.decode(document) do
-      {:ok, %{"error" => %{"code" => code} = error}} when is_binary(code) and code != "" ->
-        %__MODULE__{
-          code: code,
-          class: class(error["class"]),
-          message: error["message"] || "",
-          details: error["details"] || %{},
-          hint: error["hint"]
-        }
-
-      _ ->
-        nil
+      {:ok, %{"error" => error}} -> from_object(error)
+      _ -> nil
     end
   end
+
+  @doc """
+  The error a decoded error object (`code`, `class`, `message`, `details`,
+  `hint`) carries; `nil` when it names no code.
+  """
+  @spec from_object(term()) :: t() | nil
+  def from_object(%{"code" => code} = error) when is_binary(code) and code != "" do
+    %__MODULE__{
+      code: code,
+      class: class(error["class"]),
+      message: error["message"] || "",
+      details: error["details"] || %{},
+      hint: error["hint"]
+    }
+  end
+
+  def from_object(_other), do: nil
 
   @doc """
   The error a controller reply carried as a wire `Error` message; `nil` for a

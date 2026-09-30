@@ -200,7 +200,8 @@ defmodule Flezha.SDK.Cell.Tier do
       %{
         channel: route.channel,
         key: Routing.sink_key(route, out, emit) || "",
-        metadata: meta |> Map.delete("channel") |> Routing.answer(route, emit) |> Enum.sort(),
+        metadata:
+          meta |> Map.delete("channel") |> Routing.answer(route, emit, out) |> Enum.sort(),
         payload: route.serializer.(out)
       }
     end

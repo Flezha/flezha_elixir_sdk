@@ -70,6 +70,7 @@ defmodule ElixirRunner.Application do
           ElixirRunner.Bounded.all() ++
           ElixirRunner.BoundedLoop.all() ++
           ElixirRunner.Call.all() ++
+          ElixirRunner.OperatorCall.all() ++
           ElixirRunner.Part.all()
 
       topology ->

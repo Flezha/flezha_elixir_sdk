@@ -1867,8 +1867,6 @@ defmodule Flezha.SDK.Bounded.DriverTest do
         do: Inbox.input(driver, "in", turn, %{"flz.offset" => Integer.to_string(offset)})
   end
 
-  defp iter_commits(messages), do: for({:shipped, {:iter_commit, c}} <- messages, do: c)
-
   test "a failed turn is dead-lettered, undone once, and the next message is the next iteration" do
     driver = start_loop(TurnLoop, park_idle_ms: 60_000, dead_letter_turns: true)
     send_turns(driver, ~w(hello boom again))

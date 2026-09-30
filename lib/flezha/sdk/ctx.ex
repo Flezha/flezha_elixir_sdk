@@ -377,7 +377,7 @@ defmodule Flezha.SDK.Ctx do
   is dropped and counted, and an invocation of a replayed input sends none.
 
   `:ok`, or `{:error, %Error{}}`: `part.no_sink` when the node's channel does
-  not end in a sink (a `response()` end is not one), `part.outside_invocation`
+  not end in a sink (a `response()` or a `call` end is not one), `part.outside_invocation`
   through a ctx whose invocation has returned.
   """
   @spec part(t(), term()) :: :ok | {:error, Error.t()}

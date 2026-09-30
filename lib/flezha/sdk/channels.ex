@@ -2,9 +2,8 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`/`response`/`response_with`, `merge`
-  with `from`, and
-  `route_latest`/`route_latest_named`), per-edge knobs
+  (`into`/`into_named`/`sink`/`sink_with`/`response`/`response_with`/`call`,
+  `merge` with `from`, and `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
   identity on the plugin wire the handle reaches) and the class-level tier
   declarations (`effectively_once`, the three checkpoint options and the two
@@ -27,7 +26,7 @@ defmodule Flezha.SDK.Channels do
   end for, and neither reaches the record.
   """
 
-  alias Flezha.SDK.{Merge, RouteLatest, Stream}
+  alias Flezha.SDK.{Merge, Response, RouteLatest, Stream}
 
   @enforce_keys [:ref]
   defstruct [:ref]
@@ -44,6 +43,7 @@ defmodule Flezha.SDK.Channels do
           | :keyed
           | {:sink, String.t(), (term() -> binary())}
           | {:response, (term() -> binary())}
+          | {:call, map(), (term() -> binary())}
           | {:into, reference()}
           | {:merge, reference(), non_neg_integer()}
           | {:branch, non_neg_integer()}
@@ -164,7 +164,8 @@ defmodule Flezha.SDK.Channels do
     update(ref, fn acc ->
       %{
         acc
-        | entries: Map.put_new(acc.entries, name, %{parser: parser}),
+        | entries:
+            Map.put_new(acc.entries, name, %{parser: parser, after_nodes: map_size(acc.nodes)}),
           entry_order: [name | acc.entry_order]
       }
     end)
@@ -301,6 +302,56 @@ defmodule Flezha.SDK.Channels do
   @doc "`response/1` with a custom serializer."
   def response_with(%Stream{} = s, serializer) when is_function(serializer, 1),
     do: %{link(s, {:response, serializer}) | chain_id: nil}
+
+  @doc """
+  End the chain in a call to another operator: every value reaching it, after
+  the chain's transforms and key, is one request, written as `sink/2` writes
+  (`serialize:`). `target` names an instance, or a partition group whose
+  member the chain's key chooses; `factory:` instead names a factory whose
+  instance the key names, started when absent unless `create: false`.
+  `deadline_ms:` is required and positive; `channel:` names the callee's
+  entry channel the request enters on.
+
+  Answers a handle on the Response channel, the entry channel
+  `<channel>.response`, whose values are `%Flezha.SDK.Response{}`: the answer
+  read by `decode:` as `input_with/3`'s parser reads (the raw bytes by
+  default). A call is not an edge, so the Response channel may feed the
+  tasklet that made the call. A channel ends in one sink, one response or one
+  call (`ChannelEndsTwice`).
+
+      turns |> call("pricing", deadline_ms: 300) |> into(Price)
+      turns |> key_by(& &1.session) |> call(factory: "agent", deadline_ms: 60_000, create: false)
+  """
+  @spec call(Stream.t(), String.t() | nil, keyword()) :: Stream.t()
+  def call(stream, target \\ nil, opts)
+
+  def call(%Stream{source: {:entry, name}} = s, _target, _opts),
+    do: refuse(s, {:SinkOnEntry, name})
+
+  def call(%Stream{builder: ref} = s, target, opts) when is_list(opts) do
+    name = channel_name(Process.get(acc_key(ref)), s.source) <> ".response"
+    _ = link(s, {:call, call_end(target, opts, name), opts[:serialize] || (&default_serialize/1)})
+    decode = opts[:decode] || (&default_parse/1)
+    input_with(%__MODULE__{ref: ref}, name, &Response.decode(&1, decode))
+  end
+
+  # The end as the wire names its callee: `id:<target>` or `factory:<factory>`.
+  defp call_end(target, opts, response) do
+    {factory, deadline_ms} = {opts[:factory], Keyword.fetch!(opts, :deadline_ms)}
+
+    unless is_binary(target) != is_binary(factory) and is_integer(deadline_ms) and
+             deadline_ms >= 0,
+           do: raise(ArgumentError, "call takes one target or factory: and deadline_ms: >= 0")
+
+    %{
+      target: if(factory, do: "factory:" <> factory, else: "id:" <> target),
+      factory?: factory != nil,
+      create: Keyword.get(opts, :create, true),
+      deadline_ms: deadline_ms,
+      channel: opts[:channel],
+      response: response
+    }
+  end
 
   # A sink that names the channel records the name where `named/2` records its
   # own, so one rule answers what a channel is called and the check can see a

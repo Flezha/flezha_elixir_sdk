@@ -25,6 +25,26 @@ Elixir 1.17 or later.
 `Flezha.SDK.Local` runs an operator's declared graph in your own process with no
 controller at all, holding state in memory only.
 
+## Answering a caller, calling an operator
+
+A channel can end in `response/1`, which answers the outside call its input
+carried, or in `call/3`, which sends each value to another operator and hands
+the outcome back on a new entry channel, `<channel>.response`:
+
+```elixir
+def channels(c) do
+  turns = c |> input("in") |> into(Turn)
+  turns |> key_by(& &1.session) |> call(factory: "agent", deadline_ms: 60_000) |> into(Turn)
+end
+```
+
+`call/3` takes a target instance (`call(stream, "pricing", deadline_ms: 300)`)
+or `factory:` (with `create: false` to reach only a running instance), a
+required `deadline_ms:`, and optional `channel:`, `serialize:` and `decode:`.
+Each outcome is a `%Flezha.SDK.Response{}`: `request` (the bytes sent),
+`result` (`{:ok, answer}` or `{:error, %Flezha.SDK.Error{}}`, a missed deadline
+being `call.timeout`), `target` (the callee's instance id) and `created`.
+
 ## The socket client
 
 `:uds` and `:quic` dial through a small native library, `Flezha.SDK.Native`. It

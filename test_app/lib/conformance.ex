@@ -298,7 +298,7 @@ defmodule ElixirRunner.Conformance do
         %{
           "topology" => row.topology,
           "outcome" => "accepted",
-          "derived" => derived(topology, entry_order(module))
+          "derived" => derived(topology, entries(module))
         }
 
       {:error, refusal} ->
@@ -402,18 +402,20 @@ defmodule ElixirRunner.Conformance do
 
   # --- the derived declaration ---
 
-  # One entry per channel in declaration order: the entry channels the row
-  # opened, then every producing channel something terminates on. A producer's
-  # output channel nothing closes on is no channel at all, which is what the
-  # fixture's seven-column table states.
-  defp derived(topology, entry_order) do
-    nodes = Enum.sort_by(topology.node_seq, fn {_ref, seq} -> seq end)
+  # One entry per channel in declaration order: an entry channel where the row
+  # opened it among the producing channels, and every producing channel
+  # something terminates on. A producer's output channel nothing closes on is
+  # no channel at all, which is what the fixture's seven-column table states.
+  defp derived(topology, entries) do
+    entries = for {name, after_nodes} <- entries, do: {after_nodes, {{:entry, name}, name, nil}}
 
-    entries = for name <- entry_order, do: {{:entry, name}, name, nil}
-    outputs = for {ref, seq} <- nodes, do: {{:node, ref}, topology.node_channel[ref], seq}
+    outputs =
+      for {ref, seq} <- topology.node_seq,
+          do: {seq + 0.5, {{:node, ref}, topology.node_channel[ref], seq}}
 
     (entries ++ outputs)
-    |> Enum.map(&channel(&1, topology))
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&channel(elem(&1, 1), topology))
     |> Enum.reject(&is_nil/1)
     |> Enum.with_index()
     |> Enum.map(fn {channel, index} -> Map.put(channel, "index", index) end)
@@ -422,7 +424,7 @@ defmodule ElixirRunner.Conformance do
   defp channel({source, name, producer}, topology) do
     routes = Map.get(topology.routes, source, [])
     ends = for %{to: {:sink, _}} = route <- routes, do: route
-    sinks = for %{response: false, to: {:sink, plugin}} <- ends, do: plugin
+    sinks = for %{response: false, call: nil, to: {:sink, plugin}} <- ends, do: plugin
     consumers = for %{to: {:node, ref}} <- routes, do: Map.fetch!(topology.node_seq, ref)
 
     cond do
@@ -446,12 +448,14 @@ defmodule ElixirRunner.Conformance do
     }
   end
 
-  # The entry channels in declaration order. The compiled topology keeps them
-  # in a map, so the record the builder wrote is what states their order.
-  defp entry_order(module) do
+  # The entry channels in declaration order, each with how many tasklets were
+  # declared before it. The compiled topology keeps them in a map, so the
+  # record the builder wrote is what states their order.
+  defp entries(module) do
     c = Channels.new()
     _ = module.channels(c)
-    c |> Channels.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
+    record = Channels.take(c)
+    for name <- Enum.uniq(record.entry_order), do: {name, record.entries[name].after_nodes}
   end
 
   # --- the step vocabulary, mapped to this SDK's builder ---
@@ -507,15 +511,40 @@ defmodule ElixirRunner.Conformance do
   # One fluent sequence off a handle, its links left to right. Every step opens
   # a fresh chain, because the stored handle carries none.
   defp chain(head, links, acc) do
-    {_stream, acc} = Enum.reduce(links, {Map.fetch!(acc.handles, head), acc}, &link/2)
+    {_stream, acc} =
+      Enum.reduce(links, {Map.fetch!(acc.handles, head), acc}, &link(&1, &2, head))
+
     acc
   end
 
-  defp link(link, {stream, acc}) do
+  defp link(link, {stream, acc}, head) do
     case call(link) do
       {"into", role} -> into(stream, role, acc)
+      {"call" <> _ = verb, argument} -> {call_step(verb, argument, stream, head), acc}
       {verb, argument} -> {stream_link(verb, argument, stream), acc}
     end
+  end
+
+  # `<x>.call…(<arg>)`: a 500 ms call whose Response channel feeds the role
+  # that produces x, unless the step leaves it unread.
+  defp call_step(verb, argument, stream, role) do
+    response =
+      case verb do
+        "call_factory" ->
+          Channels.call(stream, factory: argument, deadline_ms: 500)
+
+        "call_factory_nocreate" ->
+          Channels.call(stream, factory: argument, deadline_ms: 500, create: false)
+
+        "call_deadline" ->
+          Channels.call(stream, "pricing", deadline_ms: integer(argument))
+
+        call when call in ["call", "call_unread"] ->
+          Channels.call(stream, argument, deadline_ms: 500)
+      end
+
+    if verb != "call_unread", do: Channels.into(response, tasklet(role))
+    stream
   end
 
   # `into` answers the consumer's own output channel, addressed by its role.

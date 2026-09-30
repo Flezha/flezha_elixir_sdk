@@ -8,8 +8,9 @@ defmodule Flezha.SDK.Bounded.Spec do
   does, so its topology is compiled by `Flezha.SDK.Topology.build/2`, which
   also refuses the unbounded operator's settings on it, and only the refusals a
   *bounded* graph adds are decided here: an entry channel to arrive on,
-  acyclic, reachable, and a chained loop whose every chain
-  converges on one terminal. Each entry channel roots a chain (the nodes it
+  acyclic, reachable, a chained loop whose every chain
+  converges on one terminal, and a call end only in a `:per_input` loop, the
+  one loop that reads the later message its Response is. Each entry channel roots a chain (the nodes it
   feeds and everything reachable from them), and a message runs only the chain
   of the channel it arrived on.
 
@@ -27,7 +28,7 @@ defmodule Flezha.SDK.Bounded.Spec do
   once — and reported as `{:error, {:invalid_bounded, issues}}`.
   """
 
-  alias Flezha.SDK.{Graph, Tasklet, Topology, BoundedOperator}
+  alias Flezha.SDK.{CallEnd, Graph, Tasklet, Topology, BoundedOperator}
 
   @enforce_keys [:factory_id, :module]
   defstruct factory_id: nil,
@@ -108,7 +109,7 @@ defmodule Flezha.SDK.Bounded.Spec do
       |> check_entry(factory_id, topo)
       |> check_chained_loop(factory_id, dag, knobs)
 
-    {dag, issues}
+    {dag, Enum.reverse(CallEnd.outside_per_input_loop(topo.routes, knobs.loop_mode)) ++ issues}
   end
 
   # A bounded operator's messages arrive on its entry channels; a class with none
