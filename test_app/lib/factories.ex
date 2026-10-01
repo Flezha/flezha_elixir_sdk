@@ -28,7 +28,7 @@ end
 
 defmodule ElixirRunner.CompareFilterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "compare_filter"
 
   def channels(c) do
@@ -77,7 +77,7 @@ end
 
 defmodule ElixirRunner.StaticCellOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "static_cell"
 
   def channels(c) do
@@ -116,7 +116,7 @@ end
 
 defmodule ElixirRunner.SugarStaticCellOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "sugar_static_cell"
 
   # The Rust `operator!` pipeline leaves the hop unnamed and lets the sink
@@ -160,7 +160,7 @@ end
 
 defmodule ElixirRunner.MixedOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "mixed_operator"
 
   def channels(c) do
@@ -183,7 +183,7 @@ end
 
 defmodule ElixirRunner.SugarDoNothing do
   @moduledoc false
-  use Flezha.SDK.UnboundedOperator,
+  use Flezha.SDK.Operator,
     factory_id: "sugar_do_nothing",
     sink: "sugar_do_nothing_echo"
 
@@ -195,7 +195,7 @@ end
 
 defmodule ElixirRunner.SugarStoreInput do
   @moduledoc false
-  use Flezha.SDK.UnboundedOperator,
+  use Flezha.SDK.Operator,
     factory_id: "sugar_store_input",
     sink: "sugar_store_sink"
 
@@ -215,7 +215,7 @@ end
 
 defmodule ElixirRunner.SugarNamedInput do
   @moduledoc false
-  use Flezha.SDK.UnboundedOperator,
+  use Flezha.SDK.Operator,
     factory_id: "sugar_named_input",
     sink: "sugar_named_input_sink",
     input: "prices"
@@ -226,12 +226,16 @@ defmodule ElixirRunner.SugarNamedInput do
   end
 end
 
-defmodule ElixirRunner.SugarBounded do
+defmodule ElixirRunner.SugarSteps do
   @moduledoc false
-  use Flezha.SDK.BoundedOperator,
-    factory_id: "sugar_bounded",
-    sink: "sugar_bounded_placed",
-    input: "order"
+  use Flezha.SDK.Operator,
+    factory_id: "sugar_steps",
+    sink: "sugar_steps_placed",
+    input: "order",
+    run: :steps
+
+  @impl true
+  def durable, do: ElixirRunner.fixture_durable()
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -239,14 +243,17 @@ defmodule ElixirRunner.SugarBounded do
   end
 end
 
-# A bounded short form that loops: one pass per message on `input`, and the
+# A steps short form that loops: one pass per message on `input`, and the
 # instance stays after each.
-defmodule ElixirRunner.SugarBoundedPerInput do
+defmodule ElixirRunner.SugarStepsPerInput do
   @moduledoc false
-  use Flezha.SDK.BoundedOperator,
-    factory_id: "sugar_bounded_per_input",
-    sink: "sugar_bounded_per_input_out",
-    loop_mode: :per_input
+  use Flezha.SDK.Operator,
+    factory_id: "sugar_steps_per_input",
+    sink: "sugar_steps_per_input_out",
+    run: {:steps, each: :per_input}
+
+  @impl true
+  def durable, do: ElixirRunner.fixture_durable()
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -257,7 +264,7 @@ end
 # The short form with no sink: `ticks` feeds a tasklet that only keeps state.
 defmodule ElixirRunner.SugarStateOnly do
   @moduledoc false
-  use Flezha.SDK.UnboundedOperator, factory_id: "sugar_state_only", input: "ticks"
+  use Flezha.SDK.Operator, factory_id: "sugar_state_only", input: "ticks"
 
   state do
     field(:seen, :list, default: [])
@@ -302,7 +309,7 @@ end
 
 defmodule ElixirRunner.HybridChannelOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "hybrid_channel"
 
   # The sunk handle fans out to the consumer as well. Unlike Rust, the SDK does
@@ -339,7 +346,7 @@ end
 
 defmodule ElixirRunner.MergedInputOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "merged_input"
 
   # Each source's mapping tags the value with the channel it came from, and the
@@ -378,7 +385,7 @@ end
 
 defmodule ElixirRunner.TransformChainOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "transform_chain"
 
   # Every value transform on one edge: `drop` is filtered out, a comma list fans
@@ -421,7 +428,7 @@ end
 
 defmodule ElixirRunner.PoisonProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "poison_probe"
 
   def channels(c) do
@@ -469,7 +476,7 @@ end
 
 defmodule ElixirRunner.WedgeProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "wedge_probe"
 
   def channels(c) do
@@ -522,7 +529,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropNothingOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bounded_mailbox_drop_nothing"
 
   def channels(c) do
@@ -538,7 +545,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropNewestOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bounded_mailbox_drop_newest"
 
   def channels(c) do
@@ -554,7 +561,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropOldestOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bounded_mailbox_drop_oldest"
 
   def channels(c) do
@@ -597,7 +604,7 @@ end
 
 defmodule ElixirRunner.PartitionRelayOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "partition_relay"
 
   # The plugin channel is named `input` because a forwarded frame keeps its
@@ -624,14 +631,14 @@ defmodule ElixirRunner.SpawnRequesterTask do
 
   alias Flezha.SDK.Spawn
 
-  @bounded "stateless_loop_bounded"
+  @steps "stateless_loop_steps"
 
   # The results are printed because the runner's stdout is the only place the
   # scenario can read them.
   @impl true
   def run(input, s, ctx) do
-    unnamed = spawn_bounded(ctx, @bounded, input)
-    named = spawn_bounded(ctx, @bounded, input, id: input)
+    unnamed = spawn_steps(ctx, @steps, input)
+    named = spawn_steps(ctx, @steps, input, id: input)
     report("unnamed", Spawn.await(unnamed))
     report("named", Spawn.await(named))
     {:ok, s}
@@ -647,7 +654,7 @@ end
 
 defmodule ElixirRunner.SpawnRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "spawn_requester"
 
   def channels(c) do
@@ -661,7 +668,7 @@ end
 
 # -- spawn_hold_requester ---------------------------------------------------
 
-# An effectively-once stream whose tasklet spawns `stateless_loop_bounded`
+# An effectively-once stream whose tasklet spawns `stateless_loop_steps`
 # with no id, prints the answer as `spawn_result hold <id> <outcome>`, then
 # blocks until the release env is set, so a runner killed there dies with the
 # spawn answered and its input not durably consumed.
@@ -673,23 +680,23 @@ defmodule ElixirRunner.SpawnHoldRequesterTask do
 
   @impl true
   def run(input, s, ctx) do
-    handle = spawn_bounded(ctx, "stateless_loop_bounded", input)
+    handle = spawn_steps(ctx, "stateless_loop_steps", input)
     ElixirRunner.SpawnRequesterTask.report("hold", Spawn.await(handle))
-    ElixirRunner.Bounded.Gate.block_until_released()
+    ElixirRunner.Steps.Gate.block_until_released()
     {:ok, s}
   end
 end
 
 defmodule ElixirRunner.SpawnHoldRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "spawn_hold_requester"
+  def run, do: {:flow, exactly: :effectively_once}
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
     |> input("in")
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.SpawnHoldRequesterTask)
@@ -706,11 +713,11 @@ defmodule ElixirRunner.SpawnOnceRequesterTask do
 
   alias Flezha.SDK.Spawn
 
-  # Spawns the `once` bounded operator with the input as its JSON ticket and prints the
+  # Spawns the `once` steps operator with the input as its JSON ticket and prints the
   # handle's answer; the spawned pass proves itself on stdout too.
   @impl true
   def run(input, s, ctx) do
-    handle = spawn_bounded(ctx, "typed_once_bounded", %{"text" => input})
+    handle = spawn_steps(ctx, "typed_once_steps", %{"text" => input})
     ElixirRunner.SpawnRequesterTask.report("once", Spawn.await(handle))
     {:ok, s}
   end
@@ -718,7 +725,7 @@ end
 
 defmodule ElixirRunner.SpawnOnceRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "spawn_once_requester"
 
   def channels(c) do
@@ -763,8 +770,8 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.SugarDoNothing,
       ElixirRunner.SugarStoreInput,
       ElixirRunner.SugarNamedInput,
-      ElixirRunner.SugarBounded,
-      ElixirRunner.SugarBoundedPerInput,
+      ElixirRunner.SugarSteps,
+      ElixirRunner.SugarStepsPerInput,
       ElixirRunner.SugarStateOnly
     ]
   end

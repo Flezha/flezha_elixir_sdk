@@ -1,8 +1,8 @@
-defmodule Flezha.SDK.Bounded.SpecTest do
+defmodule Flezha.SDK.Steps.SpecTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Topology}
-  alias Flezha.SDK.Bounded.Spec
+  alias Flezha.SDK.{Channels, Declarations, Topology}
+  alias Flezha.SDK.Steps.Spec
 
   # --- fixtures ---
 
@@ -40,9 +40,10 @@ defmodule Flezha.SDK.Bounded.SpecTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule LinearBounded do
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "linear_bounded"
+  defmodule LinearSteps do
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def factory_id, do: "linear_steps"
 
     def channels(c) do
       c
@@ -61,16 +62,17 @@ defmodule Flezha.SDK.Bounded.SpecTest do
 
   # --- the tasklet DAG ---
 
-  test "a class silent on every knob reads each default" do
-    assert {:ok, spec} = Spec.build(LinearBounded)
-    assert spec.factory_id == "linear_bounded"
-    assert spec.knobs.loop_mode == :once
-    assert spec.knobs.rollback_mode == :all_or_nothing
-    assert spec.knobs.persistence_enabled
+  test "a class silent on every setting reads each default" do
+    assert {:ok, spec} = Spec.build(LinearSteps)
+    assert spec.factory_id == "linear_steps"
+    assert spec.settings.each == :once
+    assert spec.settings.on_failure == :undo_all
+    assert spec.settings.durable == :local
+    assert spec.settings.sleep_after_ms == 6 * 60 * 60 * 1000
   end
 
   test "a structured class builds a Kahn-ordered DAG rooted at the entry's consumer" do
-    assert {:ok, spec} = Spec.build(LinearBounded)
+    assert {:ok, spec} = Spec.build(LinearSteps)
     assert [root, tail] = spec.dag.order
     assert %{"in" => chain} = spec.dag.chains
     assert chain.roots == [root]
@@ -87,7 +89,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
   test "task_idx numbering is the declaration's, not the ref map's" do
     orders =
       for _ <- 1..8 do
-        assert {:ok, spec} = Spec.build(LinearBounded)
+        assert {:ok, spec} = Spec.build(LinearSteps)
         Enum.map(spec.dag.order, &spec.topology.node_modules[&1])
       end
 
@@ -96,7 +98,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
 
   # --- class-fact refusals ---
 
-  test "NoBoundedBody: no channels/1" do
+  test "NoStepsBody: no channels/1" do
     defmodule Bodyless do
       def factory_id, do: "bodyless"
     end
@@ -107,151 +109,178 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       def run(_ctx, _args), do: :ok
     end
 
-    assert "topology.no_bounded_body" in issues(Bodyless)
-    assert "topology.no_bounded_body" in issues(OneFunction)
+    assert "topology.no_steps_body" in issues(Bodyless)
+    assert "topology.no_steps_body" in issues(OneFunction)
   end
 
-  test "ExternalStopOnly — not self-terminating and no duration cap" do
+  test "a steps class that never ends is accepted" do
     defmodule StopOnly do
       def factory_id, do: "stop_only"
-      def self_terminating?, do: false
+      def run, do: {:steps, each: :per_input}
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule StopOnlyCapped do
-      def factory_id, do: "stop_only_capped"
-      def self_terminating?, do: false
-      def max_duration_ms, do: 5_000
-      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
-    end
-
-    assert "topology.external_stop_only" in issues(StopOnly)
-    assert {:ok, _} = Spec.build(StopOnlyCapped)
+    assert {:ok, %Spec{settings: %{max_duration_ms: nil}}} = Spec.build(StopOnly)
   end
 
-  test "InvalidMode — a hand-written mode outside its set is refused naming the value" do
+  # --- the settings tree, written by hand ---
+
+  defp refused_setting(module) do
+    assert {:error, %Flezha.SDK.Error{code: code, details: details}} = Topology.build(module)
+    {code, Map.drop(details, ["issues"])}
+  end
+
+  test "a value outside its choices is refused naming the setting and the value" do
     defmodule ForeverLoop do
       def factory_id, do: "forever_loop"
-      def loop_mode, do: :forever
-      def rollback_mode, do: :best_effort
+      def run, do: {:steps, each: :forever}
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    modes = for %{"code" => "topology.invalid_mode", "details" => d} <- listed(ForeverLoop), do: d
-
-    assert %{"factory_id" => "forever_loop", "knob" => "loop_mode", "value" => "forever"} in modes
-
-    assert %{"factory_id" => "forever_loop", "knob" => "rollback_mode", "value" => "best_effort"} in modes
-  end
-
-  # --- a setting of the other kind ---
-
-  # A bounded class writes the same builder an unbounded operator does, so what only a
-  # stream carries is refused by its own name, carried as the topology's.
-  defp kind_refusals(module), do: issues(module)
-
-  test "the tier, a checkpoint setting and a correction window on a bounded operator are refused by name" do
-    defmodule TierBounded do
-      def factory_id, do: "tier_bounded"
-
-      def channels(c),
-        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
-    end
-
-    defmodule CheckpointBounded do
-      def factory_id, do: "checkpoint_bounded"
-
-      def channels(c),
-        do: c |> Channels.checkpoint_every(500) |> Channels.input("in") |> Channels.into(TailTask)
-    end
-
-    defmodule CorrectionBounded do
-      def factory_id, do: "correction_bounded"
-
-      def channels(c),
-        do:
-          c
-          |> Channels.correction_window(60_000)
-          |> Channels.input("in")
-          |> Channels.into(TailTask)
-    end
-
-    assert kind_refusals(TierBounded) == ["topology.effectively_once_on_bounded"]
-    # Judged as the bounded operator's own setting, not by the stream rule that needs the tier.
-    assert kind_refusals(CheckpointBounded) == ["topology.checkpoint_on_bounded"]
-    assert kind_refusals(CorrectionBounded) == ["topology.correction_window_on_bounded"]
-  end
-
-  test "synchronous durability on an unbounded operator is refused, and it keeps its tier" do
-    defmodule SyncUnbounded do
-      @behaviour Flezha.SDK.UnboundedOperator
-      def factory_id, do: "sync_unbounded"
-      def sync_durability, do: true
+    defmodule KindLiteral do
+      def factory_id, do: "kind_literal"
+      def run, do: :bounded
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    defmodule TierUnbounded do
-      @behaviour Flezha.SDK.UnboundedOperator
-      def factory_id, do: "tier_unbounded"
+    assert {"topology.invalid_setting",
+            %{
+              "declaration" => "operator 'forever_loop'",
+              "setting" => "each",
+              "value" => "forever"
+            }} =
+             refused_setting(ForeverLoop)
 
-      def channels(c),
-        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
-    end
-
-    assert {:error, %Flezha.SDK.Error{code: "topology.sync_durability_on_unbounded"}} =
-             Topology.build(SyncUnbounded)
-
-    assert {:ok, %Topology{effectively_once?: true}} = Topology.build(TierUnbounded)
+    assert {"topology.invalid_setting", %{"setting" => "run", "value" => "bounded"}} =
+             refused_setting(KindLiteral)
   end
 
-  test "sleeping without persistence is refused for either kind, and both switches are declared" do
-    defmodule SleeplessUnbounded do
-      use Flezha.SDK.UnboundedOperator,
-        factory_id: "sleepless_unbounded",
-        persistence_enabled: false,
-        sleep_when_idle: true
+  defmodule Misplaced do
+    def factory_id, do: "misplaced"
+    def run, do: Process.get(:steps_spec_test_run)
+    def durable, do: :local
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+  end
+
+  test "a setting under a parent that does not carry it is refused naming both" do
+    for {run, setting, parent} <- [
+          {{:flow, each: :per_input}, "each", "flow"},
+          {{:steps, exactly: :effectively_once}, "exactly", "steps"},
+          {{:steps, correction_ms: 5_000}, "correction_ms", "steps"},
+          {{:flow, exactly: {:at_least_once, ack: :checkpoint}}, "ack", "at_least_once"}
+        ] do
+      Process.put(:steps_spec_test_run, run)
+
+      assert {"topology.unknown_field",
+              %{"declaration" => "'#{parent}' of operator 'misplaced'", "fields" => setting}} ==
+               refused_setting(Misplaced)
+    end
+  end
+
+  test "a sleep interval on a class kept in memory is refused naming both" do
+    defmodule SleeplessFlow do
+      def factory_id, do: "sleepless_flow"
+      def durable, do: {false, sleep_after: 1_000}
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    assert {"topology.unknown_field",
+            %{"declaration" => "'false' of operator 'sleepless_flow'", "fields" => "sleep_after"}} ==
+             refused_setting(SleeplessFlow)
+  end
+
+  test "the one cross rule: the tier needs a disk" do
+    defmodule TierInMemory do
+      def factory_id, do: "tier_in_memory"
+      def run, do: {:flow, exactly: :effectively_once}
+      def durable, do: false
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    assert {"topology.effectively_once_without_persistence", %{}} = refused_setting(TierInMemory)
+  end
+
+  test "a flow class kept remotely is refused; a steps class is not" do
+    defmodule RemoteFlow do
+      def factory_id, do: "remote_flow"
+      def durable, do: :remote
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    defmodule RemoteSteps do
+      def factory_id, do: "remote_steps"
+      def run, do: :steps
+      def durable, do: {:remote, sleep_after: false}
+      def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
+    end
+
+    assert {"topology.remote_on_flow", %{"factory_id" => "remote_flow"}} =
+             refused_setting(RemoteFlow)
+
+    assert {:ok, spec} = Spec.build(RemoteSteps)
+    assert %{"durable" => "remote"} = declared = Flezha.SDK.Declarations.for(spec)
+    refute Map.has_key?(declared, "sleep_after_ms")
+  end
+
+  test "each class declares where it keeps its work and when it sleeps" do
+    defmodule SleepingFlow do
+      use Flezha.SDK.Operator, factory_id: "sleeping_flow", durable: {:local, sleep_after: 150}
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule OptedOutSteps do
+      use Flezha.SDK.Operator, factory_id: "opted_out_steps", run: :steps, durable: false
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule CappedSteps do
+      use Flezha.SDK.Operator,
+        factory_id: "capped_steps",
+        run: {:steps, each: :chained, on_failure: :keep_progress},
+        max_duration_ms: 5_000
 
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
-    defmodule SleeplessBounded do
-      use Flezha.SDK.BoundedOperator,
-        factory_id: "sleepless_bounded",
-        persistence_enabled: false,
-        sleep_when_idle: true
+    assert {:ok, sleeping} = Topology.build(SleepingFlow)
 
-      def channels(c), do: c |> input("in") |> into(TailTask)
-    end
+    assert %{"run" => "flow", "durable" => "local", "sleep_after_ms" => "150", "keyed" => "false"} ==
+             Flezha.SDK.Declarations.for(sleeping)
 
-    defmodule SleepingUnbounded do
-      use Flezha.SDK.UnboundedOperator, factory_id: "sleeping_unbounded", sleep_when_idle: true
-      def channels(c), do: c |> input("in") |> into(TailTask)
-    end
-
-    defmodule OptedOutBounded do
-      use Flezha.SDK.BoundedOperator,
-        factory_id: "opted_out_bounded",
-        persistence_enabled: false
-
-      def channels(c), do: c |> input("in") |> into(TailTask)
-    end
-
-    assert {:error, %Flezha.SDK.Error{code: "topology.sleep_without_persistence"}} =
-             Topology.build(SleeplessUnbounded)
-
-    assert kind_refusals(SleeplessBounded) == ["topology.sleep_without_persistence"]
-
-    assert {:ok, sleeping} = Topology.build(SleepingUnbounded)
-    assert %{"sleep_when_idle" => "true"} = declared = Flezha.SDK.Declarations.for(sleeping)
-    refute Map.has_key?(declared, "persistent")
-
-    assert {:ok, durable} = Spec.build(LinearBounded)
-    assert %{"sleep_when_idle" => "true"} = Flezha.SDK.Declarations.for(durable)
-
-    assert {:ok, opted_out} = Spec.build(OptedOutBounded)
+    assert {:ok, opted_out} = Spec.build(OptedOutSteps)
     declared = Flezha.SDK.Declarations.for(opted_out)
-    assert declared["persistent"] == "false"
-    refute Map.has_key?(declared, "sleep_when_idle")
+    assert %{"run" => "steps", "durable" => "memory", "each" => "once"} = declared
+    refute Map.has_key?(declared, "sleep_after_ms")
+
+    assert {:ok, capped} = Spec.build(CappedSteps)
+
+    assert %{
+             "each" => "chained",
+             "on_failure" => "keep_progress",
+             "max_duration_ms" => "5000",
+             "sleep_after_ms" => "21600000"
+           } = Flezha.SDK.Declarations.for(capped)
+  end
+
+  test "a class that says nothing sleeps by its run: a flow never, a steps class after six hours" do
+    defmodule SilentFlow do
+      use Flezha.SDK.Operator, factory_id: "silent_flow"
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    defmodule LocalFlow do
+      use Flezha.SDK.Operator, factory_id: "local_flow", durable: :local
+      def channels(c), do: c |> input("in") |> into(TailTask)
+    end
+
+    for module <- [SilentFlow, LocalFlow] do
+      assert {:ok, topology} = Topology.build(module)
+      assert %{"run" => "flow", "durable" => "local"} = declared = Declarations.for(topology)
+      refute Map.has_key?(declared, "sleep_after_ms"), "#{inspect(module)} sleeps"
+    end
+
+    assert {:ok, spec} = Spec.build(LinearSteps)
+    assert %{"sleep_after_ms" => "21600000"} = Declarations.for(spec)
   end
 
   # --- structural refusals ---
@@ -335,9 +364,9 @@ defmodule Flezha.SDK.Bounded.SpecTest do
     assert length(spec.dag.parents[join]) == 2
   end
 
-  test "a keyed edge into a keyless tasklet makes it dynamic, as an unbounded operator's" do
-    defmodule DynamicBounded do
-      def factory_id, do: "dynamic_bounded"
+  test "a keyed edge into a keyless tasklet makes it dynamic, as a flow operator's" do
+    defmodule DynamicSteps do
+      def factory_id, do: "dynamic_steps"
 
       def channels(c) do
         c
@@ -348,28 +377,28 @@ defmodule Flezha.SDK.Bounded.SpecTest do
       end
     end
 
-    assert {:ok, spec} = Spec.build(DynamicBounded)
+    assert {:ok, spec} = Spec.build(DynamicSteps)
     tail = Enum.find(spec.dag.order, &(spec.topology.node_modules[&1] == TailTask))
     assert spec.topology.node_mode[tail] == :dynamic
   end
 
   test "a static-mode tasklet is not a dynamic one" do
-    defmodule StaticBounded do
-      def factory_id, do: "static_bounded"
+    defmodule StaticSteps do
+      def factory_id, do: "static_steps"
 
       def channels(c) do
         c |> Channels.input("in") |> Channels.into(StaticTask)
       end
     end
 
-    assert {:ok, spec} = Spec.build(StaticBounded)
+    assert {:ok, spec} = Spec.build(StaticSteps)
     assert Map.values(spec.topology.node_mode) == [:static]
   end
 
   test "BranchingChainedLoop — a chained loop over several terminals" do
     defmodule BranchingChain do
       def factory_id, do: "branching_chain"
-      def loop_mode, do: :chained
+      def run, do: {:steps, each: :chained}
 
       def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
@@ -380,7 +409,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
 
     defmodule ConvergingChain do
       def factory_id, do: "converging_chain"
-      def loop_mode, do: :chained
+      def run, do: {:steps, each: :chained}
 
       def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
@@ -395,7 +424,7 @@ defmodule Flezha.SDK.Bounded.SpecTest do
   test "a per_input loop over a branching topology is legal" do
     defmodule BranchingPerInput do
       def factory_id, do: "branching_per_input"
-      def loop_mode, do: :per_input
+      def run, do: {:steps, each: :per_input}
 
       def channels(c) do
         mid = c |> Channels.input("in") |> Channels.into(PassTask)
@@ -427,31 +456,16 @@ defmodule Flezha.SDK.Bounded.SpecTest do
   test "every issue is reported at once, not just the first" do
     defmodule ManyProblems do
       def factory_id, do: "many_problems"
-      def self_terminating?, do: false
-    end
+      def run, do: :steps
 
-    defmodule TieredStopOnly do
-      def factory_id, do: "tiered_stop_only"
-      def self_terminating?, do: false
-
-      def channels(c),
-        do: c |> Channels.effectively_once() |> Channels.input("in") |> Channels.into(TailTask)
+      def channels(c) do
+        c |> Channels.input("in") |> Channels.key_by(& &1) |> Channels.into(StaticTask)
+        c |> Channels.input("other") |> Channels.map(& &1)
+      end
     end
 
     found = issues(ManyProblems)
-    assert "topology.no_bounded_body" in found
-    assert "topology.external_stop_only" in found
-
-    issues = listed(TieredStopOnly)
-
-    assert %{"factory_id" => "tiered_stop_only"} in for(
-             %{"code" => "topology.external_stop_only", "details" => d} <- issues,
-             do: d
-           )
-
-    assert %{"factory_id" => inspect(TieredStopOnly)} in for(
-             %{"code" => "topology.effectively_once_on_bounded", "details" => d} <- issues,
-             do: d
-           )
+    assert "topology.key_by_on_unkeyable_target" in found
+    assert "topology.dangling_transform_chain" in found
   end
 end

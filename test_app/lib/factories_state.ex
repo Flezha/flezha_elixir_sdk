@@ -42,7 +42,7 @@ end
 
 defmodule ElixirRunner.StoreInputOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "store_input"
 
   def channels(c) do
@@ -87,7 +87,7 @@ end
 
 defmodule ElixirRunner.StatefulCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "stateful_counter"
 
   def channels(c) do
@@ -130,9 +130,9 @@ end
 
 defmodule ElixirRunner.PersistenceOffCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "persistence_off_counter"
-  def persistence_enabled, do: false
+  def durable, do: false
 
   def channels(c) do
     import Flezha.SDK.Channels
@@ -147,7 +147,7 @@ end
 
 # -- sleeping_counter -------------------------------------------------------
 
-# An unbounded operator that sleeps when idle: `key:delta` inputs fold into one total per
+# A flow operator that sleeps when idle: `key:delta` inputs fold into one total per
 # key, and every input emits `key=total` on the `totals` sink.
 defmodule ElixirRunner.SleepingCounterTask do
   @moduledoc false
@@ -173,8 +173,12 @@ end
 
 defmodule ElixirRunner.SleepingCounterOp do
   @moduledoc false
-  use Flezha.SDK.UnboundedOperator, factory_id: "sleeping_counter", sleep_when_idle: true
+  use Flezha.SDK.Operator, factory_id: "sleeping_counter"
 
+  @impl true
+  def durable, do: ElixirRunner.fixture_durable()
+
+  @impl true
   def channels(c) do
     c
     |> input("input")
@@ -225,7 +229,7 @@ end
 
 defmodule ElixirRunner.CoalescingCounterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "coalescing_counter"
 
   def channels(c) do
@@ -266,7 +270,7 @@ end
 
 defmodule ElixirRunner.ResumeProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "resume_probe"
 
   def channels(c) do
@@ -339,7 +343,7 @@ end
 
 defmodule ElixirRunner.SchemaEvolutionV1Op do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "schema_evolution_v1"
 
   def channels(c) do
@@ -354,7 +358,7 @@ end
 
 defmodule ElixirRunner.SchemaEvolutionV2Op do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "schema_evolution_v2"
 
   def channels(c) do
@@ -418,7 +422,7 @@ end
 
 defmodule ElixirRunner.SessionTimeoutOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "session_timeout"
 
   def channels(c) do
@@ -436,8 +440,8 @@ end
 # The same keyed upsert as `tier_store`, acknowledging only at an explicit
 # checkpoint: a `commit:` input closes the interval and records nothing, every
 # other input folds into it. `checkpoint_batched_store` adds
-# `outputs_at_checkpoint`, so the interval's outputs are held with its changes
-# and ship inside its closing record; `checkpoint_every` is deliberately absent
+# `outputs: :at_checkpoint`, so the interval's outputs are held with its changes
+# and ship inside its closing record; `every` is deliberately absent
 # from both, so the e2e drives every close itself.
 defmodule ElixirRunner.CheckpointStoreTask do
   @moduledoc false
@@ -509,7 +513,7 @@ defmodule ElixirRunner.TierTallyTask do
   def run(input, count, ctx) do
     case TierStoreTask.split(input) do
       {key, "hold"} ->
-        if System.get_env("FLEZHA_BOUNDED_E2E_RELEASE"),
+        if System.get_env("FLEZHA_STEPS_E2E_RELEASE"),
           do: tally(key, count, ctx),
           else: {:error, "held until released"}
 
@@ -527,14 +531,14 @@ end
 
 defmodule ElixirRunner.TierChainOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "tier_chain"
+  def run, do: {:flow, exactly: :effectively_once}
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
     |> input("input")
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.TierRelayTask)
@@ -548,15 +552,14 @@ end
 
 defmodule ElixirRunner.CheckpointStoreOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "checkpoint_store"
+  def run, do: {:flow, exactly: {:effectively_once, ack: :checkpoint}}
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
-    |> checkpoint_ack()
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
@@ -566,16 +569,19 @@ end
 
 defmodule ElixirRunner.CheckpointBatchedOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "checkpoint_batched_store"
+
+  def run,
+    do:
+      {:flow,
+       exactly:
+         {:effectively_once, ack: {:checkpoint, outputs: :at_checkpoint, max_delay_ms: 1_500}}}
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
-    |> checkpoint_ack()
-    |> outputs_at_checkpoint(1_500)
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
@@ -641,15 +647,14 @@ end
 
 defmodule ElixirRunner.CandleOp do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "candle"
+  def run, do: {:flow, exactly: {:effectively_once, correction_ms: 600_000}}
 
   def channels(c) do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
-    |> correction_window(600_000)
     |> input("input")
     |> into(ElixirRunner.CandleTask)
     |> keyed()

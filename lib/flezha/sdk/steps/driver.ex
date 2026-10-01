@@ -1,18 +1,18 @@
-defmodule Flezha.SDK.Bounded.Driver do
+defmodule Flezha.SDK.Steps.Driver do
   @moduledoc """
-  One process per bounded instance: the stage driver. A pass walks the chain
+  One process per steps instance: the stage driver. A pass walks the chain
   of the entry channel its message arrived on, or of the tasklet whose timer
   fired: a tasklet becomes runnable once every producer feeding it in that
   chain has committed, so a fan-in is dispatched exactly once with the
   accumulated batch of this pass's producers. Each stage commits durably as
   soon as its Cells have drained, whatever its siblings are still doing, and
-  the run ends by shipping `BoundedCompleted`.
+  the run ends by shipping `OperatorCompleted`.
 
   It presents the same contract to an `Flezha.SDK.Cell` that
-  `Flezha.SDK.Operator` does: a Cell casts its emits to its `operator`
+  `Flezha.SDK.Operator.Server` does: a Cell casts its emits to its `operator`
   pid and knows nothing else about it. So every Cell mechanism — the state,
   the records, the retry ladder — is reused as it stands, and what is written
-  here is only what a *bounded* run adds: the stages, the barrier and the
+  here is only what a *steps* run adds: the stages, the barrier and the
   journal.
 
   The reference drives a chain on a pool thread that blocks on each barrier.
@@ -21,10 +21,10 @@ defmodule Flezha.SDK.Bounded.Driver do
   flight. Every wait is therefore a message: `{:stage_done, ref, pid, written}` from a
   Cell's queue barrier, `{:barrier_ack, ref, result, error}` from the runner,
   and for a message-fed pass with nothing queued, its next message or the idle
-  window's `{:park_idle, ref}`.
+  window's `{:sleep_due, ref}`.
 
   A message enters through the same `Flezha.SDK.Operator.Inbox.enter/5` the
-  unbounded operator's frames take, and runs only the chain of the entry channel
+  flow operator's frames take, and runs only the chain of the entry channel
   it arrived on; a chained loop's later passes re-enter the chain its first
   message picked.
 
@@ -42,7 +42,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   alias Flezha.SDK.{Cell, Knob}
   alias Flezha.SDK.Cell.Records
   alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
-  alias Flezha.SDK.Bounded.{Commit, Compensation, Instance, Resume, Spec, Stage}
+  alias Flezha.SDK.Steps.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
   defmodule State do
     @moduledoc false
@@ -51,7 +51,7 @@ defmodule Flezha.SDK.Bounded.Driver do
       :spec,
       :operator_id,
       :runner,
-      # the unbounded operator's Cell set, minted per mode and swept between passes
+      # the flow operator's Cell set, minted per mode and swept between passes
       :cells,
       # the stage barrier refs the running stages still owe, each with its
       # node and Cell, and how many each forward stage owes, so its last one
@@ -113,7 +113,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc "Cooperative external stop: the run unwinds and completes as `cancelled`."
-  def stop_bounded(pid), do: send(pid, :bounded_stop)
+  def stop_steps(pid), do: send(pid, :steps_stop)
 
   @doc "Send one message on the first declared entry channel."
   def push_inbox(pid, payload), do: GenServer.cast(pid, {:input, nil, payload, %{}})
@@ -132,7 +132,7 @@ defmodule Flezha.SDK.Bounded.Driver do
     cells =
       opts
       |> Keyword.take([:operator_id, :range, :counters, :runner, :secondaries, :credit])
-      |> Keyword.merge(topology: spec.topology, kind: :bounded)
+      |> Keyword.merge(topology: spec.topology, run: :steps)
       |> Cells.new()
       |> Cells.schedule_reap()
 
@@ -141,7 +141,6 @@ defmodule Flezha.SDK.Bounded.Driver do
         Instance.new(operator_id, spec,
           journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
-          park_idle_ms: Keyword.get(opts, :park_idle_ms),
           dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false)
         ),
       spec: spec,
@@ -159,9 +158,9 @@ defmodule Flezha.SDK.Bounded.Driver do
   # The wall-clock backstop a class declares. It trips the same cooperative
   # cancel an external stop does, so a capped run unwinds rather than being
   # killed mid-stage.
-  defp arm_duration(%Spec{knobs: %{max_duration_ms: nil}}), do: :ok
+  defp arm_duration(%Spec{settings: %{max_duration_ms: nil}}), do: :ok
 
-  defp arm_duration(%Spec{knobs: %{max_duration_ms: ms}}),
+  defp arm_duration(%Spec{settings: %{max_duration_ms: ms}}),
     do: Process.send_after(self(), :max_duration, ms)
 
   @impl true
@@ -170,9 +169,9 @@ defmodule Flezha.SDK.Bounded.Driver do
   end
 
   # The calls the controller's persistence commands make on an operator,
-  # answered exactly as `Flezha.SDK.Operator` answers them, through the same
-  # Cell set: a restore, a compaction and a live read reach a bounded operator
-  # instance through the same `Flezha.SDK.Commands` path an unbounded one does.
+  # answered exactly as `Flezha.SDK.Operator.Server` answers them, through the same
+  # Cell set: a restore, a compaction and a live read reach a steps operator
+  # instance through the same `Flezha.SDK.Commands` path a flow one does.
   @impl true
   def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{} = s) do
     {reply, cells} = Cells.lookup(s.cells, tasklet, key, materialise?)
@@ -204,7 +203,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   end
 
   # A Cell finished one invocation. Its outputs are collected for the stage
-  # rather than routed: a bounded operator hands a batch on at the barrier, not per
+  # rather than routed: a steps operator hands a batch on at the barrier, not per
   # value, so the whole stage's release is what the journal records.
   @impl true
   def handle_cast({:emitted, node_ref, cell_key, emits, seq, _input, report}, %State{} = s) do
@@ -321,12 +320,12 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # A stop and the duration cap are cooperative: the run unwinds at its next
   # step. A loop waiting for input has no next step and nothing to unwind.
-  def handle_info(stop, %State{} = s) when stop in [:bounded_stop, :max_duration] do
+  def handle_info(stop, %State{} = s) when stop in [:steps_stop, :max_duration] do
     s = %{s | cancel: :cancelled}
     if s.idle, do: settle(complete(%{s | idle: nil}, "cancelled", "")), else: {:noreply, s}
   end
 
-  def handle_info({:park_idle, ref}, %State{idle: ref} = s), do: settle(park(%{s | idle: nil}))
+  def handle_info({:sleep_due, ref}, %State{idle: ref} = s), do: settle(park(%{s | idle: nil}))
 
   def handle_info({:secondaries, secondaries}, %State{} = s),
     do: {:noreply, %{s | cells: Cells.rebind(s.cells, secondaries)}}
@@ -350,7 +349,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # A class that journals has its stage Cells capture their plugin output into
   # their own effect records, released once the stage commits; one that
-  # journals nothing sends it straight to the wire, as an unbounded operator's is.
+  # journals nothing sends it straight to the wire, as a flow operator's is.
   defp sink_outputs(%State{} = s, node_ref, value, emit, ordinal) do
     if journals?(s) do
       s
@@ -511,7 +510,7 @@ defmodule Flezha.SDK.Bounded.Driver do
     e -> {:rejected, "entry edge failed: " <> Exception.message(e)}
   end
 
-  # Before any Cell is minted, as the unbounded operator's router refuses a key.
+  # Before any Cell is minted, as the flow operator's router refuses a key.
   defp own_keys(%State{cells: cells}, frontier) do
     Enum.find_value(frontier, :ok, fn {root, batch} ->
       Enum.find_value(batch, fn {_value, key} ->
@@ -599,8 +598,8 @@ defmodule Flezha.SDK.Bounded.Driver do
   defp await_input(%State{} = s) do
     ref = make_ref()
 
-    if s.spec.knobs.sleep_when_idle,
-      do: Process.send_after(self(), {:park_idle, ref}, Instance.idle_ms(s.instance))
+    if s.spec.settings.sleep_after_ms,
+      do: Process.send_after(self(), {:sleep_due, ref}, Instance.idle_ms(s.instance))
 
     %{s | idle: ref}
   end
@@ -610,7 +609,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   # queued meaning wait; done for a `:once` class after its one pass; the
   # previous terminal batch for a handoff-chained loop, which ends on an
   # empty one.
-  defp seed(%State{spec: %Spec{knobs: %{loop_mode: :once}}, iter: iter} = s) when iter > 0,
+  defp seed(%State{spec: %Spec{settings: %{each: :once}}, iter: iter} = s) when iter > 0,
     do: {:done, s}
 
   defp seed(%State{} = s) do
@@ -645,7 +644,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # Every pass of a `:per_input` loop takes a message; any loop's first pass
   # does; a chained loop's later passes are carry-fed.
-  defp message_fed?(%State{spec: %Spec{knobs: %{loop_mode: :per_input}}}), do: true
+  defp message_fed?(%State{spec: %Spec{settings: %{each: :per_input}}}), do: true
   defp message_fed?(%State{iter: 0}), do: true
   defp message_fed?(%State{}), do: false
 
@@ -663,7 +662,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # A chained loop resuming past its first pass carries the journaled
   # terminal batch into its next pass.
-  defp journaled_carry(%State{spec: %Spec{knobs: %{loop_mode: :chained}}, iter: iter}, journal)
+  defp journaled_carry(%State{spec: %Spec{settings: %{each: :chained}}, iter: iter}, journal)
        when iter > 0 and journal != nil,
        do: Resume.carry(journal)
 
@@ -824,7 +823,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # --- the iteration boundary ---
 
-  defp seal_iteration(%State{spec: %Spec{knobs: %{loop_mode: :once}}} = s),
+  defp seal_iteration(%State{spec: %Spec{settings: %{each: :once}}} = s),
     do: complete(s, "ok", "", result_of(completion(s)))
 
   defp seal_iteration(%State{} = s) do
@@ -921,7 +920,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   # `per_input` keep-progress loop, running forward with no stop asked, bound
   # by a controller that parks the turn.
   defp fails_turn?(%State{
-         spec: %Spec{knobs: %{loop_mode: :per_input, rollback_mode: :keep_progress}},
+         spec: %Spec{settings: %{each: :per_input, on_failure: :keep_progress}},
          instance: %Instance{dead_letter_turns: true},
          unwind: %{status: nil},
          cancel: nil,
@@ -1048,7 +1047,7 @@ defmodule Flezha.SDK.Bounded.Driver do
   end
 
   # A park is not a terminal outcome: the instance tears its run down WITHOUT
-  # a `BoundedCompleted`, and the controller keeps it suspended until an
+  # a `OperatorCompleted`, and the controller keeps it suspended until an
   # inbox append or the wake deadline rehydrates it. The park record names the
   # last COMMITTED iteration, so a resume enters the one after it either way,
   # and the last message the run parked unread, which the inbox releases.
@@ -1147,7 +1146,7 @@ defmodule Flezha.SDK.Bounded.Driver do
 
   # --- projections ---
 
-  defp journals?(%State{spec: spec}), do: spec.knobs.persistence_enabled
+  defp journals?(%State{spec: spec}), do: spec.settings.durable != :memory
 
   # A stage's release through its output channel, as the journal records it.
   # The channel a tasklet releases on is its node's — one per node — so the

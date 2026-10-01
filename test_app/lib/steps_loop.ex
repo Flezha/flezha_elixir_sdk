@@ -1,12 +1,12 @@
-# Twins of the rust_runner durable-loop and bench bounded fixtures
-# (test/apps/rust_runner/src/bounded_loop.rs): the chat loop with suspension,
+# Twins of the rust_runner durable-loop and bench steps fixtures
+# (test/apps/rust_runner/src/steps_loop.rs): the chat loop with suspension,
 # its stateless twin, the rewindable variant, and the chains and loop
-# `mix bench.bounded` drives. The crash-resume family is in bounded.ex,
+# `mix bench.steps` drives. The crash-resume family is in steps.ex,
 # which also holds the release gate all of these share.
 
-defmodule ElixirRunner.BoundedLoop do
+defmodule ElixirRunner.StepsLoop do
   @moduledoc false
-  alias ElixirRunner.Bounded.Gate
+  alias ElixirRunner.Steps.Gate
 
   # The turn whose payload is this blocks while the release env is unset, so a
   # SIGKILL lands with the earlier iterations durable and that one in flight.
@@ -19,9 +19,9 @@ defmodule ElixirRunner.BoundedLoop do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "chat_turn"
 
-    alias ElixirRunner.Bounded.Gate
+    alias ElixirRunner.Steps.Gate
 
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     # The closing turn is not a turn of the conversation: it is not recorded,
     # and it ends the session with the number of turns the state holds.
@@ -134,7 +134,7 @@ defmodule ElixirRunner.BoundedLoop do
   for n <- 0..15 do
     Module.create(
       Module.concat(__MODULE__, "BenchS#{n}"),
-      ElixirRunner.Bounded.Step.durable_body("bench_s#{n}"),
+      ElixirRunner.Steps.Step.durable_body("bench_s#{n}"),
       Macro.Env.location(__ENV__)
     )
   end
@@ -143,11 +143,12 @@ defmodule ElixirRunner.BoundedLoop do
 
   # -- classes --------------------------------------------------------------
 
-  defmodule ChatLoopBounded do
+  defmodule ChatLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "chat_loop_bounded"
-    def loop_mode, do: :per_input
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "chat_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
 
     # A chat session ends itself on the turn `bye`; the duration backstop keeps
     # a stray e2e instance from outliving the test run.
@@ -158,21 +159,21 @@ defmodule ElixirRunner.BoundedLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.BoundedLoop.ChatTurn)
+      |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.BoundedLoop.ChatReply)
+      |> into(ElixirRunner.StepsLoop.ChatReply)
       |> sink("out")
     end
   end
 
   # The reply that blocks on the turn `reply-crash` while the release env is
-  # unset, after the root has committed: what `reply_block_loop_bounded`
+  # unset, after the root has committed: what `reply_block_loop_steps`
   # crashes in.
   defmodule BlockingReply do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "blocking_reply"
 
-    alias ElixirRunner.Bounded.Gate
+    alias ElixirRunner.Steps.Gate
 
     @impl true
     def run(input, state, ctx) do
@@ -184,12 +185,12 @@ defmodule ElixirRunner.BoundedLoop do
 
   # The chat loop with the block moved AFTER the root's commit, so a SIGKILL
   # lands between a root's `task_committed` and the pass's `iter_committed`.
-  defmodule ReplyBlockLoopBounded do
+  defmodule ReplyBlockLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "reply_block_loop_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "reply_block_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -197,16 +198,16 @@ defmodule ElixirRunner.BoundedLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.BoundedLoop.ChatTurn)
+      |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.BoundedLoop.BlockingReply)
+      |> into(ElixirRunner.StepsLoop.BlockingReply)
       |> sink("out")
     end
   end
 
   # A durable per-input loop keyed on its entry edge by the text before the
   # first `:`, so one Cell counts one symbol's messages and emits
-  # `<symbol>:<count>`: the shape a partition group of bounded operator members takes.
+  # `<symbol>:<count>`: the shape a partition group of steps operator members takes.
   defmodule KeyedLoopCount do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "keyed_loop_count"
@@ -226,12 +227,12 @@ defmodule ElixirRunner.BoundedLoop do
     end
   end
 
-  defmodule KeyedLoopBounded do
+  defmodule KeyedLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "keyed_loop_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "keyed_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -240,8 +241,8 @@ defmodule ElixirRunner.BoundedLoop do
       c
       |> input("trades")
       |> key_by(&ElixirRunner.Key.prefix/1)
-      |> into(ElixirRunner.BoundedLoop.KeyedLoopCount)
-      |> sink("keyed_loop_bounded_out")
+      |> into(ElixirRunner.StepsLoop.KeyedLoopCount)
+      |> sink("keyed_loop_steps_out")
     end
   end
 
@@ -249,12 +250,12 @@ defmodule ElixirRunner.BoundedLoop do
   # nothing writes a Cell record and the controller ships no restore on a
   # rehydrating bind: the instance's task-journal reaches the driver only if it
   # rides the bind itself.
-  defmodule StatelessLoopBounded do
+  defmodule StatelessLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "stateless_loop_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "stateless_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -262,12 +263,12 @@ defmodule ElixirRunner.BoundedLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.BoundedLoop.ChatReply)
+      |> into(ElixirRunner.StepsLoop.ChatReply)
       |> sink("out")
     end
   end
 
-  # `failing_turn_loop_bounded`: a session whose turn can fail after `note`
+  # `failing_turn_loop_steps`: a session whose turn can fail after `note`
   # committed. `note` records each message and its undo moves the latest one
   # to `undone`; `answer` replies `re:<message>` on the sink `answer`, and
   # fails every attempt on `boom`, on `boom-once` while the release env is
@@ -306,7 +307,7 @@ defmodule ElixirRunner.BoundedLoop do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "answer"
 
-    alias ElixirRunner.Bounded.Gate
+    alias ElixirRunner.Steps.Gate
 
     @impl true
     def init_state(_), do: %{healed: false}
@@ -332,34 +333,32 @@ defmodule ElixirRunner.BoundedLoop do
     defp fails?(_input, _state), do: false
   end
 
-  defmodule FailingTurnLoopBounded do
+  defmodule FailingTurnLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "failing_turn_loop_bounded"
-    def loop_mode, do: :per_input
-    def rollback_mode, do: :keep_progress
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "failing_turn_loop_steps"
+    def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
-    def channels(c), do: ElixirRunner.BoundedLoop.failing_turn_graph(c)
+    def channels(c), do: ElixirRunner.StepsLoop.failing_turn_graph(c)
   end
 
-  defmodule FailingTurnAllOrNothingBounded do
+  defmodule FailingTurnUndoAllSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "failing_turn_all_or_nothing_bounded"
-    def loop_mode, do: :per_input
-    def rollback_mode, do: :all_or_nothing
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "failing_turn_undo_all_steps"
+    def run, do: {:steps, each: :per_input, on_failure: :undo_all}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
-    def channels(c), do: ElixirRunner.BoundedLoop.failing_turn_graph(c)
+    def channels(c), do: ElixirRunner.StepsLoop.failing_turn_graph(c)
   end
 
-  defmodule ChatRewindBounded do
+  defmodule ChatRewindSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "chat_rewind_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "chat_rewind_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -367,19 +366,19 @@ defmodule ElixirRunner.BoundedLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.BoundedLoop.ChatTurn)
+      |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
-      |> into(ElixirRunner.BoundedLoop.ChatReplyUndoable)
+      |> into(ElixirRunner.StepsLoop.ChatReplyUndoable)
       |> sink("out")
     end
   end
 
-  defmodule BenchLoopBounded do
+  defmodule BenchLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "bench_loop_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "bench_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     # A soak outlives the chat loop's 600 s.
     def max_duration_ms, do: 24 * 3600 * 1000
 
@@ -388,9 +387,9 @@ defmodule ElixirRunner.BoundedLoop do
 
       c
       |> input("in")
-      |> into(ElixirRunner.BoundedLoop.BenchTurn)
+      |> into(ElixirRunner.StepsLoop.BenchTurn)
       |> named("mid")
-      |> into(ElixirRunner.BoundedLoop.ChatReply)
+      |> into(ElixirRunner.StepsLoop.ChatReply)
       |> sink("out")
     end
   end
@@ -416,56 +415,111 @@ defmodule ElixirRunner.BoundedLoop do
 
   defmodule BenchChain1 do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_1"
 
     def channels(c),
-      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(1))
+      do: ElixirRunner.StepsLoop.chain(c, ElixirRunner.StepsLoop.bench_steps(1))
   end
 
   defmodule BenchChain4 do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_4"
 
     def channels(c),
-      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(4))
+      do: ElixirRunner.StepsLoop.chain(c, ElixirRunner.StepsLoop.bench_steps(4))
   end
 
   defmodule BenchChain16 do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_16"
 
     def channels(c),
-      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(16))
+      do: ElixirRunner.StepsLoop.chain(c, ElixirRunner.StepsLoop.bench_steps(16))
   end
 
   defmodule BenchChainOptOut4 do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "bench_chain_optout_4"
-    def persistence_enabled, do: false
+    def run, do: :steps
+    def durable, do: false
 
     def channels(c),
-      do: ElixirRunner.BoundedLoop.chain(c, ElixirRunner.BoundedLoop.bench_steps(4))
+      do: ElixirRunner.StepsLoop.chain(c, ElixirRunner.StepsLoop.bench_steps(4))
   end
 
-  @doc "The durable-loop and bench bounded classes this runner advertises."
+  # A flow class that echoes each input on `complete_flow_out` and ends its
+  # instance on `bye`, the echo of `bye` included.
+  defmodule CompleteFlow do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "complete_flow_tasklet"
+
+    @impl true
+    def run(input, state, ctx) do
+      if input == "bye", do: complete(ctx, input)
+      emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule CompleteFlowOp do
+    @moduledoc false
+    use Flezha.SDK.Operator, factory_id: "complete_flow"
+
+    def channels(c),
+      do: c |> input("input") |> into(ElixirRunner.StepsLoop.CompleteFlow) |> sink("complete_flow_out")
+  end
+
+  # A durable chained loop: each pass prints `chained_pass <n>` and hands the
+  # next pass `n - 1` on its own channel; the pass at zero hands nothing, and
+  # the empty batch ends the instance.
+  defmodule ChainedCountdown do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "chained_countdown"
+
+    @impl true
+    def run(input, state, ctx) do
+      IO.puts("chained_pass #{input}")
+      n = String.to_integer(input)
+      if n > 0, do: emit(ctx, Integer.to_string(n - 1))
+      {:ok, state}
+    end
+  end
+
+  defmodule ChainedSteps do
+    @moduledoc false
+    use Flezha.SDK.Operator, factory_id: "chained_steps", run: {:steps, each: :chained}
+
+    def channels(c),
+      do: c |> input("in") |> into(ElixirRunner.StepsLoop.ChainedCountdown) |> named("carry")
+  end
+
+  @doc "The durable-loop and bench steps classes this runner advertises."
   def all do
     [
-      ChatLoopBounded,
-      StatelessLoopBounded,
-      KeyedLoopBounded,
-      ChatRewindBounded,
-      FailingTurnLoopBounded,
-      FailingTurnAllOrNothingBounded,
-      ReplyBlockLoopBounded,
+      CompleteFlowOp,
+      ChainedSteps,
+      ChatLoopSteps,
+      StatelessLoopSteps,
+      KeyedLoopSteps,
+      ChatRewindSteps,
+      FailingTurnLoopSteps,
+      FailingTurnUndoAllSteps,
+      ReplyBlockLoopSteps,
       BenchChain1,
       BenchChain4,
       BenchChain16,
       BenchChainOptOut4,
-      BenchLoopBounded
+      BenchLoopSteps
     ]
   end
 
@@ -478,9 +532,9 @@ defmodule ElixirRunner.BoundedLoop do
 
     c
     |> input("in")
-    |> into(ElixirRunner.BoundedLoop.Note)
+    |> into(ElixirRunner.StepsLoop.Note)
     |> named("noted")
-    |> into(ElixirRunner.BoundedLoop.Answer)
+    |> into(ElixirRunner.StepsLoop.Answer)
     |> sink("answer")
   end
 end

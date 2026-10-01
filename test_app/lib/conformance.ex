@@ -99,40 +99,24 @@ end
 
 defmodule ElixirRunner.Conformance.Row do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
 
-  # The unbounded class every interpreted row of that kind registers: the steps it
-  # declares are the row the interpreter is driving, so the class flags a row
-  # reads off its module come from the same context.
+  # The class every interpreted row registers: the steps it declares are the
+  # row the interpreter is driving, so the settings tree a row writes comes
+  # from the same context.
   def factory_id, do: ElixirRunner.Conformance.context().topology
   def channels(c), do: ElixirRunner.Conformance.declare(c)
-  def sync_durability, do: ElixirRunner.Conformance.context().sync_durability
-  def persistence_enabled, do: ElixirRunner.Conformance.context().persistent
-  def sleep_when_idle, do: ElixirRunner.Conformance.context().sleep_when_idle
+  def run, do: ElixirRunner.Conformance.context().run
+  def durable, do: ElixirRunner.Conformance.context().durable
 end
 
-defmodule ElixirRunner.Conformance.BoundedRow do
+# The refusal table's `shorthand_duplicate_id` pair: a flow short form and a
+# short form that runs in steps under one factory id, which is what proves the
+# two runs share one namespace. Nothing but that row registers them.
+
+defmodule ElixirRunner.ShorthandDupFlow do
   @moduledoc false
-  @behaviour Flezha.SDK.BoundedOperator
-
-  # The bounded class a `class.bounded` row registers, the same steps on the
-  # same builder: what it writes that a bounded operator does not carry is judged by
-  # the bounded operator's own registration.
-  def factory_id, do: ElixirRunner.Conformance.context().topology
-  def channels(c), do: ElixirRunner.Conformance.declare(c)
-  def persistence_enabled, do: ElixirRunner.Conformance.context().persistent
-
-  def sleep_when_idle,
-    do: ElixirRunner.Conformance.context().sleep_when_idle or persistence_enabled()
-end
-
-# The refusal table's `shorthand_duplicate_id` pair: an unbounded short form and a
-# bounded short form under one factory id, which is what proves the two kinds
-# share one namespace. Nothing but that row registers them.
-
-defmodule ElixirRunner.ShorthandDupUnbounded do
-  @moduledoc false
-  use Flezha.SDK.UnboundedOperator, factory_id: "plain", sink: "out"
+  use Flezha.SDK.Operator, factory_id: "plain", sink: "out"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -140,9 +124,9 @@ defmodule ElixirRunner.ShorthandDupUnbounded do
   end
 end
 
-defmodule ElixirRunner.ShorthandDupBounded do
+defmodule ElixirRunner.ShorthandDupSteps do
   @moduledoc false
-  use Flezha.SDK.BoundedOperator, factory_id: "plain", sink: "twin_sink"
+  use Flezha.SDK.Operator, factory_id: "plain", sink: "twin_sink", run: :steps
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -154,8 +138,9 @@ defmodule ElixirRunner.Conformance do
   @moduledoc """
   The Elixir arm of the refusal table: every row of
   `test/fixtures/reference_topologies.txt` driven through
-  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2`, on an
-  unbounded class, or on a bounded class for a row that writes `class.bounded`.
+  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2` on one
+  class, whose settings tree is the row's `class.run(...)` and
+  `class.durable(...)`.
 
   Two entry points, both in `ElixirRunner.Application`:
 
@@ -168,26 +153,28 @@ defmodule ElixirRunner.Conformance do
   declaration here, not a builder knob, so the palette reads the row's capacity
   off `mailbox_capacity/1` rather than the handle carrying it.
 
-  `class.persistent` and `class.sleep_when_idle` are the row classes'
-  `persistence_enabled/0` and `sleep_when_idle/0`.
+  `class.run(<tree>)` and `class.durable(<tree>)` carry the tree as JSON; the
+  row class's `run/0` and `durable/0` answer it in this SDK's spelling (a
+  branch name is an atom, a branch with members `{name, keyword}`), so a
+  misplaced member reaches the SDK's own registration check.
   """
 
-  alias ElixirRunner.Conformance.{Row, BoundedRow}
+  alias ElixirRunner.Conformance.Row
   alias Flezha.SDK.Channels
-  alias Flezha.SDK.Bounded.Spec
+  alias Flezha.SDK.Steps.Spec
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
   @manifest "test/apps/elixir_runner/conformance.json"
 
   # Authorable in no builder — the fixture header says why for each.
-  @unauthorable ~w(detached raw_flags)
+  @unauthorable ~w(detached)
 
   # The two rows the fixture cites rather than re-spells: this app's own
   # fixtures, whose derived lines are the seven-column table at the top.
   @cited %{
     "hybrid_channel" => ElixirRunner.HybridChannelOp,
-    "commit_block_chain" => ElixirRunner.Bounded.TierCommitBlockBounded
+    "commit_block_chain" => ElixirRunner.Steps.TierCommitBlockSteps
   }
 
   @default_mailbox_capacity 1024
@@ -195,9 +182,8 @@ defmodule ElixirRunner.Conformance do
     topology: "none",
     steps: [],
     mailbox: %{},
-    sync_durability: false,
-    persistent: true,
-    sleep_when_idle: false
+    run: nil,
+    durable: nil
   }
 
   # --- the two entry points ---
@@ -245,8 +231,8 @@ defmodule ElixirRunner.Conformance do
   end
 
   # The row's class through the registration a runner makes, which reads its
-  # kind and judges it as that kind; nothing connects. A bounded operator's verdict
-  # carries its topology inside its spec.
+  # settings tree and judges it under them; nothing connects. A steps class's
+  # verdict carries its topology inside its spec.
   defp registered(module) do
     case "conformance" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(module) do
       %Flezha.SDK{classes: [{^module, class}]} -> {:ok, topology(class)}
@@ -306,13 +292,7 @@ defmodule ElixirRunner.Conformance do
     end
   end
 
-  defp class_of(row) do
-    cond do
-      cited = @cited[row.topology] -> cited
-      "class.bounded" in steps(row) -> BoundedRow
-      true -> Row
-    end
-  end
+  defp class_of(row), do: @cited[row.topology] || Row
 
   # --- the §5 short form ---
   #
@@ -369,8 +349,8 @@ defmodule ElixirRunner.Conformance do
     handle =
       "conformance_shorthand"
       |> Flezha.SDK.create_runner()
-      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupUnbounded)
-      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupBounded)
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupFlow)
+      |> Flezha.SDK.register_factory(ElixirRunner.ShorthandDupSteps)
 
     case handle do
       %Flezha.SDK{} -> :ok
@@ -498,10 +478,8 @@ defmodule ElixirRunner.Conformance do
     dotted(head, links, acc)
   end
 
-  defp dotted("class", [flag], acc) do
-    {name, value} = call(flag)
-    class_flag(name, value, acc)
-  end
+  # The class's settings, read off the context by the row class.
+  defp dotted("class", [_setting], acc), do: acc
 
   # A tasklet knob, read off the palette's own declaration rather than here.
   defp dotted(_head, ["mailbox(" <> _], acc), do: acc
@@ -568,30 +546,6 @@ defmodule ElixirRunner.Conformance do
   defp stream_link(other, _, _stream),
     do: raise("the fixture spells a link this interpreter does not map: #{other}")
 
-  # The kind is the class module's, which `class_of/1` chose from this flag.
-  defp class_flag("bounded", _value, acc), do: acc
-  defp class_flag("persistent", _value, acc), do: acc
-  defp class_flag("sync_durability", _value, acc), do: acc
-  defp class_flag("sleep_when_idle", _value, acc), do: acc
-
-  defp class_flag("effectively_once", _value, acc),
-    do: %{acc | token: Channels.effectively_once(acc.token)}
-
-  defp class_flag("checkpoint_ack", _value, acc),
-    do: %{acc | token: Channels.checkpoint_ack(acc.token)}
-
-  defp class_flag("checkpoint_every", value, acc),
-    do: %{acc | token: Channels.checkpoint_every(acc.token, integer(value))}
-
-  defp class_flag("outputs_at_checkpoint", value, acc),
-    do: %{acc | token: Channels.outputs_at_checkpoint(acc.token, integer(value))}
-
-  defp class_flag("correction_window", value, acc),
-    do: %{acc | token: Channels.correction_window(acc.token, integer(value))}
-
-  defp class_flag(other, _value, _acc),
-    do: raise("the fixture spells a class flag this interpreter does not map: #{other}")
-
   defp tasklet("plain"), do: ElixirRunner.Conformance.PlainTask
   defp tasklet("second"), do: ElixirRunner.Conformance.SecondTask
   defp tasklet("twin"), do: ElixirRunner.Conformance.TwinTask
@@ -627,11 +581,28 @@ defmodule ElixirRunner.Conformance do
       topology: row.topology,
       steps: steps,
       mailbox: mailboxes(steps),
-      sync_durability: "class.sync_durability" in steps,
-      persistent: "class.persistent" in steps,
-      sleep_when_idle: "class.sleep_when_idle" in steps
+      run: setting(steps, "run"),
+      durable: setting(steps, "durable")
     })
   end
+
+  # `class.<setting>(<json>)` as this SDK spells the tree, `nil` when absent.
+  defp setting(steps, name) do
+    case Enum.find(steps, &String.starts_with?(&1, "class.#{name}(")) do
+      nil -> nil
+      step -> step |> argument() |> Jason.decode!() |> tree()
+    end
+  end
+
+  defp tree(name) when is_binary(name), do: String.to_atom(name)
+
+  defp tree(%{} = branch) when map_size(branch) == 1 do
+    [{name, members}] = Map.to_list(branch)
+    members = for {key, value} <- members || %{}, do: {String.to_atom(key), tree(value)}
+    {if(name == "false", do: false, else: String.to_atom(name)), members}
+  end
+
+  defp tree(value), do: value
 
   defp steps(row),
     do: row.steps |> String.split(";") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))

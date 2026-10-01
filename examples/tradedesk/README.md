@@ -12,10 +12,10 @@ one tasklet at a time.
 | File | What is in it |
 |---|---|
 | `lib/tradedesk/application.ex` | the runner: this node joins the `trading` namespace and registers both factories |
-| `lib/tradedesk/trade_watcher.ex` | the ETL stream, an unbounded operator: the exchange's trade messages in, a cell per symbol, buy signals out |
+| `lib/tradedesk/trade_watcher.ex` | the ETL stream, a flow operator: the exchange's trade messages in, a cell per symbol, buy signals out |
 | `lib/tradedesk/track_prices.ex` | keeps each symbol's last ten prices, and compares a new price with their average |
 | `lib/tradedesk/buy_above_average.ex` | starts an order when a price is 2 % or more above its average |
-| `lib/tradedesk/order_executor.ex` | the workflow, a bounded operator: two steps in order, then two more on the same placed order. The order an instance is started with is its `OrderTicket` |
+| `lib/tradedesk/order_executor.ex` | the workflow, a steps operator: two steps in order, then two more on the same placed order. The order an instance is started with is its `OrderTicket` |
 | `lib/tradedesk/reserve_funds.ex` | step one: puts the money aside, and releases it again if the order is undone |
 | `lib/tradedesk/place_order.ex` | step two: places the paper order, and cancels it if the order is undone |
 | `lib/tradedesk/confirm_fill.ex` | waits ten seconds for the exchange, confirms the fill and ends the order with its result, and refuses an order above the exchange's limit |
@@ -76,7 +76,7 @@ flz operator info order_by_hand --namespace trading
 ```
 ...
 Operator: order_by_hand
-  Kind: bounded
+  Run: steps
   Phase: finished
   Status: ok
   Finished At (unix s): 1790611042
@@ -118,7 +118,7 @@ flz operator info order_too_big --namespace trading
 ```
 ...
 Operator: order_too_big
-  Kind: bounded
+  Run: steps
   Phase: finished
   Status: error
   Error: confirm_fill: the exchange fills at most 100 a time, and this is 500

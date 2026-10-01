@@ -1,11 +1,11 @@
 defmodule Flezha.SDK.Spawn do
   @moduledoc """
-  Tasklet-requested spawn of a bounded instance: the request a tasklet
-  makes with `Flezha.SDK.Ctx.spawn_bounded/4`, the handle it gets back at
+  Tasklet-requested spawn of a steps instance: the request a tasklet
+  makes with `Flezha.SDK.Ctx.spawn_steps/4`, the handle it gets back at
   once, and what the controller's answer resolves to.
 
-  The request is a cast to the runner, which ships `SpawnBoundedRequest` and
-  keeps the caller as a waiter until `SpawnBoundedResponse` arrives or the
+  The request is a cast to the runner, which ships `SpawnStepsRequest` and
+  keeps the caller as a waiter until `SpawnStepsResponse` arrives or the
   request's deadline passes. The answer reaches the caller as a message, so a
   handle is read once, and only inside the invocation that made it: after
   `run/3` returns the Cell drops what arrives. A failure nobody read is
@@ -55,7 +55,7 @@ defmodule Flezha.SDK.Spawn do
   @typedoc """
   What a handle resolves to: the instance reached, or the refusal, carrying
   the controller's own code (`operator.already_running`,
-  `operator.factory_unknown`, `operator.factory_not_bounded`, ...) or one the
+  `operator.factory_unknown`, `operator.factory_not_steps`, ...) or one the
   runner decides itself: `spawn.timeout`, `spawn.unavailable`.
   """
   @type result ::
@@ -69,7 +69,7 @@ defmodule Flezha.SDK.Spawn do
     {instance_id, if_running} = options!(opts)
 
     handle = %__MODULE__{
-      reference_id: "spawn-bounded-#{instance_id}-#{System.unique_integer([:positive])}",
+      reference_id: "spawn-steps-#{instance_id}-#{System.unique_integer([:positive])}",
       instance_id: instance_id,
       factory_id: factory_id,
       identity: identity
@@ -102,18 +102,18 @@ defmodule Flezha.SDK.Spawn do
 
       {nil, _policy} ->
         raise ArgumentError,
-              "spawn_bounded: `if_running` needs an `id`; without one every spawn starts a new instance"
+              "spawn_steps: `if_running` needs an `id`; without one every spawn starts a new instance"
 
       {id, _policy} when not is_binary(id) or id == "" ->
         raise ArgumentError,
-              "spawn_bounded: `id` must be a non-empty string, got: #{inspect(id)}"
+              "spawn_steps: `id` must be a non-empty string, got: #{inspect(id)}"
 
       {id, policy} when policy in [nil, :deliver, :error] ->
         {id, policy || :deliver}
 
       {_id, policy} ->
         raise ArgumentError,
-              "spawn_bounded: `if_running` must be :deliver or :error, got: #{inspect(policy)}"
+              "spawn_steps: `if_running` must be :deliver or :error, got: #{inspect(policy)}"
     end
   end
 
@@ -152,7 +152,7 @@ defmodule Flezha.SDK.Spawn do
     with false <- spawn.claimed?,
          {:error, refusal} <- interpret(spawn, reply, error) do
       Logger.warning(
-        "[Flezha.SDK] spawn_bounded(factory `#{spawn.factory_id}`, " <>
+        "[Flezha.SDK] spawn_steps(factory `#{spawn.factory_id}`, " <>
           "id `#{spawn.instance_id}`) failed: #{refusal.message} (#{refusal.code})"
       )
     end

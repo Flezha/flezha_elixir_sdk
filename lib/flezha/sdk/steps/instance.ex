@@ -1,12 +1,12 @@
-defmodule Flezha.SDK.Bounded.Instance do
+defmodule Flezha.SDK.Steps.Instance do
   @moduledoc """
-  One bounded instance's runtime state, as the driver process holds it: the
+  One steps instance's runtime state, as the driver process holds it: the
   queue of triggers every pass starts from (messages and timer firings, in
   arrival order), the compensation markers a saga reads, and the committed
   task-journal the bind carried for a crash-resume.
 
   It is a struct rather than a process. The reference carries a cancellation
-  flag, a restore condition variable and a bounded channel here because its
+  flag, a restore condition variable and a steps channel here because its
   driver is a pool thread; on the BEAM the driver *is* a process, so a stop is
   a message it receives, the restore gate is a `receive`, and the inbox is a
   queue this struct owns. What is left is the state itself, which is what the
@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Bounded.Instance do
   """
 
   alias Flezha.SDK.Knob
-  alias Flezha.SDK.Bounded.Spec
+  alias Flezha.SDK.Steps.Spec
   alias Flezha.SDK.Operator.Inbox
 
   defmodule Item do
@@ -98,7 +98,6 @@ defmodule Flezha.SDK.Bounded.Instance do
             # The highest input-log offset this instance took: what its
             # journal released, raised by every message that arrives.
             taken: nil,
-            park_idle_ms: nil,
             # The controller parks a failed turn of a `per_input` keep-progress
             # loop, so the loop goes on past it rather than ending.
             dead_letter_turns: false,
@@ -121,7 +120,6 @@ defmodule Flezha.SDK.Bounded.Instance do
       spec: spec,
       inbox: :queue.new(),
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
-      park_idle_ms: Keyword.get(opts, :park_idle_ms) || Knob.get(:park_idle_ms),
       dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false),
       journal: journal,
       taken: journal && Map.get(journal, :released_offset),
@@ -222,13 +220,13 @@ defmodule Flezha.SDK.Bounded.Instance do
 
   @doc """
   How long an empty inbox is waited on before the loop parks: the bound on the
-  tail a rehydrating bind still owes, else the park idle window.
+  tail a rehydrating bind still owes, else the class's `sleep_after`.
   """
   @spec idle_ms(t()) :: non_neg_integer()
   def idle_ms(%__MODULE__{owed_inbox: owed}) when owed > 0,
     do: Knob.get(:sdk_owed_inbox_wait_ms)
 
-  def idle_ms(%__MODULE__{park_idle_ms: ms}), do: ms
+  def idle_ms(%__MODULE__{spec: spec}), do: spec.settings.sleep_after_ms
 
   # Any message that arrives, queued or parked, settles its share of the tail
   # a rehydrating bind still owes.

@@ -66,7 +66,7 @@ defmodule Flezha.SDK.Knob do
     {:sdk_cell_snapshot_ms, nil, :ms, 25_000},
     {:sdk_idle_probe_ms, nil, :ms, 50},
     {:sdk_max_reap_interval_ms, nil, :ms, 30_000},
-    # How long a rehydrated per-input bounded loop waits for the inbox tail its
+    # How long a rehydrated per-input steps loop waits for the inbox tail its
     # bind still owes before it may park: a park there would drop the tail.
     {:sdk_owed_inbox_wait_ms, nil, :ms, 60_000},
     {:sdk_serialize_wait_ms, nil, :ms, 5_000},
@@ -78,8 +78,7 @@ defmodule Flezha.SDK.Knob do
     {:sdk_spawn_reply_ms, nil, :ms, 30_000},
     # Unset, the socket directory is the first rung of the ladder every runtime
     # walks, which `flz_transport` resolves.
-    {:socket_files_path, "FLEZHA_SOCKET_FILES_PATH", :path, nil},
-    {:park_idle_ms, "FLEZHA_PARK_IDLE_MS", :ms, 600_000}
+    {:socket_files_path, "FLEZHA_SOCKET_FILES_PATH", :path, nil}
   ]
 
   @by_name Map.new(@rows, fn {name, env, type, default} ->
@@ -156,7 +155,7 @@ defmodule Flezha.SDK.Knob do
     end
   end
 
-  @doc "Sends of one bounded commit barrier, the first included, before the run fails."
+  @doc "Sends of one steps commit barrier, the first included, before the run fails."
   # A re-send is the connection's business, not a class's, so nothing sets it;
   # in lockstep with the core's `BARRIER_RESEND_ATTEMPTS`.
   @spec barrier_resend_attempts() :: pos_integer()

@@ -28,7 +28,7 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   defmodule NochangeOperator do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "nochange_operator"
+    use Flezha.SDK.Operator, factory_id: "nochange_operator"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(Nochange)
@@ -61,7 +61,7 @@ defmodule Flezha.SDK.TaskletClockTest do
   test "two clocks do not compile, in a tasklet or in a short form" do
     for line <- [
           ~s|Tasklet, name: "quiet", logical_clock: true|,
-          ~s|UnboundedOperator, factory_id: "quiet", logical_clock: true|
+          ~s|Operator, factory_id: "quiet", logical_clock: true|
         ] do
       error =
         refused("""
@@ -93,7 +93,7 @@ defmodule Flezha.SDK.TaskletClockTest do
           {"cell_idle_ttl_ms: 200", "`idle_ttl_seconds:`"},
           {"clock: :logical", "`logical_clock: true`"}
         ],
-        macro <- [~s|Tasklet, name: "p"|, ~s|UnboundedOperator, factory_id: "p"|] do
+        macro <- [~s|Tasklet, name: "p"|, ~s|Operator, factory_id: "p"|] do
       error =
         refused("""
         use Flezha.SDK.#{macro}, #{option}
@@ -110,7 +110,7 @@ defmodule Flezha.SDK.TaskletClockTest do
           {"defp event_time_of(_input), do: 0", "`event_time/1`"},
           {"def cell_idle_ttl_ms, do: 20", "`idle_ttl_seconds/0`"}
         ],
-        macro <- [~s|Tasklet, name: "p"|, ~s|UnboundedOperator, factory_id: "p"|] do
+        macro <- [~s|Tasklet, name: "p"|, ~s|Operator, factory_id: "p"|] do
       error =
         refused("""
         use Flezha.SDK.#{macro}
@@ -150,7 +150,7 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   defmodule TwoClocksOperator do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "two_clocks_operator"
+    use Flezha.SDK.Operator, factory_id: "two_clocks_operator"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(TwoClocksByHand)
@@ -158,7 +158,7 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   defmodule RetiredOperator do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "retired_operator"
+    use Flezha.SDK.Operator, factory_id: "retired_operator"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(RetiredByHand)

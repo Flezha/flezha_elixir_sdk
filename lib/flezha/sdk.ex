@@ -11,10 +11,8 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{Codec, Error, RunnerServer, UnboundedOperator, Topology, BoundedOperator}
-  alias Flezha.SDK.Bounded.Spec
-
-  @kinds [{UnboundedOperator, :unbounded}, {BoundedOperator, :bounded}]
+  alias Flezha.SDK.{Codec, Error, Operator, RunnerServer, Topology}
+  alias Flezha.SDK.Steps.Spec
 
   @enforce_keys [:namespace]
   defstruct namespace: nil, transport: :native, classes: [], server: nil
@@ -42,21 +40,19 @@ defmodule Flezha.SDK do
   end
 
   @doc """
-  Declare an operator of either kind. Legal before and after `start/1`.
+  Declare an operator: a module of the `Flezha.SDK.Operator` behaviour. Legal
+  before and after `start/1`.
 
-  The kind is read from the module, never named by the call; see
-  `operator_kind/1`. Both kinds write their graph in `channels/1`.
-
-  Both kinds ride the same declared set, and the runner announces each
-  entry's kind with its factory id, so the controller knows the kind before it
-  places and the two share every downstream reader.
+  Its settings tree is read and checked here, and a class that runs in steps
+  is compiled into its steps spec. The runner announces each entry's run with
+  its factory id, so the controller knows it before it places.
   """
   @spec register_factory(result(), module()) :: result()
   def register_factory({:error, _} = e, _module), do: e
 
   def register_factory(%__MODULE__{} = h, module) do
-    with {:ok, kind} <- operator_kind(module),
-         {:ok, class} <- build_class(kind, module),
+    with :ok <- operator?(module),
+         {:ok, class} <- build_class(module),
          :ok <- not_duplicate(h, class.factory_id) do
       if h.server do
         case RunnerServer.define(h.server, factory_row(module, class), class) do
@@ -217,32 +213,28 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc """
-  The kind `module` declares, read from its `@behaviour`, which the `use`
-  macros set and a hand-written module writes:
-  `Flezha.SDK.UnboundedOperator` is an unbounded operator, `Flezha.SDK.BoundedOperator` a
-  bounded operator. A module declaring both is `topology.ambiguous_operator_kind`
-  and one declaring neither `topology.unknown_operator_kind`, the contract's codes
-  (`docs/sdk/authoring_contract.md` §5.1).
-  """
-  @spec operator_kind(module()) :: {:ok, :unbounded | :bounded} | {:error, Error.t()}
-  def operator_kind(module) do
-    declared = if Code.ensure_loaded?(module), do: behaviours(module), else: []
-
-    case for({behaviour, kind} <- @kinds, behaviour in declared, do: kind) do
-      [kind] -> {:ok, kind}
-      [] -> {:error, Error.new("topology.unknown_operator_kind", module: inspect(module))}
-      _both -> {:error, Error.new("topology.ambiguous_operator_kind", module: inspect(module))}
-    end
-  end
-
   # --- helpers ---
 
-  defp behaviours(module),
-    do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
+  # The `@behaviour` the `use` macro sets and a hand-written module writes.
+  defp operator?(module) do
+    declared =
+      if Code.ensure_loaded?(module),
+        do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten(),
+        else: []
 
-  defp build_class(:unbounded, module), do: Topology.build(module)
-  defp build_class(:bounded, module), do: Spec.build(module)
+    if Operator in declared,
+      do: :ok,
+      else: {:error, Error.new("topology.no_operator_exported", module: inspect(module))}
+  end
+
+  # The tree decides the class: a steps spec, or a flow topology.
+  defp build_class(module) do
+    case Operator.settings(module) do
+      {:ok, %Operator{run: :steps} = settings} -> Spec.build(module, settings)
+      {:ok, settings} -> Topology.build(module, settings)
+      {:error, issue} -> {:error, Topology.refusal([issue])}
+    end
+  end
 
   defp not_duplicate(%__MODULE__{classes: classes}, fid) do
     if Enum.any?(classes, fn {_m, t} -> t.factory_id == fid end),
@@ -254,6 +246,6 @@ defmodule Flezha.SDK do
     description =
       if function_exported?(module, :description, 0), do: module.description(), else: nil
 
-    {class.factory_id, description, Codec.kind(class)}
+    {class.factory_id, description, Codec.run(class)}
   end
 end

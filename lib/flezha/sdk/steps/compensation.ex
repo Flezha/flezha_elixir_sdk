@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Bounded.Compensation do
+defmodule Flezha.SDK.Steps.Compensation do
   @moduledoc """
   The saga unwind: when a run ends abnormally after partial progress, every
   Cell whose tasklet completed forward runs its `compensate/3` hook, and
@@ -10,7 +10,7 @@ defmodule Flezha.SDK.Bounded.Compensation do
   start until the whole of this one has drained past its barrier: the order is
   the guarantee, and running two stages at once would not keep it.
 
-  `rollback_mode` decides the scope. `:all_or_nothing` undoes every committed
+  `on_failure` decides the scope. `:undo_all` undoes every committed
   iteration as well as the in-flight one; `:keep_progress` keeps each finished
   iteration and undoes only the in-flight one. The mode is irrelevant to a
   single-pass chain, where both mean the same thing, and to a class with no
@@ -26,7 +26,7 @@ defmodule Flezha.SDK.Bounded.Compensation do
 
   alias Flezha.SDK.{Cell, Record, Tasklet, Wire}
   alias Flezha.SDK.Operator.Cells
-  alias Flezha.SDK.Bounded.{Commit, Instance}
+  alias Flezha.SDK.Steps.{Commit, Instance}
 
   @doc """
   Begin the unwind of `state`, or answer `:nothing_to_undo` when the class
@@ -135,7 +135,7 @@ defmodule Flezha.SDK.Bounded.Compensation do
   @doc """
   The Cells, by identity, a rollback of the class's mode could still reach
   between passes: every compensable Cell of a committed iteration under
-  `:all_or_nothing`, none under `:keep_progress`. The idle sweep keeps them.
+  `:undo_all`, none under `:keep_progress`. The idle sweep keeps them.
   """
   @spec held(struct()) :: MapSet.t(binary())
   def held(state) do
@@ -146,17 +146,17 @@ defmodule Flezha.SDK.Bounded.Compensation do
         do: identity
   end
 
-  defp journals?(state), do: state.spec.knobs.persistence_enabled
+  defp journals?(state), do: state.spec.settings.durable != :memory
 
   # The stages to undo, latest first: the in-flight iteration's completed
-  # stages, then — under `:all_or_nothing` — every committed iteration's, also
+  # stages, then — under `:undo_all` — every committed iteration's, also
   # latest first. A stage whose tasklet declares no hook is left out, so a
   # class with no saga has an empty plan.
   defp plan(state) do
     iterations =
-      case state.spec.knobs.rollback_mode do
+      case state.spec.settings.on_failure do
         :keep_progress -> [state.completed]
-        :all_or_nothing -> [state.completed | Enum.reverse(state.committed)]
+        :undo_all -> [state.completed | Enum.reverse(state.committed)]
       end
 
     iterations

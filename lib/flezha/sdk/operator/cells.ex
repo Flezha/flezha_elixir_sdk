@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Operator.Cells do
   @moduledoc """
   An operator instance's Cells, held in the state of the process that owns
-  them — the unbounded `Flezha.SDK.Operator` or the bounded operator
-  `Flezha.SDK.Bounded.Driver` — as `%{node_ref => %{key => pid}}`, with each
+  them — a flow instance's `Flezha.SDK.Operator.Server` or a steps
+  instance's `Flezha.SDK.Steps.Driver` — as `%{node_ref => %{key => pid}}`, with each
   live Cell's `Flezha.SDK.Cell.Room`, which a push takes its slot from.
 
   Single Cells and the owned Static ones are minted at start; a Dynamic key's
@@ -15,9 +15,9 @@ defmodule Flezha.SDK.Operator.Cells do
   "evicted" rather than "never existed". The set also holds the owner's
   plugin outputs no bound stream would take, replayed after the Cells rebind.
 
-  One option is the kind's: an unbounded Cell parks what its ladder exhausts,
-  a bounded operator Cell reports it to the driver, and has no timers until they fire
-  inside a bounded operator.
+  One option is the run's: a flow Cell parks what its ladder exhausts, a steps
+  Cell reports it to the driver, and has no timers until they fire inside a
+  steps pass.
   """
 
   require Logger
@@ -41,11 +41,11 @@ defmodule Flezha.SDK.Operator.Cells do
   # so a burst of expiries drains over a few ticks rather than stalling it.
   @evict_budget 256
 
-  @enforce_keys [:operator_id, :topology, :kind]
+  @enforce_keys [:operator_id, :topology, :run]
   defstruct [
     :operator_id,
     :topology,
-    :kind,
+    :run,
     :range,
     :counters,
     :hold_cap,
@@ -65,8 +65,8 @@ defmodule Flezha.SDK.Operator.Cells do
 
   @doc """
   The Cell set of the calling process, its Single and owned Static Cells
-  minted. `opts` carries `:operator_id`, `:topology`, `:kind` (`:unbounded` |
-  `:bounded`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
+  minted. `opts` carries `:operator_id`, `:topology`, `:run` (`:flow` |
+  `:steps`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
   `:secondaries`, `:credit` and `:prefix`, the instance's processed-prefix
   ledger.
   """
@@ -79,7 +79,7 @@ defmodule Flezha.SDK.Operator.Cells do
     prewarm(%__MODULE__{
       operator_id: Keyword.fetch!(opts, :operator_id),
       topology: topology,
-      kind: Keyword.fetch!(opts, :kind),
+      run: Keyword.fetch!(opts, :run),
       range: Keyword.get(opts, :range) || KeyGroup.decode(0, 0, 0, 0),
       counters: counters,
       hold_cap: hold_cap,
@@ -267,7 +267,7 @@ defmodule Flezha.SDK.Operator.Cells do
     dead = for {ref, keyed} <- c.cells, {key, ^pid} <- keyed, do: {ref, key}
 
     Enum.reduce(dead, c, fn {node_ref, key}, acc ->
-      if not Operator.clean_exit?(reason), do: crashed(acc, node_ref, key, reason)
+      if not Operator.Server.clean_exit?(reason), do: crashed(acc, node_ref, key, reason)
       acc |> forget(node_ref, key) |> remint(node_ref, key, reason)
     end)
   end
@@ -289,7 +289,7 @@ defmodule Flezha.SDK.Operator.Cells do
   end
 
   defp remint(%__MODULE__{topology: topo} = c, node_ref, key, reason) do
-    if Operator.clean_exit?(reason) or topo.node_mode[node_ref] == :dynamic,
+    if Operator.Server.clean_exit?(reason) or topo.node_mode[node_ref] == :dynamic,
       do: c,
       else: c |> ensure(node_ref, key) |> elem(1)
   end
@@ -497,33 +497,33 @@ defmodule Flezha.SDK.Operator.Cells do
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: ladder.retry_max,
       retry_backoff_ms: ladder.retry_backoff_ms,
-      # A bounded operator answers an exhausted ladder by unwinding, not by shedding
+      # A steps operator answers an exhausted ladder by unwinding, not by shedding
       # the input to the dead-letter queue, and decides when a due firing runs.
-      park_on_exhaustion: c.kind == :unbounded,
-      gate_firings: c.kind == :bounded,
+      park_on_exhaustion: c.run == :flow,
+      gate_firings: c.run == :steps,
       counters: c.counters,
       hold_cap: c.hold_cap,
       secondaries: c.secondaries,
       slots: c.slots,
       credit: c.credit,
-      persistence_enabled: topo.persistence_enabled?,
+      durable: topo.durable?,
       tier: tier_facts(c, topo, node_ref),
       ctx_opts: [runner: c.runner] ++ ctx_opts(topo, node_ref, key)
     )
   end
 
   # What a Cell of this node needs to know about its records: whether it
-  # writes effect records (the tier, or a durable bounded operator, whose stage commit
+  # writes effect records (the tier, or a durable steps operator, whose stage commit
   # names them), the checkpoint policy, the sink routes it captures its own
   # outputs through (the router delivers such a class's emits to nodes only),
-  # whether a record waits for an inter-tasklet edge (a bounded operator's edge value
-  # waits on its driver instead) and whether it is a bounded stage's Cell.
-  defp tier_facts(%__MODULE__{kind: kind} = c, topo, node_ref) do
+  # whether a record waits for an inter-tasklet edge (a steps operator's edge value
+  # waits on its driver instead) and whether it is a steps stage's Cell.
+  defp tier_facts(%__MODULE__{run: run} = c, topo, node_ref) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
-    stage? = kind == :bounded
+    stage? = run == :steps
 
     %{
-      on?: topo.effectively_once? or (stage? and topo.persistence_enabled?),
+      on?: topo.effectively_once? or (stage? and topo.durable?),
       checkpoint: topo.checkpoint,
       sink_routes: for(%{to: {:sink, _}} = r <- routes, do: r),
       edge_routes:

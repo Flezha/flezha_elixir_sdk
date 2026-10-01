@@ -1,9 +1,9 @@
 defmodule Flezha.SDK.CellDeathTest do
   @moduledoc """
-  A Cell that dies outside its ladder. In a bounded stage, with the barrier
+  A Cell that dies outside its ladder. In a steps stage, with the barrier
   still queued behind its work, the barrier is never answered, so the driver
   fails that stage the way an exhausted ladder does and the run ends instead
-  of waiting for ever. In an unbounded instance holding unfinished input, the
+  of waiting for ever. In a flow instance holding unfinished input, the
   Operator ends so the controller rebinds it and re-forwards that input; with
   nothing held, the Cell is minted again.
   """
@@ -14,7 +14,7 @@ defmodule Flezha.SDK.CellDeathTest do
   alias Flezha.SDK.{Channels, Counters, Operator, Topology}
   alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
 
   @collector :cell_death_test
 
@@ -116,12 +116,12 @@ defmodule Flezha.SDK.CellDeathTest do
   end
 
   defmodule BlockerOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "cell_death_blocker_op"
+    use Flezha.SDK.Operator, factory_id: "cell_death_blocker_op"
     def channels(c), do: c |> input("in") |> into(Blocker)
   end
 
   defmodule KeyedOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "cell_death_keyed_op"
+    use Flezha.SDK.Operator, factory_id: "cell_death_keyed_op"
     def channels(c), do: c |> input("in") |> key_by(& &1) |> into(Blocker)
   end
 
@@ -167,7 +167,7 @@ defmodule Flezha.SDK.CellDeathTest do
       ref = Process.monitor(driver)
       Process.exit(cell, :kill)
       assert_receive {:DOWN, ^ref, :process, ^driver, :normal}, 5_000
-      assert_receive {:shipped, {:bounded_completed, done}}, 5_000
+      assert_receive {:shipped, {:operator_completed, done}}, 5_000
       done
     end)
   end
@@ -203,7 +203,7 @@ defmodule Flezha.SDK.CellDeathTest do
     assert log =~ "cell crashed: operator=cell-death"
   end
 
-  describe "an unbounded instance" do
+  describe "a flow instance" do
     # Unlinked, so its exit reaches the test as a `:DOWN` rather than an exit
     # signal.
     defp start_operator(module \\ BlockerOp) do
@@ -211,7 +211,7 @@ defmodule Flezha.SDK.CellDeathTest do
       {:ok, runner} = StubRunner.start_link(test: self())
 
       {:ok, op} =
-        Operator.start_link(
+        Operator.Server.start_link(
           operator_id: "cell-death-op",
           topology: topology,
           counters: Counters.new(),
@@ -224,7 +224,8 @@ defmodule Flezha.SDK.CellDeathTest do
 
     defp at(offset), do: %{"flz.offset" => Integer.to_string(offset)}
 
-    defp cell_of(op), do: op |> Operator.cells() |> then(fn [{_, _, [{nil, pid}]}] -> pid end)
+    defp cell_of(op),
+      do: op |> Operator.Server.cells() |> then(fn [{_, _, [{nil, pid}]}] -> pid end)
 
     defp end_cell(cell, :kill), do: Process.exit(cell, :kill)
     defp end_cell(cell, :linked_exit), do: send(cell, :linked_exit)
@@ -309,7 +310,7 @@ defmodule Flezha.SDK.CellDeathTest do
       {op, ref} = start_operator(KeyedOp)
       for key <- ["x", "y", "z"], do: Inbox.input(op, "in", key, %{})
       for _ <- 1..3, do: assert_receive({:took, _, _}, 5_000)
-      cells = for {_, _, keyed} <- Operator.cells(op), {_key, pid} <- keyed, do: pid
+      cells = for {_, _, keyed} <- Operator.Server.cells(op), {_key, pid} <- keyed, do: pid
       cell_refs = Enum.map(cells, &Process.monitor/1)
       assert length(cell_refs) == 3
 

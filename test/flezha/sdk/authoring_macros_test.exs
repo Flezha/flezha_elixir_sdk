@@ -73,7 +73,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   # take `Channels.input/2` back before the tasklet's own `input/0` is read.
   defmodule NestingOperator do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "nesting_operator"
+    use Flezha.SDK.Operator, factory_id: "nesting_operator"
 
     defmodule Nested do
       @moduledoc false
@@ -122,7 +122,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule HandWrittenOperator do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
 
     @impl true
     def factory_id, do: "hand_written_operator"
@@ -154,12 +154,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   # --- the operator macros -------------------------------------------------
 
-  defmodule TunedBounded do
+  defmodule TunedSteps do
     @moduledoc false
-    use Flezha.SDK.BoundedOperator,
-      factory_id: "tuned_bounded",
-      loop_mode: :chained,
-      rollback_mode: :keep_progress
+    use Flezha.SDK.Operator,
+      factory_id: "tuned_steps",
+      run: {:steps, each: :chained, on_failure: :keep_progress}
 
     @impl true
     def channels(c) do
@@ -167,14 +166,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "an operator macro defines only the knobs written" do
-    assert TunedBounded.factory_id() == "tuned_bounded"
-    assert TunedBounded.loop_mode() == :chained
-    assert TunedBounded.rollback_mode() == :keep_progress
-    refute function_exported?(TunedBounded, :max_duration_ms, 0)
+  test "an operator macro defines only the settings written" do
+    assert TunedSteps.factory_id() == "tuned_steps"
+    assert TunedSteps.run() == {:steps, each: :chained, on_failure: :keep_progress}
+    refute function_exported?(TunedSteps, :durable, 0)
+    refute function_exported?(TunedSteps, :max_duration_ms, 0)
   end
 
-  test "a retired bounded option fails to compile, as any unknown option does" do
+  test "a retired steps option fails to compile, as any unknown option does" do
     for option <- [
           "retry_attempts: 5",
           "retry_backoff_ms: 20",
@@ -183,7 +182,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         ] do
       error =
         refused("""
-        use Flezha.SDK.BoundedOperator, factory_id: "w", #{option}
+        use Flezha.SDK.Operator, factory_id: "w", #{option}, run: :steps
         def channels(c), do: c
         """)
 
@@ -192,22 +191,50 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "a loop or rollback mode outside its set fails to compile, naming the value" do
-    for {option, value} <- [{"loop_mode", ":forever"}, {"rollback_mode", ":undo_everything"}] do
+  test "a setting outside its choices fails to compile, naming the setting and the value" do
+    for {option, setting, value} <- [
+          {"run: {:steps, each: :forever}", "each", "forever"},
+          {"run: {:steps, on_failure: :undo_everything}", "on_failure", "undo_everything"},
+          {"run: :bounded", "run", "bounded"},
+          {"durable: {:local, sleep_after: 0}", "sleep_after", "0"}
+        ] do
       error =
         refused("""
-        use Flezha.SDK.BoundedOperator, factory_id: "w", #{option}: #{value}
+        use Flezha.SDK.Operator, factory_id: "w", #{option}
         def channels(c), do: c
         """)
 
-      assert error.description =~ option and error.description =~ value
+      assert error.description =~ "sets #{setting} to #{value}", "read: #{error.description}"
     end
+  end
+
+  test "a setting under a parent that does not carry it fails to compile, naming both" do
+    for {option, parent, setting} <- [
+          {"run: {:flow, each: :per_input}", "flow", "each"},
+          {"run: {:steps, exactly: :effectively_once}", "steps", "exactly"},
+          {"run: {:steps, correction_ms: 5_000}", "steps", "correction_ms"},
+          {"run: {:flow, exactly: {:at_least_once, ack: :checkpoint}}", "at_least_once", "ack"},
+          {"durable: {false, sleep_after: 1_000}", "false", "sleep_after"}
+        ] do
+      error =
+        refused("""
+        use Flezha.SDK.Operator, factory_id: "w", #{option}
+        def channels(c), do: c
+        """)
+
+      assert error.description =~ "'#{parent}' of operator 'w' declares #{setting}",
+             "read: #{error.description}"
+    end
+
+    # A member of the tree written beside it is no option of the macro.
+    error = refused(~s|use Flezha.SDK.Operator, factory_id: "w", each: :chained|)
+    assert error.description =~ "has no option :each"
   end
 
   test "an operator macro refuses an unknown option and a missing factory_id" do
     unknown =
       refused("""
-      use Flezha.SDK.UnboundedOperator, factory_id: "x", persistance_enabled: false
+      use Flezha.SDK.Operator, factory_id: "x", persistance_enabled: false
       def channels(_c), do: :ok
       """)
 
@@ -215,7 +242,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     missing =
       refused("""
-      use Flezha.SDK.UnboundedOperator, description: "no id"
+      use Flezha.SDK.Operator, description: "no id"
       def channels(_c), do: :ok
       """)
 
@@ -226,7 +253,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByImport do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "merged_by_import"
+    use Flezha.SDK.Operator, factory_id: "merged_by_import"
 
     @impl true
     def channels(c) do
@@ -245,7 +272,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByPrefix do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
 
     @impl true
     def factory_id, do: "merged_by_prefix"
@@ -448,7 +475,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
           {~s|Tasklet, name: "by_hand"|, block, by_hand},
           {~s|Tasklet, name: "by_hand"|, change, by_hand},
           {~s|Tasklet, name: "by_hand"|, "", "defp apply_change(s, _c), do: s"},
-          {~s|UnboundedOperator, factory_id: "by_hand"|, "", by_hand}
+          {~s|Operator, factory_id: "by_hand"|, "", by_hand}
         ] do
       error =
         refused("""
@@ -467,7 +494,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Upcase do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "upcase", sink: "out"
+    use Flezha.SDK.Operator, factory_id: "upcase", sink: "out"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -487,7 +514,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule UpcaseTwinOperator do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "upcase_twin"
+    use Flezha.SDK.Operator, factory_id: "upcase_twin"
 
     @impl true
     def channels(c), do: c |> input("input") |> into(UpcaseTwin) |> sink("out")
@@ -495,7 +522,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.BoundedOperator, factory_id: "place", sink: "placed", input: "order"
+    use Flezha.SDK.Operator, factory_id: "place", sink: "placed", input: "order", run: :steps
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -505,7 +532,21 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Chat do
     @moduledoc false
-    use Flezha.SDK.BoundedOperator, factory_id: "chat", sink: "replies", loop_mode: :per_input
+    use Flezha.SDK.Operator, factory_id: "chat", sink: "replies", run: {:steps, each: :per_input}
+
+    def run(input, state, ctx) do
+      emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule CappedShort do
+    @moduledoc false
+    use Flezha.SDK.Operator,
+      factory_id: "capped_short",
+      run: {:steps, each: :chained},
+      durable: false,
+      max_duration_ms: 5_000
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -515,7 +556,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Counter do
     @moduledoc false
-    use Flezha.SDK.UnboundedOperator, factory_id: "counter", input: "ticks", max_cells: 10
+    use Flezha.SDK.Operator, factory_id: "counter", input: "ticks", max_cells: 10
 
     state do
       field(:seen, :list, default: [])
@@ -528,7 +569,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     def run(input, state, ctx), do: {:ok, seen(state, ctx, input)}
   end
 
-  test "an operator module with a run body is a whole unbounded operator" do
+  test "an operator module with a run body is a whole flow operator" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
 
@@ -539,19 +580,19 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert route_shape(short) == route_shape(hand)
   end
 
-  test "an operator module with a run body is a whole bounded operator" do
+  test "an operator module with a run body is a whole steps operator" do
     assert Place.factory_id() == "place"
     assert function_exported?(Place, :channels, 1)
 
-    assert {:ok, spec} = Flezha.SDK.Bounded.Spec.build(Place)
-    assert spec.knobs.loop_mode == :once
+    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(Place)
+    assert spec.settings.each == :once
     assert entry_names(Place) == ["order"]
   end
 
-  test "a short-form bounded declares its loop mode" do
-    assert Chat.loop_mode() == :per_input
-    assert {:ok, spec} = Flezha.SDK.Bounded.Spec.build(Chat)
-    assert spec.knobs.loop_mode == :per_input
+  test "a short form that runs in steps declares its loop shape" do
+    assert Chat.run() == {:steps, each: :per_input}
+    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(Chat)
+    assert spec.settings.each == :per_input
     assert entry_names(Chat) == ["input"]
   end
 
@@ -576,90 +617,76 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert Counter.Tasklet.apply_change(%{seen: []}, {:seen, "a"}) == %{seen: ["a"]}
   end
 
-  test "register_factory reads a short form's kind" do
+  test "register_factory reads how a short form runs" do
     runner = Flezha.SDK.create_runner("short_form_ns")
 
-    assert %Flezha.SDK{classes: [{Upcase, stream}]} = Flezha.SDK.register_factory(runner, Upcase)
-    assert stream.factory_id == "upcase"
+    assert %Flezha.SDK{classes: [{Upcase, %Topology{} = flow}]} =
+             Flezha.SDK.register_factory(runner, Upcase)
 
-    assert %Flezha.SDK{classes: [{Place, bounded}]} = Flezha.SDK.register_factory(runner, Place)
-    assert bounded.factory_id == "place"
+    assert flow.factory_id == "upcase"
+
+    assert %Flezha.SDK{classes: [{Place, %Flezha.SDK.Steps.Spec{} = steps}]} =
+             Flezha.SDK.register_factory(runner, Place)
+
+    assert steps.factory_id == "place"
   end
 
-  test "register_factory and unregister_factory take a hand-written module of either kind" do
+  test "register_factory and unregister_factory take a hand-written module of either run" do
     runner = Flezha.SDK.create_runner("hand_written_ns")
 
     declared =
       runner
       |> Flezha.SDK.register_factory(UpcaseTwinOperator)
-      |> Flezha.SDK.register_factory(TunedBounded)
+      |> Flezha.SDK.register_factory(TunedSteps)
 
     assert Enum.map(declared.classes, fn {_m, c} -> c.factory_id end) ==
-             ["upcase_twin", "tuned_bounded"]
+             ["upcase_twin", "tuned_steps"]
 
-    left = Flezha.SDK.unregister_factory(declared, TunedBounded)
+    left = Flezha.SDK.unregister_factory(declared, TunedSteps)
     assert Enum.map(left.classes, fn {_m, c} -> c.factory_id end) == ["upcase_twin"]
 
     assert {:error, %Flezha.SDK.Error{code: "runtime.class_not_registered", details: details}} =
-             Flezha.SDK.unregister_factory(left, TunedBounded)
+             Flezha.SDK.unregister_factory(left, TunedSteps)
 
-    assert details == %{"factory" => "tuned_bounded"}
+    assert details == %{"factory" => "tuned_steps"}
   end
 
-  # The kind is the behaviour, not the body's name: both kinds write `channels/1`.
-  defmodule HandWrittenBounded do
+  # How it runs is the settings', not the body's: both runs write `channels/1`.
+  defmodule HandWrittenSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "hand_written_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def factory_id, do: "hand_written_steps"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
-  # A body and no behaviour: nothing says which kind it is.
-  defmodule NeitherKind do
+  # A body and no behaviour: nothing says it is an operator.
+  defmodule NotAnOperator do
     @moduledoc false
-    def factory_id, do: "neither_kind"
+    def factory_id, do: "not_an_operator"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
-  test "the kind is read from the behaviour a module declares" do
-    runner = Flezha.SDK.create_runner("kind_ns")
+  test "how a module runs is read from its settings" do
+    runner = Flezha.SDK.create_runner("run_ns")
 
-    assert %Flezha.SDK{classes: [{HandWrittenBounded, %Flezha.SDK.Bounded.Spec{}}]} =
-             Flezha.SDK.register_factory(runner, HandWrittenBounded)
+    assert %Flezha.SDK{classes: [{HandWrittenSteps, %Flezha.SDK.Steps.Spec{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenSteps)
 
     assert %Flezha.SDK{classes: [{HandWrittenOperator, %Topology{}}]} =
              Flezha.SDK.register_factory(runner, HandWrittenOperator)
   end
 
-  test "an operator of both kinds, or of neither, is refused at registration" do
-    # Compiled here, so the compiler's own note on two behaviours sharing a
-    # callback stays with the shape this test refuses.
-    {[{both_kinds, _bytecode}], _warnings} =
-      with_io(:stderr, fn ->
-        Code.compile_string("""
-        defmodule Flezha.SDK.AuthoringMacrosTest.BothKinds do
-          @behaviour Flezha.SDK.UnboundedOperator
-          @behaviour Flezha.SDK.BoundedOperator
-          def factory_id, do: "both_kinds"
-          def channels(c), do: c
-        end
-        """)
-      end)
+  test "a module that is not an operator is refused at registration" do
+    runner = Flezha.SDK.create_runner("not_an_operator_ns")
 
-    runner = Flezha.SDK.create_runner("kind_refusals_ns")
+    assert {:error, %Flezha.SDK.Error{code: "topology.no_operator_exported", details: details}} =
+             Flezha.SDK.register_factory(runner, NotAnOperator)
 
-    assert {:error, %Flezha.SDK.Error{code: "topology.ambiguous_operator_kind", details: both}} =
-             Flezha.SDK.register_factory(runner, both_kinds)
-
-    assert both == %{"module" => inspect(both_kinds)}
-
-    assert {:error, %Flezha.SDK.Error{code: "topology.unknown_operator_kind", details: neither}} =
-             Flezha.SDK.register_factory(runner, NeitherKind)
-
-    assert neither == %{"module" => inspect(NeitherKind)}
+    assert details == %{"module" => inspect(NotAnOperator)}
   end
 
-  test "a duplicate factory id is refused, whichever kind holds it" do
+  test "a duplicate factory id is refused, however the class runs" do
     runner = Flezha.SDK.create_runner("duplicate_ns")
 
     assert {:error,
@@ -673,26 +700,24 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a run body beside a topology body does not compile" do
-    for macro <- ["UnboundedOperator", "BoundedOperator"] do
-      error =
-        refused("""
-        use Flezha.SDK.#{macro}, factory_id: "x", sink: "out"
-        def run(_i, s, _c), do: {:ok, s}
-        def channels(c), do: c
-        """)
+    error =
+      refused("""
+      use Flezha.SDK.Operator, factory_id: "x", sink: "out"
+      def run(_i, s, _c), do: {:ok, s}
+      def channels(c), do: c
+      """)
 
-      assert String.starts_with?(error.description, "topology.short_form_with_topology"),
-             "expected the message to begin with the code, read: #{error.description}"
-    end
+    assert String.starts_with?(error.description, "topology.short_form_with_topology"),
+           "expected the message to begin with the code, read: #{error.description}"
   end
 
   test "an operator with neither body does not compile, naming both" do
-    error = refused(~s|use Flezha.SDK.UnboundedOperator, factory_id: "x"|)
+    error = refused(~s|use Flezha.SDK.Operator, factory_id: "x"|)
     assert error.description =~ "run/3" and error.description =~ "channels/1"
   end
 
   test "an operator option on a tasklet does not compile, naming the operator macro" do
-    for option <- [~s|sink: "out"|, ~s|input: "ticks"|, "kind: :unbounded"] do
+    for option <- [~s|sink: "out"|, ~s|input: "ticks"|] do
       error =
         refused("""
         use Flezha.SDK.Tasklet, name: "p", #{option}
@@ -702,23 +727,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       [key | _] = String.split(option, ":")
 
       assert error.description =~ "`#{key}:`" and
-               error.description =~ "Flezha.SDK.UnboundedOperator"
+               error.description =~ "Flezha.SDK.Operator"
     end
   end
 
-  test "a short form takes no class setting but a bounded operator's loop mode, and a full form no short-form option" do
-    setting =
-      refused("""
-      use Flezha.SDK.BoundedOperator, factory_id: "x", loop_mode: :chained, max_duration_ms: 5_000
-      def run(_i, s, _c), do: {:ok, s}
-      """)
-
-    assert setting.description =~ "max_duration_ms" and not (setting.description =~ "loop_mode")
+  test "a short form takes the class settings, and a full form no short-form option" do
+    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(CappedShort)
+    assert %{each: :chained, max_duration_ms: 5_000, durable: :memory} = spec.settings
 
     for option <- [~s|sink: "out"|, "max_cells: 10"] do
       stray =
         refused("""
-        use Flezha.SDK.UnboundedOperator, factory_id: "x", #{option}
+        use Flezha.SDK.Operator, factory_id: "x", #{option}
         def channels(c), do: c
         """)
 
@@ -727,7 +747,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "both short-form kinds run" do
+  test "a short form runs" do
     run = start_run(Upcase)
     collect(run, "out")
     :ok = Local.feed(run, "input", "hello")

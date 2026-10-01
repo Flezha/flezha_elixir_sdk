@@ -9,7 +9,7 @@ defmodule Flezha.SDK.ResponseTest do
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.{Counters, LocalStream, Operator, Topology, Wire}
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
   alias Flezha.SDK.Operator.{Inbox, Routing}
   alias Flezha.SDK.Test.StubRunner
 
@@ -46,49 +46,50 @@ defmodule Flezha.SDK.ResponseTest do
   end
 
   defmodule DownstreamOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "response_downstream"
+    use Flezha.SDK.Operator, factory_id: "response_downstream"
     def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
   end
 
   defmodule HybridOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "response_hybrid"
+    use Flezha.SDK.Operator, factory_id: "response_hybrid"
     def channels(c), do: c |> input("in") |> into(Parse) |> response() |> into(Log)
   end
 
   defmodule BesideSinkOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "response_beside_sink"
+    use Flezha.SDK.Operator, factory_id: "response_beside_sink"
     def channels(c), do: c |> input("in") |> into(Parse) |> sink("out") |> response()
   end
 
   defmodule TwiceOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "response_twice"
+    use Flezha.SDK.Operator, factory_id: "response_twice"
     def channels(c), do: c |> input("in") |> into(Parse) |> response() |> response()
   end
 
   defmodule UnkeyedTierOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "response_unkeyed_tier"
+    use Flezha.SDK.Operator, factory_id: "response_unkeyed_tier"
+    def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c),
-      do: c |> effectively_once() |> input("in") |> into(Parse) |> response()
+      do: c |> input("in") |> into(Parse) |> response()
   end
 
   # A two-stage turn: `parse` hands on, `answer` answers the pass's call.
   defmodule TurnLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "response_turn"
-    def loop_mode, do: :per_input
+    def run, do: {:steps, each: :per_input}
     def max_duration_ms, do: 600_000
     def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
   end
 
   defmodule QuietTurnLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "response_quiet_turn"
-    def loop_mode, do: :per_input
+    def run, do: {:steps, each: :per_input}
+    def durable, do: false
     def max_duration_ms, do: 600_000
-    def persistence_enabled, do: false
     def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
   end
 
@@ -109,7 +110,6 @@ defmodule Flezha.SDK.ResponseTest do
       Driver.start_link(
         operator_id: "turn-1",
         counters: Counters.new(),
-        park_idle_ms: 60_000,
         spec: spec,
         runner: runner
       )
@@ -187,7 +187,7 @@ defmodule Flezha.SDK.ResponseTest do
         runner: runner
       ]
 
-      {:ok, op} = Operator.start_link(opts)
+      {:ok, op} = Operator.Server.start_link(opts)
       {sdk_side, controller_side} = LocalStream.open()
       :ok = LocalStream.controlling_process(controller_side, self())
       :ok = LocalStream.set_active(controller_side)
@@ -210,7 +210,7 @@ defmodule Flezha.SDK.ResponseTest do
     end
   end
 
-  describe "a bounded pass" do
+  describe "a steps pass" do
     test "answers the call its message carried from its last stage, off the journal" do
       driver = start_turns(QuietTurnLoop)
       Inbox.input(driver, "in", "hello", %{"flz.reply_to" => "w:one"})

@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Tasklet do
   into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set.
 
   Saga: `compensate/3` (the outputs the Cell released, the state, a ctx) is
-  the undo a bounded operator runs, in reverse completion order, when it
+  the undo a steps operator runs, in reverse completion order, when it
   unwinds after partial progress. A tasklet declaring none has nothing to
   undo. A crash-resumed unwind reconstructs completed stages with EMPTY
   outputs — a tasklet's collected output was never durable — so a hook that
@@ -171,17 +171,12 @@ defmodule Flezha.SDK.Tasklet do
     {:event_time_of, 1, "`event_time/1`"}
   ]
 
-  # The §5 short form's options, taken by the operator macros beside the
-  # tasklet's own. A tasklet refuses them, and `kind`, which is the
-  # operator macro's own name.
+  # The §5 short form's options, taken by the operator macro beside the
+  # tasklet's own. A tasklet refuses them.
   @short_form_options [:sink, :input]
-  @operator_keys [:kind | @short_form_options]
-  # Everything a short form takes beyond `factory_id`: its own options and its
-  # tasklet's.
+  # Everything a short form takes beyond `factory_id` and the class settings:
+  # its own options and its tasklet's.
   @short_form_only @short_form_options ++ @use_options
-  # The one class setting a short form takes, a bounded operator's loop mode: it
-  # defines `loop_mode/0` exactly as the full form's option does.
-  @short_form_settings [:loop_mode]
 
   # `Flezha.SDK.Ctx`'s authoring surface, imported by `use`. `apply/3` is
   # deliberately absent: importing it would shadow `Kernel.apply/3` in every
@@ -198,8 +193,8 @@ defmodule Flezha.SDK.Tasklet do
     cancel_processing_time_timer: 2,
     cancel_event_time_timer: 2,
     cell_key: 1,
-    spawn_bounded: 3,
-    spawn_bounded: 4,
+    spawn_steps: 3,
+    spawn_steps: 4,
     complete: 2,
     checkpoint: 1,
     stable_id: 1
@@ -230,9 +225,9 @@ defmodule Flezha.SDK.Tasklet do
   writes only `run/3`. `apply_change/2` is not written by hand here:
   `defchange` generates it.
 
-  `kind`, `sink` and `input` describe an operator, not a tasklet, and are a
-  `CompileError` naming the operator macros: the §5 short form is written
-  with `use Flezha.SDK.UnboundedOperator` or `use Flezha.SDK.BoundedOperator`.
+  `sink` and `input` describe an operator, not a tasklet, and are a
+  `CompileError` naming the operator macro: the §5 short form is written
+  with `use Flezha.SDK.Operator`.
 
   ## Nesting
 
@@ -243,7 +238,7 @@ defmodule Flezha.SDK.Tasklet do
   `channels/1` that names it, which is how Elixir aliases resolve.
   """
   defmacro __using__(opts) do
-    known = @use_options ++ @operator_keys ++ [:name]
+    known = @use_options ++ @short_form_options ++ [:name]
 
     opts =
       __validate__(
@@ -254,12 +249,11 @@ defmodule Flezha.SDK.Tasklet do
         @use_values
       )
 
-    for {key, _value} <- opts, key in @operator_keys do
+    for {key, _value} <- opts, key in @short_form_options do
       raise CompileError,
         description:
           "`use Flezha.SDK.Tasklet` declares a tasklet; `#{key}:` belongs to an operator: " <>
-            "write the short form as `use Flezha.SDK.UnboundedOperator` or " <>
-            "`use Flezha.SDK.BoundedOperator`"
+            "write the short form as `use Flezha.SDK.Operator`"
     end
 
     callbacks = __callbacks__(opts, @use_options, __MODULE__)
@@ -388,28 +382,21 @@ defmodule Flezha.SDK.Tasklet do
   # import, the required `factory_id`, one callback per option written, and
   # what a short form's `run/3` body is written with (the ctx imports and the
   # `state` block). A short form's own options, and its tasklet's, are kept
-  # for `__before_compile_operator__/1`. The two kinds differ only in their
-  # options, the values some of them take, and the `@behaviour` they set, which
-  # is what the kind is read from, so this is the one place that states what an
-  # operator declaration expands to.
+  # for `__before_compile_operator__/1`.
   @doc false
-  def __operator_using__(opts, use_options, behaviour, values \\ []) do
+  def __operator_using__(opts, use_options, behaviour) do
     opts =
       __validate__(
         opts,
         [:factory_id | @short_form_only ++ use_options],
         behaviour,
         {:factory_id, "the id the controller places by"},
-        values ++ @use_values
+        @use_values
       )
 
     callbacks = __callbacks__(opts, use_options, behaviour)
     factory_id = Keyword.fetch!(opts, :factory_id)
     short_form = Keyword.take(opts, @short_form_only)
-
-    settings =
-      for {key, _value} <- opts, key in use_options, key not in @short_form_settings, do: key
-
     ctx_imports = @ctx_imports
 
     quote do
@@ -423,17 +410,17 @@ defmodule Flezha.SDK.Tasklet do
 
       unquote_splicing(callbacks)
 
-      @flezha_operator {unquote(factory_id), unquote(short_form), unquote(settings)}
+      @flezha_operator {unquote(factory_id), unquote(short_form)}
       # After `Flezha.SDK.State`'s hook, so a `state` block's callbacks exist.
       @before_compile {Flezha.SDK.Tasklet, :__before_compile_operator__}
     end
   end
 
   # An operator module is a short form exactly when it defines `run/3` and no
-  # `channels/1`, the topology body both kinds share.
+  # `channels/1`.
   @doc false
   defmacro __before_compile_operator__(env) do
-    {factory_id, short_form, settings} = Module.get_attribute(env.module, :flezha_operator)
+    {factory_id, short_form} = Module.get_attribute(env.module, :flezha_operator)
     run? = Module.defines?(env.module, {:run, 3})
     topology? = Module.defines?(env.module, {:channels, 1})
 
@@ -443,12 +430,6 @@ defmodule Flezha.SDK.Tasklet do
           "topology.short_form_with_topology: #{inspect(env.module)} defines `run/3`, the short form's " <>
             "tasklet body, and `channels/1`; the short form generates its topology, " <>
             "so write one or the other"
-        )
-
-      run? and settings != [] ->
-        refuse(
-          "#{inspect(env.module)} is a short form, whose class settings are the defaults; " <>
-            "`#{hd(settings)}:` is the full form's: write `channels/1` and a tasklet module"
         )
 
       run? ->
@@ -527,7 +508,7 @@ defmodule Flezha.SDK.Tasklet do
   end
 
   @doc """
-  Whether this tasklet declares a saga undo hook. A bounded operator that unwinds
+  Whether this tasklet declares a saga undo hook. A steps operator that unwinds
   runs `compensate/3` on every Cell whose tasklet completed forward; a
   tasklet declaring none simply has nothing to undo.
   """

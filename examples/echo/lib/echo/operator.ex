@@ -10,7 +10,7 @@ defmodule Echo.Operator do
 
   # `factory_id` is the operator's stable identity, and the name
   # `flz operator start` takes.
-  use Flezha.SDK.UnboundedOperator, factory_id: "echo"
+  use Flezha.SDK.Operator, factory_id: "echo"
 
   @impl true
   def channels(c) do

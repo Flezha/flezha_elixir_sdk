@@ -1,13 +1,13 @@
-defmodule Flezha.SDK.Bounded.Spec do
+defmodule Flezha.SDK.Steps.Spec do
   @moduledoc """
-  The frozen registration-time result of authoring a bounded class: a
-  validated tasklet DAG, plus the class's loop, rollback and durability
-  facts.
+  The frozen registration-time result of authoring a class that runs in
+  steps: a validated tasklet DAG, plus the class's settings tree
+  (`Flezha.SDK.Operator`), which holds its loop shape, failure mode and
+  durability.
 
-  A structured class authors in `channels/1` on the same builder an unbounded class
-  does, so its topology is compiled by `Flezha.SDK.Topology.build/2`, which
-  also refuses the unbounded operator's settings on it, and only the refusals a
-  *bounded* graph adds are decided here: an entry channel to arrive on,
+  A steps class authors in `channels/1` on the same builder a flow class
+  does, so its topology is compiled by `Flezha.SDK.Topology.judge/2`, and
+  only the refusals a steps graph adds are decided here: an entry channel to arrive on,
   acyclic, reachable, a chained loop whose every chain
   converges on one terminal, and a call end only in a `:per_input` loop, the
   one loop that reads the later message its Response is. Each entry channel roots a chain (the nodes it
@@ -25,17 +25,17 @@ defmodule Flezha.SDK.Bounded.Spec do
   entry channel — a tasklet unreachable from the entry cannot be declared.
 
   Every issue is accumulated — a class hears all of what is wrong with it at
-  once — and reported as `{:error, {:invalid_bounded, issues}}`.
+  once — and reported as `{:error, {:invalid_steps, issues}}`.
   """
 
-  alias Flezha.SDK.{CallEnd, Graph, Tasklet, Topology, BoundedOperator}
+  alias Flezha.SDK.{CallEnd, Graph, Operator, Tasklet, Topology}
 
   @enforce_keys [:factory_id, :module]
   defstruct factory_id: nil,
             module: nil,
             topology: nil,
             dag: nil,
-            knobs: %{}
+            settings: %Operator{run: :steps}
 
   @type t :: %__MODULE__{}
 
@@ -65,31 +65,35 @@ defmodule Flezha.SDK.Bounded.Spec do
         }
 
   @doc """
-  Compile `module` into a bounded spec, or refuse it. A class that declares
-  no `channels/1` has no body to run and is refused `NoBoundedBody`.
+  Compile `module` into a steps spec under `settings`, its settings tree (read
+  from the module when not given), or refuse it. A class that declares no
+  `channels/1` has no body to run and is refused `NoStepsBody`.
   """
-  @spec build(module()) :: {:ok, t()} | {:error, Flezha.SDK.Error.t()}
-  def build(module) do
-    knobs = BoundedOperator.knobs(module)
-    base = %__MODULE__{factory_id: module.factory_id(), module: module, knobs: knobs}
+  @spec build(module(), Operator.t() | nil) :: {:ok, t()} | {:error, Flezha.SDK.Error.t()}
+  def build(module, settings \\ nil)
 
-    class_issues =
-      []
-      |> check_terminable(base.factory_id, knobs)
-      |> check_modes(base.factory_id, knobs)
+  def build(module, nil) do
+    case Operator.settings(module) do
+      {:ok, settings} -> build(module, settings)
+      {:error, issue} -> refuse([issue])
+    end
+  end
+
+  def build(module, %Operator{} = settings) do
+    base = %__MODULE__{factory_id: module.factory_id(), module: module, settings: settings}
 
     if Tasklet.exports?(module, :channels, 1),
-      do: structured(module, base, class_issues),
-      else: refuse([{:NoBoundedBody, mod_name(module)} | class_issues])
+      do: structured(module, base, []),
+      else: refuse([{:NoStepsBody, mod_name(module)}])
   end
 
   defp structured(module, %__MODULE__{} = spec, issues) do
-    case Topology.judge(module, :bounded) do
+    case Topology.judge(module, spec.settings) do
       {:issues, topology_issues} ->
         refuse(Enum.reverse(topology_issues) ++ issues)
 
       {:ok, topo} ->
-        {dag, shape_issues} = shape(spec.factory_id, topo, spec.knobs)
+        {dag, shape_issues} = shape(spec.factory_id, topo, spec.settings)
         issues = shape_issues ++ issues
 
         if issues == [],
@@ -98,21 +102,21 @@ defmodule Flezha.SDK.Bounded.Spec do
     end
   end
 
-  # --- the shape a bounded graph adds on top of an unbounded topology ---
+  # --- the shape a steps graph adds on top of a flow topology ---
 
-  defp shape(factory_id, topo, knobs) do
+  defp shape(factory_id, topo, settings) do
     walk = Graph.walk(topo.node_seq, Topology.node_edges(topo.routes))
     dag = dag(topo, walk)
 
     issues =
       []
       |> check_entry(factory_id, topo)
-      |> check_chained_loop(factory_id, dag, knobs)
+      |> check_chained_loop(factory_id, dag, settings)
 
-    {dag, Enum.reverse(CallEnd.outside_per_input_loop(topo.routes, knobs.loop_mode)) ++ issues}
+    {dag, Enum.reverse(CallEnd.outside_per_input_loop(topo.routes, settings.each)) ++ issues}
   end
 
-  # A bounded operator's messages arrive on its entry channels; a class with none
+  # A steps operator's messages arrive on its entry channels; a class with none
   # has nothing its messages could arrive on.
   defp check_entry(is, factory_id, topo) do
     if map_size(topo.entries) == 0, do: [{:NoEntryChannel, factory_id} | is], else: is
@@ -121,7 +125,7 @@ defmodule Flezha.SDK.Bounded.Spec do
   # Iteration N+1 of a handoff-chained loop is seeded from iteration N's
   # terminal batch, which a chain with several leaves does not define; every
   # chain the loop can enter is judged.
-  defp check_chained_loop(is, factory_id, dag, %{loop_mode: :chained}) do
+  defp check_chained_loop(is, factory_id, dag, %{each: :chained}) do
     Enum.reduce(dag.chains, is, fn {channel, chain}, is ->
       case chain.leaves do
         [_one] -> is
@@ -130,25 +134,7 @@ defmodule Flezha.SDK.Bounded.Spec do
     end)
   end
 
-  defp check_chained_loop(is, _factory_id, _dag, _knobs), do: is
-
-  # --- class facts ---
-
-  # A class whose only exit is an external stop, with no wall-clock backstop,
-  # can run for ever and no scenario can prove it finished.
-  defp check_terminable(is, factory_id, %{self_terminating?: false, max_duration_ms: nil}),
-    do: [{:ExternalStopOnly, factory_id} | is]
-
-  defp check_terminable(is, _factory_id, _knobs), do: is
-
-  # The `use` macro refuses a mode outside its set at compile time; a
-  # hand-written `loop_mode/0` or `rollback_mode/0` meets the same set here.
-  defp check_modes(is, factory_id, knobs) do
-    for {knob, allowed} <- BoundedOperator.modes(),
-        (value = Map.fetch!(knobs, knob)) not in allowed,
-        reduce: is,
-        do: (is -> [{:InvalidMode, factory_id, knob, value} | is])
-  end
+  defp check_chained_loop(is, _factory_id, _dag, _settings), do: is
 
   @doc "The tasklet a node runs, by the name it declares."
   @spec tasklet_name(t(), reference()) :: String.t()

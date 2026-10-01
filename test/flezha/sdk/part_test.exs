@@ -12,7 +12,7 @@ defmodule Flezha.SDK.PartTest do
   import ExUnit.CaptureLog
 
   alias Flezha.SDK.{Contract, Counters, LocalStream, Operator, Topology}
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
   alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
 
@@ -93,48 +93,48 @@ defmodule Flezha.SDK.PartTest do
   end
 
   defmodule SinkOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_sink"
+    use Flezha.SDK.Operator, factory_id: "part_sink"
 
     def channels(c),
       do: c |> input("in") |> retry_backoff_ms(1) |> into(P0) |> sink("answer")
   end
 
   defmodule KeyedOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_keyed"
+    use Flezha.SDK.Operator, factory_id: "part_keyed"
 
     def channels(c),
       do: c |> input("in") |> key_by(fn _ -> "s-7" end) |> into(P0) |> sink("answer")
   end
 
   defmodule EdgeOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_edge"
+    use Flezha.SDK.Operator, factory_id: "part_edge"
     def channels(c), do: c |> input("in") |> into(Refused) |> into(Log)
   end
 
   defmodule ResponseOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_response"
+    use Flezha.SDK.Operator, factory_id: "part_response"
     def channels(c), do: c |> input("in") |> into(Refused) |> response()
   end
 
   defmodule CallOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_call"
+    use Flezha.SDK.Operator, factory_id: "part_call"
 
     def channels(c),
       do: c |> input("in") |> into(Refused) |> call("pricing", deadline_ms: 500) |> into(Log)
   end
 
   defmodule KeepOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "part_keep"
+    use Flezha.SDK.Operator, factory_id: "part_keep"
     def channels(c), do: c |> input("in") |> into(Refused) |> sink("answer")
   end
 
   defmodule TurnLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "part_turn"
-    def loop_mode, do: :per_input
+    def run, do: {:steps, each: :per_input}
+    def durable, do: false
     def max_duration_ms, do: 600_000
-    def persistence_enabled, do: false
     def channels(c), do: c |> input("in") |> into(P0) |> sink("answer")
   end
 
@@ -151,7 +151,7 @@ defmodule Flezha.SDK.PartTest do
     {:ok, topology} = Topology.build(module)
     {:ok, runner} = StubRunner.start_link(test: self())
     opts = [operator_id: id, topology: topology, counters: Counters.new(), runner: runner]
-    {:ok, op} = Operator.start_link(opts)
+    {:ok, op} = Operator.Server.start_link(opts)
     wire_to(op)
     op
   end
@@ -237,7 +237,7 @@ defmodule Flezha.SDK.PartTest do
                    5_000
   end
 
-  test "a bounded stage's parts lead its answer" do
+  test "a steps stage's parts lead its answer" do
     {:ok, spec} = Spec.build(TurnLoop)
     {:ok, runner} = StubRunner.start_link(test: self())
 
@@ -245,7 +245,6 @@ defmodule Flezha.SDK.PartTest do
       Driver.start_link(
         operator_id: "part_turn_1",
         counters: Counters.new(),
-        park_idle_ms: 60_000,
         spec: spec,
         runner: runner
       )

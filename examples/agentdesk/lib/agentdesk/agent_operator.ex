@@ -1,15 +1,15 @@
 defmodule Agentdesk.AgentOperator do
   @moduledoc """
-  One conversation: a bounded operator that runs one turn per message it is
+  One conversation: a steps operator that runs one turn per message it is
   sent, for as long as the session lasts. Every session is an instance of its
   own, with its own state.
   """
-  use Flezha.SDK.BoundedOperator,
+  use Flezha.SDK.Operator,
     factory_id: "agent",
-    # one turn per message
-    loop_mode: :per_input,
-    # a failed turn fails alone
-    rollback_mode: :keep_progress
+    # one turn per message; a failed turn fails alone
+    run: {:steps, each: :per_input, on_failure: :keep_progress},
+    # an idle session sleeps after 10 s
+    durable: {:local, sleep_after: 10_000}
 
   alias Agentdesk.{Deliver, Reply}
 

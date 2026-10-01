@@ -7,7 +7,7 @@ defmodule Tradedesk.BuyAboveAverage do
   nothing because there is nothing to bring back. That is why it has no `state`
   block, beside `Tradedesk.TrackPrices`, which keeps the window.
 
-  It does two things per input, both through the context: it starts a bounded
+  It does two things per input, both through the context: it starts a steps
   operator and it emits.
   """
   use Flezha.SDK.Tasklet, name: "buy_above_average"
@@ -23,8 +23,8 @@ defmodule Tradedesk.BuyAboveAverage do
       # A stronger move buys more.
       quantity = round(percent * @units_per_percent)
 
-      # One bounded operator per order.
-      spawn_bounded(ctx, "order_executor", %{symbol: symbol, quantity: quantity})
+      # One steps operator per order.
+      spawn_steps(ctx, "order_executor", %{symbol: symbol, quantity: quantity})
 
       emit(
         ctx,

@@ -54,7 +54,7 @@ defmodule Flezha.SDK.CallEnd do
   @spec outside_per_input_loop(map(), atom()) :: [tuple()]
   def outside_per_input_loop(_routes, :per_input), do: []
 
-  def outside_per_input_loop(routes, _loop_mode) do
+  def outside_per_input_loop(routes, _each) do
     for {_source, routes} <- routes,
         %{call: %{}, channel: channel} <- routes,
         do: {:CallOutsidePerInputLoop, channel}

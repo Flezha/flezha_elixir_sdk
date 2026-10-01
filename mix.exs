@@ -10,7 +10,7 @@ defmodule Flezha.SDK.MixProject do
       version: @version,
       elixir: "~> 1.17",
       description:
-        "The Elixir SDK for Flezha: unbounded and bounded operators run by a Flezha controller",
+        "The Elixir SDK for Flezha: flow and steps operators run by a Flezha controller",
       source_url: @source_url,
       package: package(),
       elixirc_paths: elixirc_paths(Mix.env()),

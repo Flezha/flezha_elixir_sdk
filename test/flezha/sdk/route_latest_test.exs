@@ -11,7 +11,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   alias Flezha.SDK.{Channels, Cell, Local, Operator, Topology}
 
   defmodule RouterOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "router_op"
 
     def channels(c) do
@@ -25,7 +25,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   end
 
   defmodule NamedRouterOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "named_router_op"
 
     def channels(c) do
@@ -54,7 +54,7 @@ defmodule Flezha.SDK.RouteLatestTest do
     assert routed() == ["A=v1", "B=v1"]
 
     assert [{"route_latest", :single, [{_key, router}]}] =
-             Operator.cells(Local.operator(run))
+             Operator.Server.cells(Local.operator(run))
 
     assert {:ok, %{version: 1, delivered: %{"A" => 1, "B" => 1}}, _seq} =
              Cell.read(router, 1_000)

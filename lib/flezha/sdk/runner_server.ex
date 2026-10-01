@@ -40,7 +40,7 @@ defmodule Flezha.SDK.RunnerServer do
   }
 
   alias Flezha.SDK.RunnerServer.Waiters
-  alias Flezha.SDK.Bounded.Driver
+  alias Flezha.SDK.Steps.Driver
 
   @name __MODULE__
   # What a server that will not answer tells its caller.
@@ -115,7 +115,7 @@ defmodule Flezha.SDK.RunnerServer do
   A cast rather than a call: the controller may have to start an operator
   before it can answer, and the runner must keep serving while it does. The
   reply reaches the caller through `Flezha.SDK.RunnerServer.Waiters`, as a
-  bounded operator commit's ack does.
+  steps operator commit's ack does.
   """
   @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
           {:ok, String.t()} | {:error, Error.t()}
@@ -184,7 +184,7 @@ defmodule Flezha.SDK.RunnerServer do
       factories: factories,
       payload: handshake_payload(namespace, factories, stable_id),
       # One hold per wire this process writes to: the secondaries carry the
-      # bounded driver's writes, the parks and the heartbeat, the control
+      # steps driver's writes, the parks and the heartbeat, the control
       # channel carries the commands. A hold that dies with the wire it was
       # meant for is not a hold, so both outlive every reconnect.
       held: Hold.new(counters: counters),
@@ -355,8 +355,8 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info(_msg, %State{} = s), do: {:noreply, s}
 
   @impl true
-  # The two casts a bounded driver sends upward, both built by
-  # `Flezha.SDK.Bounded.Commit` so the driver never names this module.
+  # The two casts a steps driver sends upward, both built by
+  # `Flezha.SDK.Steps.Commit` so the driver never names this module.
   def handle_cast({:barrier, driver, ref, command}, %State{} = s) do
     reference_id = request_ref("wf")
     ship_request(s, reference_id, command)
@@ -387,7 +387,7 @@ defmodule Flezha.SDK.RunnerServer do
     %Spawn{reference_id: id, instance_id: instance_id, factory_id: factory_id} = spawn
 
     command =
-      Codec.spawn_bounded_request_command(
+      Codec.spawn_steps_request_command(
         instance_id,
         factory_id,
         payload,
@@ -515,10 +515,10 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  defp dispatch({:bounded_stop, %{operator_id: oid}}, ref, s) do
+  defp dispatch({:steps_stop, %{operator_id: oid}}, ref, s) do
     case Map.get(s.operators, oid) do
-      {pid, _fid} -> Driver.stop_bounded(pid)
-      nil -> Logger.warning("[Flezha.SDK] BoundedStop for unknown operator #{oid}")
+      {pid, _fid} -> Driver.stop_steps(pid)
+      nil -> Logger.warning("[Flezha.SDK] StepsStop for unknown operator #{oid}")
     end
 
     reply_ok(s, ref)
@@ -537,7 +537,7 @@ defmodule Flezha.SDK.RunnerServer do
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, Error.from_wire(error))
 
-  defp dispatch({:spawn_bounded_response, answer}, ref, s),
+  defp dispatch({:spawn_steps_response, answer}, ref, s),
     do:
       settle(
         s,
@@ -637,7 +637,7 @@ defmodule Flezha.SDK.RunnerServer do
           end)
 
         # What this process held goes out before the operators are told the
-        # wire is back, so a staged bounded output cannot be overtaken by the
+        # wire is back, so a staged steps output cannot be overtaken by the
         # frames a resumed operator writes.
         s = %{s | primaries: readers, secondaries: secondaries}
         s = %{s | held: s |> wire() |> Hold.replay()}
@@ -660,7 +660,7 @@ defmodule Flezha.SDK.RunnerServer do
     %{s | primaries: [], secondaries: []}
   end
 
-  # --- the bounded driver's writes ---
+  # --- the steps driver's writes ---
 
   # The driver has no wire of its own: it casts its records here, so a frame
   # no stream will take is held here too and replayed on the next bound one.
@@ -749,14 +749,22 @@ defmodule Flezha.SDK.RunnerServer do
       "namespace" => namespace,
       "factory_ids" => Enum.map(factories, &elem(&1, 0)),
       "factories" =>
-        Enum.map(factories, fn {id, desc, kind} ->
-          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang(), "kind" => kind}
+        Enum.map(factories, fn {id, desc, run} ->
+          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang(), "run" => run.run}
+          |> put_steps(run)
         end),
       "stable_id" => stable_id,
       "incarnation" => "#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}"
     }
     |> put_namespace_secret(Knob.get(:namespace_secret))
   end
+
+  # A steps class's loop shape and failure mode ride its entry; a flow
+  # class's entry carries neither.
+  defp put_steps(entry, %{run: "steps", each: each, on_failure: on_failure}),
+    do: Map.merge(entry, %{"each" => each, "on_failure" => on_failure})
+
+  defp put_steps(entry, _flow), do: entry
 
   # The credential the controller checks the claimed namespace against. Absent
   # from the frame when this runner holds none, so a deployment authenticating

@@ -4,11 +4,10 @@ defmodule Flezha.SDK.Channels do
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
   (`into`/`into_named`/`sink`/`sink_with`/`response`/`response_with`/`call`,
   `merge` with `from`, and `route_latest`/`route_latest_named`), per-edge knobs
-  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`), `keyed` (output
-  identity on the plugin wire the handle reaches) and the class-level tier
-  declarations (`effectively_once`, the three checkpoint options and the two
-  correction options, which take and answer the token itself). Fan-out is
-  handle reuse, or `branch` over a list of arms.
+  (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
+  identity on the plugin wire the handle reaches). Fan-out is handle reuse, or
+  `branch` over a list of arms. The effectively-once tier is a class setting
+  (`Flezha.SDK.Operator`), not a builder call.
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
   to the chain its handle carries — a transform, a key, a plugin sink, an edge
@@ -63,7 +62,6 @@ defmodule Flezha.SDK.Channels do
       chains: %{},
       chain_seq: 0,
       merge_groups: 0,
-      tier: %{effectively_once: false, checkpoint: nil, correction: nil},
       issues: []
     })
 
@@ -90,66 +88,6 @@ defmodule Flezha.SDK.Channels do
     |> Map.values()
     |> Enum.sort_by(& &1.seq)
     |> Enum.map(&%{&1 | links: Enum.reverse(&1.links)})
-  end
-
-  # --- class-level declarations (the effectively-once tier) ---
-
-  @doc "Declare the effectively-once tier for the whole class."
-  def effectively_once(%__MODULE__{ref: ref} = c) do
-    update(ref, fn acc -> put_in(acc.tier.effectively_once, true) end)
-    c
-  end
-
-  @doc "Acknowledge inputs at checkpoint granularity rather than per input."
-  def checkpoint_ack(%__MODULE__{} = c), do: checkpoint_policy(c, & &1)
-
-  @doc "Close the staged interval every `n` inputs."
-  def checkpoint_every(%__MODULE__{} = c, n) when is_integer(n) and n >= 0,
-    do: checkpoint_policy(c, &%{&1 | every: n})
-
-  @doc "Hold the interval's outputs until it closes, and close it after `ms` at the latest."
-  def outputs_at_checkpoint(%__MODULE__{} = c, ms) when is_integer(ms) and ms >= 0,
-    do: checkpoint_policy(c, &%{&1 | outputs: :at_checkpoint, max_delay_ms: ms})
-
-  # The one Elixir site that implies checkpoint granularity: ANY checkpoint key
-  # raises the policy, so the three options compose in any order and none
-  # clears another's. This is the re-expression of the core's derivation, where
-  # `checkpoint_ack`, `checkpoint_every`, `checkpoint_outputs` and
-  # `checkpoint_max_delay_ms` are written raw and the granularity is implied
-  # from any one of them.
-  defp checkpoint_policy(%__MODULE__{ref: ref} = c, amend) do
-    update(ref, fn acc ->
-      put_in(
-        acc.tier.checkpoint,
-        amend.(acc.tier.checkpoint || %{every: nil, outputs: :as_produced, max_delay_ms: nil})
-      )
-    end)
-
-    c
-  end
-
-  @doc "Declare a late-input correction window in milliseconds; requires `effectively_once/1`."
-  def correction_window(%__MODULE__{} = c, ms) when is_integer(ms) and ms >= 0,
-    do: correction_policy(c, &%{&1 | window_ms: ms})
-
-  @doc "Fate of an input later than the window: `:process_as_arrival` (the default) or `:drop`."
-  def beyond_window_policy(%__MODULE__{} = c, policy)
-      when policy in [:process_as_arrival, :drop],
-      do: correction_policy(c, &%{&1 | beyond_window: policy})
-
-  # Both correction options amend the one policy, so they compose in either
-  # order and neither clears the other. A policy declared alone therefore
-  # leaves the window at zero, which is refused: a fate for a window nobody
-  # declared is an authoring error, not a default.
-  defp correction_policy(%__MODULE__{ref: ref} = c, amend) do
-    update(ref, fn acc ->
-      put_in(
-        acc.tier.correction,
-        amend.(acc.tier.correction || %{window_ms: 0, beyond_window: :process_as_arrival})
-      )
-    end)
-
-    c
   end
 
   # --- openers ---

@@ -28,7 +28,7 @@ end
 
 defmodule Flezha.Bench.DoNothing do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "do_nothing"
 
   def channels(c) do
@@ -111,7 +111,7 @@ end
 
 defmodule Flezha.Bench.CellStress do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "cell_stress"
 
   def channels(c) do
@@ -165,7 +165,7 @@ end
 
 defmodule Flezha.Bench.DynamicCell do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "dynamic_cell"
 
   def channels(c) do
@@ -183,7 +183,7 @@ end
 
 defmodule Flezha.Bench.BenchEcho do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bench_echo"
 
   def channels(c) do
@@ -236,7 +236,7 @@ end
 
 defmodule Flezha.Bench.BenchKeyed do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bench_keyed"
 
   def channels(c) do
@@ -253,19 +253,20 @@ end
 
 defmodule Flezha.Bench.KeyedNoPersist do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bench_keyed_nopersist"
 
   # The same upsert with the class's persistence off — the heap-only posture
   # the bench isolates against the durable one.
-  def persistence_enabled, do: false
+  def durable, do: false
   defdelegate channels(c), to: Flezha.Bench.BenchKeyed
 end
 
 defmodule Flezha.Bench.TierStore do
   @moduledoc false
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "tier_store"
+  def run, do: {:flow, exactly: :effectively_once}
 
   # `bench_keyed` under the tier: the durable posture the round-trip bench
   # measures with `--durability on`, and the conformance fixture the tier's
@@ -277,7 +278,6 @@ defmodule Flezha.Bench.TierStore do
     import Flezha.SDK.Channels
 
     c
-    |> effectively_once()
     |> input("input")
     |> on_full(:drop_nothing)
     |> retry_backoff_ms(300)
@@ -309,25 +309,29 @@ defmodule Flezha.Bench.BenchCheckpoint do
 
   alias Flezha.SDK.Knob
 
-  @behaviour Flezha.SDK.UnboundedOperator
+  @behaviour Flezha.SDK.Operator
   def factory_id, do: "bench_checkpoint"
 
   # `tier_store` driven by a declared cadence instead of a `commit:` input:
   # the amortised posture, acknowledging every FLEZHA_BENCH_CHECKPOINT_EVERY
   # inputs per Cell. FLEZHA_BENCH_CHECKPOINT_OUTPUTS=at_checkpoint
   # additionally holds the interval's outputs until it closes.
+  def run do
+    every = [every: env("FLEZHA_BENCH_CHECKPOINT_EVERY", :positive_int, 500)]
+
+    held =
+      if System.get_env("FLEZHA_BENCH_CHECKPOINT_OUTPUTS") == "at_checkpoint",
+        do: [
+          outputs: :at_checkpoint,
+          max_delay_ms: env("FLEZHA_BENCH_CHECKPOINT_DELAY_MS", :ms, 50)
+        ],
+        else: []
+
+    {:flow, exactly: {:effectively_once, ack: {:checkpoint, every ++ held}}}
+  end
+
   def channels(c) do
     import Flezha.SDK.Channels
-
-    c =
-      c
-      |> effectively_once()
-      |> checkpoint_every(env("FLEZHA_BENCH_CHECKPOINT_EVERY", :positive_int, 500))
-
-    c =
-      if System.get_env("FLEZHA_BENCH_CHECKPOINT_OUTPUTS") == "at_checkpoint",
-        do: outputs_at_checkpoint(c, env("FLEZHA_BENCH_CHECKPOINT_DELAY_MS", :ms, 50)),
-        else: c
 
     c
     |> input("input")

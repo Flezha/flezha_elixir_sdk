@@ -1,6 +1,6 @@
-defmodule Flezha.SDK.AnnounceKindTest do
+defmodule Flezha.SDK.AnnounceRunTest do
   @moduledoc """
-  The kind every factory entry announces: in the handshake a runner connects
+  The run every factory entry announces: in the handshake a runner connects
   with, and in the `UpdateFactories` a module registered after start ships.
   The in-node transport is the seam: a stand-in controller registered as this
   VM's `Flezha.SDK.Connect` reads both off its own side of the control stream.
@@ -17,7 +17,7 @@ defmodule Flezha.SDK.AnnounceKindTest do
 
     @impl true
     def connect(payload, controller_side) do
-      test = Application.fetch_env!(:flezha_sdk, :announce_kind_test)
+      test = Application.fetch_env!(:flezha_sdk, :announce_run_test)
       :ok = LocalStream.controlling_process(controller_side, test)
       :ok = LocalStream.set_active(controller_side)
       send(test, {:handshake, payload})
@@ -38,25 +38,28 @@ defmodule Flezha.SDK.AnnounceKindTest do
     end
   end
 
-  defmodule UnboundedClass do
+  defmodule FlowClass do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
-    def factory_id, do: "announce_unbounded"
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "announce_flow"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
   end
 
-  defmodule BoundedClass do
+  defmodule StepsClass do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "announce_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: {:steps, each: :chained, on_failure: :keep_progress}
+    def factory_id, do: "announce_steps"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
   end
 
   defmodule Late do
     @moduledoc false
-    use Flezha.SDK.BoundedOperator, factory_id: "announce_late", sink: "out"
-
-    def description, do: "the late class"
+    use Flezha.SDK.Operator,
+      factory_id: "announce_late",
+      sink: "out",
+      run: :steps,
+      description: "the late class"
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -66,9 +69,9 @@ defmodule Flezha.SDK.AnnounceKindTest do
 
   setup do
     id_path =
-      Path.join(System.tmp_dir!(), "flezha_announce_kind_#{System.unique_integer([:positive])}")
+      Path.join(System.tmp_dir!(), "flezha_announce_run_#{System.unique_integer([:positive])}")
 
-    Application.put_env(:flezha_sdk, :announce_kind_test, self())
+    Application.put_env(:flezha_sdk, :announce_run_test, self())
     Application.put_env(:flezha_sdk, :runner_id_path, id_path)
     PersistentId.reset_memo()
     Connect.register(Controller)
@@ -76,18 +79,18 @@ defmodule Flezha.SDK.AnnounceKindTest do
     on_exit(fn ->
       Application.delete_env(:flezha_sdk, Connect)
       Application.delete_env(:flezha_sdk, :runner_id_path)
-      Application.delete_env(:flezha_sdk, :announce_kind_test)
+      Application.delete_env(:flezha_sdk, :announce_run_test)
       PersistentId.reset_memo()
       File.rm(id_path)
     end)
   end
 
-  test "every factory entry carries its class's kind, before start and after it" do
+  test "every factory entry carries its class's run, before start and after it" do
     handle =
       "announce_ns"
       |> Flezha.SDK.create_runner()
-      |> Flezha.SDK.register_factory(UnboundedClass)
-      |> Flezha.SDK.register_factory(BoundedClass)
+      |> Flezha.SDK.register_factory(FlowClass)
+      |> Flezha.SDK.register_factory(StepsClass)
       |> Flezha.SDK.start()
 
     assert %Flezha.SDK{} = handle
@@ -95,17 +98,25 @@ defmodule Flezha.SDK.AnnounceKindTest do
 
     assert_receive {:handshake, payload}, 5_000
 
-    assert Enum.map(payload["factories"], &{&1["id"], &1["kind"]}) == [
-             {"announce_unbounded", "unbounded"},
-             {"announce_bounded", "bounded"}
+    assert Enum.map(payload["factories"], &Map.take(&1, ~w(id run each on_failure))) == [
+             %{"id" => "announce_flow", "run" => "flow"},
+             %{
+               "id" => "announce_steps",
+               "run" => "steps",
+               "each" => "chained",
+               "on_failure" => "keep_progress"
+             }
            ]
 
     assert %Flezha.SDK{} = Flezha.SDK.register_factory(handle, Late)
 
-    assert Enum.map(update_factories().factories, &{&1.id, &1.kind, &1.description}) == [
-             {"announce_unbounded", "unbounded", ""},
-             {"announce_bounded", "bounded", ""},
-             {"announce_late", "bounded", "the late class"}
+    assert Enum.map(
+             update_factories().factories,
+             &{&1.id, &1.run, &1.each, &1.on_failure, &1.description}
+           ) == [
+             {"announce_flow", "flow", "", "", ""},
+             {"announce_steps", "steps", "chained", "keep_progress", ""},
+             {"announce_late", "steps", "once", "undo_all", "the late class"}
            ]
   end
 

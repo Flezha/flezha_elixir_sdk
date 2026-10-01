@@ -2,16 +2,16 @@ defmodule Flezha.SDK.Operator.Inbox do
   @moduledoc """
   The messages an operator is sent from below: a raw frame off a bound
   primary stream, the values a Cell produced for its node's outputs, and a
-  bounded tasklet's request to end its instance. They live beside the
+  steps tasklet's request to end its instance. They live beside the
   operator rather than on it so that a `DataStream` or a `Cell` reaching
   upward names this module and not the router itself.
 
   The first two are answered by `Flezha.SDK.Operator.handle_cast/2`, all three
-  by `Flezha.SDK.Bounded.Driver.handle_cast/2`.
+  by `Flezha.SDK.Steps.Driver.handle_cast/2`.
 
   The entrance is here too: how a raw frame becomes a value on an entry
-  channel (`enter/5`) is one rule for both kinds, so a bounded operator's message is
-  resolved, parsed and parked exactly where an unbounded operator's frame is.
+  channel (`enter/5`) is one rule for both runs, so a steps operator's message is
+  resolved, parsed and parked exactly where a flow operator's frame is.
   """
 
   alias Flezha.SDK.Park
@@ -66,7 +66,7 @@ defmodule Flezha.SDK.Operator.Inbox do
       )
 
   @doc """
-  A bounded stage's Cell has a processing-time timer due: the driver decides
+  A steps stage's Cell has a processing-time timer due: the driver decides
   whether its firing opens a pass, joins the running stage or waits its turn.
   """
   def firing_due(pid, node_ref, cell_key, fire),
@@ -201,7 +201,7 @@ defmodule Flezha.SDK.Operator.Inbox do
   `tasklet_id` is the identity slot, which the controller turns into a
   DIRECTORY under the dead-letter root, so it is always a value this side
   chose. `channel` is the row's attribution and may be a name off the wire.
-  A bounded driver parks a failed turn here too, under its `_turn` slot:
+  A steps driver parks a failed turn here too, under its `_turn` slot:
   `opts` then name the `cell_key` and the `attempts` it failed after.
   `opts[:reply_to]` is the call waiting on the parked input, if any.
   """

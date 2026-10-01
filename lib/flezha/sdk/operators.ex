@@ -13,17 +13,16 @@ defmodule Flezha.SDK.Operators do
   require Logger
 
   alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Operator}
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
 
   @doc """
-  Start the operator `add` names under its registered class. Answers
-  `{:ok, s, declarations}`, or `{:error, reason, s}` for a factory this runner
-  does not carry or a kind the class was not registered under.
+  Start the operator `add` names under its registered class, which decides
+  how it runs. Answers `{:ok, s, declarations}`, or `{:error, reason, s}` for
+  a factory this runner does not carry.
   """
   @spec add(map(), map()) :: {:ok, map(), map()} | {:error, Error.t(), map()}
   def add(s, add) do
     s = answered(s, add.operator_id)
-    kind = if add.kind in [nil, ""], do: "unbounded", else: add.kind
 
     range =
       KeyGroup.decode(
@@ -35,48 +34,38 @@ defmodule Flezha.SDK.Operators do
 
     topo = Map.get(s.topologies, add.factory_id)
 
-    with :ok <- check_kind(topo, kind, add.factory_id),
+    with :ok <- check_registered(topo, add.factory_id),
          :ok <- check_partitionable(topo, range, add.factory_id) do
       case topo do
-        %Spec{} -> start_bounded(s, add, topo, range)
-        _stream -> start_stream(s, add, topo, range)
+        %Spec{} -> start_steps(s, add, topo, range)
+        _flow -> start_flow(s, add, topo, range)
       end
     else
       {:error, reason} -> {:error, reason, s}
     end
   end
 
-  # The kind the controller placed under and the class registered under this
-  # id must agree: a mismatch would drive an unbounded topology through the
-  # bounded driver, or the reverse, and neither has the other's shape.
-  defp check_kind(nil, _kind, factory_id),
+  defp check_registered(nil, factory_id),
     do: {:error, Error.new("runtime.class_not_registered", factory: factory_id)}
 
-  defp check_kind(%Spec{}, "bounded", _factory_id), do: :ok
+  defp check_registered(_class, _factory_id), do: :ok
 
-  defp check_kind(%Spec{}, kind, factory_id), do: kind_mismatch(factory_id, "bounded", kind)
-
-  defp check_kind(_stream, "bounded", factory_id),
-    do: kind_mismatch(factory_id, "unbounded", "bounded")
-
-  defp check_kind(_stream, _kind, _factory_id), do: :ok
-
-  # A bounded operator that reads one message would reach one member and leave the
+  # A steps operator that reads one message would reach one member and leave the
   # rest waiting, whatever its keying, so its loop mode is refused first.
   defp check_partitionable(topo, range, factory_id) do
     cond do
       not KeyGroup.partitioned?(range) ->
         :ok
 
-      match?(%Spec{knobs: %{loop_mode: mode}} when mode != :per_input, topo) ->
+      match?(%Spec{settings: %{each: mode}} when mode != :per_input, topo) ->
         {:error,
          Error.new("topology.partitions_without_per_input_loop",
            factory: factory_id,
-           loop_mode: topo.knobs.loop_mode,
+           each: topo.settings.each,
            partitions: range.count
          )}
 
-      unbounded_topology(topo).keyless? ->
+      flow_topology(topo).keyless? ->
         {:error, Error.new("topology.partitions_without_keyed_tasklet", factory: factory_id)}
 
       true ->
@@ -84,15 +73,15 @@ defmodule Flezha.SDK.Operators do
     end
   end
 
-  defp unbounded_topology(%Spec{topology: topology}), do: topology
-  defp unbounded_topology(topology), do: topology
+  defp flow_topology(%Spec{topology: topology}), do: topology
+  defp flow_topology(topology), do: topology
 
   @doc "Stop `oid` and forget it; an id this runner does not host changes nothing."
   @spec remove(map(), binary()) :: map()
   def remove(s, oid) do
     case s |> answered(oid) |> drop(oid) do
       {{pid, _fid}, s} ->
-        if Process.alive?(pid), do: Operator.stop(pid)
+        if Process.alive?(pid), do: Operator.Server.stop(pid)
         s
 
       {nil, s} ->
@@ -117,7 +106,7 @@ defmodule Flezha.SDK.Operators do
       {oid, _} ->
         {_entry, s} = drop(s, oid)
 
-        if Operator.clean_exit?(reason) or s.disconnecting? or s.stopped?,
+        if Operator.Server.clean_exit?(reason) or s.disconnecting? or s.stopped?,
           do: {:ok, s},
           else: {:report, oid, %{s | exited: Map.put(s.exited, oid, reason)}}
     end
@@ -134,9 +123,9 @@ defmodule Flezha.SDK.Operators do
   # to its exit report.
   defp answered(s, oid), do: %{s | exited: Map.delete(s.exited, oid)}
 
-  defp start_stream(s, add, topo, range) do
+  defp start_flow(s, add, topo, range) do
     {:ok, op_pid} =
-      Operator.start_link(
+      Operator.Server.start_link(
         operator_id: add.operator_id,
         topology: topo,
         range: range,
@@ -150,7 +139,7 @@ defmodule Flezha.SDK.Operators do
     registered(s, add, op_pid, topo)
   end
 
-  defp start_bounded(s, add, %Spec{} = spec, range) do
+  defp start_steps(s, add, %Spec{} = spec, range) do
     {:ok, pid} =
       Driver.start_link(
         operator_id: add.operator_id,
@@ -169,7 +158,7 @@ defmodule Flezha.SDK.Operators do
     registered(s, add, pid, spec)
   end
 
-  # A started instance of either kind is registered, takes its `init_values`
+  # A started instance of either run is registered, takes its `init_values`
   # as its tasklets' initial state, and answers its class's declarations.
   defp registered(s, add, pid, declared) do
     :ets.insert(s.registry, {add.operator_id, pid})
@@ -187,14 +176,5 @@ defmodule Flezha.SDK.Operators do
       {:error, reason} ->
         Logger.warning("[Flezha.SDK] #{add.operator_id} init_values: #{reason.message}")
     end
-  end
-
-  defp kind_mismatch(factory_id, declared, kind) do
-    {:error,
-     Error.new("runtime.factory_kind_mismatch",
-       factory: factory_id,
-       declared: declared,
-       kind: kind
-     )}
   end
 end

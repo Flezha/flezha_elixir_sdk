@@ -63,7 +63,7 @@ defmodule Flezha.SDK.Wire do
   def payload_id_delete_cell_state(), do: @payload_id_delete_cell_state
 
   @doc """
-  Payload-ids reserved on the data stream for the bounded-operator saga
+  Payload-ids reserved on the data stream for the steps-operator saga
   change-log (SDK → controller), same frame layout as `cell_state_change`:
   `compensation_intent` records a tasklet's completion (so a crash
   mid-compensation knows what to undo) and `compensation_done` records a

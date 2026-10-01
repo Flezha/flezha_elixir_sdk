@@ -207,7 +207,7 @@ defmodule Flezha.SDK.Commands do
   end
 
   # The frame has landed, whether or not a Cell took it: the operator counts
-  # it toward a bounded operator's restore gate, so a frame no Cell takes never holds
+  # it toward a steps operator's restore gate, so a frame no Cell takes never holds
   # the gate, and takes the saga markers the controller persisted for the
   # Cell — `intent` that its tasklet completed forward and may need undo,
   # `done` that its compensation already ran. A call, not a cast: the driver
@@ -248,7 +248,7 @@ defmodule Flezha.SDK.Commands do
   defp cell(s, cell_id, opts) do
     with {:ok, {operator_id, tasklet, key}} <- Wire.decode_cell_id(cell_id),
          {:ok, op} <- operator(s, operator_id) do
-      Operator.lookup(op, tasklet, blank_to_nil(key), opts)
+      Operator.Server.lookup(op, tasklet, blank_to_nil(key), opts)
     end
   end
 
@@ -264,7 +264,7 @@ defmodule Flezha.SDK.Commands do
   # The router's nodes, or its refusal. `[]` would be a lie: a walk that read
   # it would report a live operator as empty.
   defp nodes(op, operator_id) do
-    case Operator.cells(op) do
+    case Operator.Server.cells(op) do
       {:error, :operator_busy} ->
         {:error, Error.new("runtime.operator_busy", operator: operator_id)}
 
@@ -375,7 +375,7 @@ defmodule Flezha.SDK.Commands do
   # and the Operator's trace is what tells them apart.
   defp missing(op, name, key) do
     code =
-      case Operator.lookup(op, name, key) do
+      case Operator.Server.lookup(op, name, key) do
         {:error, :cell_evicted} -> "state.cell_evicted"
         _ -> "state.cell_not_found"
       end

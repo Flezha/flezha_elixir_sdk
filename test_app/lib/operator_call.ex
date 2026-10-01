@@ -3,9 +3,9 @@ defmodule ElixirRunner.OperatorCall do
   Operator call fixtures (`operator_call`): operators that call another
   operator from their graph and read the outcome as a `Flezha.SDK.Response`.
 
-    * `call_pricing`: an unbounded callee answering `price:<input>` through
+    * `call_pricing`: a flow callee answering `price:<input>` through
       `response/1`; an input starting `silent` is never answered.
-    * `call_orders`: an unbounded caller calling the instance `pricing`.
+    * `call_orders`: a flow caller calling the instance `pricing`.
     * `call_agent`: a durable `:per_input` `:keep_progress` session answering
       `answer:<turn>`; `boom` fails the turn, `slow` answers after 2 s.
     * `call_gateway`: an effectively-once caller calling `call_agent` by the
@@ -172,7 +172,7 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule PricingOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "call_pricing"
     def channels(c), do: c |> input("in") |> into(PricingQuote) |> response()
@@ -180,7 +180,7 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule OrdersOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     alias ElixirRunner.OperatorCall
     def factory_id, do: "call_orders"
@@ -196,27 +196,27 @@ defmodule ElixirRunner.OperatorCall do
     end
   end
 
-  defmodule AgentBounded do
+  defmodule AgentSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "call_agent"
-    def loop_mode, do: :per_input
-    def rollback_mode, do: :keep_progress
-    def self_terminating?, do: false
+    def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
     def channels(c), do: c |> input("turn") |> into(AgentTurn) |> response()
   end
 
   defmodule GatewayOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     alias ElixirRunner.OperatorCall
     def factory_id, do: "call_gateway"
+    def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c) do
-      account = c |> effectively_once() |> input("in") |> into(GatewayAccount) |> named("gateway")
+      account = c |> input("in") |> into(GatewayAccount) |> named("gateway")
 
       account
       |> filter(&OperatorCall.turn?/1)
@@ -241,14 +241,14 @@ defmodule ElixirRunner.OperatorCall do
     end
   end
 
-  defmodule ToolSessionBounded do
+  defmodule ToolSessionSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     alias ElixirRunner.OperatorCall
     def factory_id, do: "call_tool_session"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -263,5 +263,5 @@ defmodule ElixirRunner.OperatorCall do
     end
   end
 
-  def all, do: [PricingOp, OrdersOp, AgentBounded, GatewayOp, ToolSessionBounded]
+  def all, do: [PricingOp, OrdersOp, AgentSteps, GatewayOp, ToolSessionSteps]
 end

@@ -1,9 +1,12 @@
 defmodule Agentdesk.GatewayOperator do
   @moduledoc """
-  The HTTP side of the desk: an unbounded operator that carries the HTTP
+  The HTTP side of the desk: a flow operator that carries the HTTP
   plugin, answers every request, and calls the session a message is for.
   """
-  use Flezha.SDK.UnboundedOperator, factory_id: "gateway"
+  use Flezha.SDK.Operator,
+    factory_id: "gateway",
+    # each request and answer on disk before it runs
+    run: {:flow, exactly: :effectively_once}
 
   alias Agentdesk.{Admit, Budget, Request, Watch}
 
@@ -11,8 +14,6 @@ defmodule Agentdesk.GatewayOperator do
 
   @impl true
   def channels(c) do
-    # each request and answer on disk before it runs
-    effectively_once(c)
     http = input_with(c, "http", &Request.decode/1)
 
     http

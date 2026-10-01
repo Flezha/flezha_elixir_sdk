@@ -96,11 +96,11 @@ defmodule Flezha.SDK.Hold do
     runner_shutdown_notification: :durable,
     update_factories: :control,
     admin_request: :control,
-    spawn_bounded_request: :control,
+    spawn_steps_request: :control,
     task_commit: :control,
     iter_commit: :control,
     iter_park: :control,
-    bounded_completed: :control,
+    operator_completed: :control,
     operator_exited: :control,
     response: :control
   }

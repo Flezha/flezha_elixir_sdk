@@ -1,13 +1,13 @@
-defmodule Flezha.SDK.Bounded.InstancesTest do
+defmodule Flezha.SDK.Steps.InstancesTest do
   @moduledoc """
-  Two instances of one bounded operator running at once: each keeps its own
+  Two instances of one steps operator running at once: each keeps its own
   state, because a Cell is a process per operator instance, node and key, and
   each derives `stable_id/1` from its own Cell's identity and change seq.
   """
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.{Cell, Counters, Ctx, Operator, Park}
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
   alias Flezha.SDK.Operator.Inbox
   alias Flezha.SDK.Test.StubRunner
 
@@ -23,25 +23,23 @@ defmodule Flezha.SDK.Bounded.InstancesTest do
 
     @impl true
     def run(_input, count, ctx) do
-      send(:bounded_instances_test, {:stable_id, stable_id(ctx)})
+      send(:steps_instances_test, {:stable_id, stable_id(ctx)})
       {:ok, add(count, ctx, 1)}
     end
   end
 
   defmodule TallyLoop do
-    use Flezha.SDK.BoundedOperator,
+    use Flezha.SDK.Operator,
       factory_id: "tally_loop",
-      loop_mode: :per_input,
-      self_terminating?: false,
-      max_duration_ms: 600_000,
-      persistence_enabled: false
+      run: {:steps, each: :per_input},
+      durable: false
 
     @impl true
     def channels(c), do: c |> input("in") |> into(Tally)
   end
 
-  test "two instances of one bounded operator keep their own state and their own stable ids" do
-    Process.register(self(), :bounded_instances_test)
+  test "two instances of one steps operator keep their own state and their own stable ids" do
+    Process.register(self(), :steps_instances_test)
     {:ok, spec} = Spec.build(TallyLoop)
     [a, b] = for id <- ["tally-a", "tally-b"], do: start(spec, id)
 
@@ -76,16 +74,15 @@ defmodule Flezha.SDK.Bounded.InstancesTest do
         spec: spec,
         runner: runner,
         operator_id: operator_id,
-        counters: Counters.new(),
-        park_idle_ms: 60_000
+        counters: Counters.new()
       )
 
-    on_exit(fn -> if Process.alive?(driver), do: Driver.stop_bounded(driver) end)
+    on_exit(fn -> if Process.alive?(driver), do: Driver.stop_steps(driver) end)
     driver
   end
 
   defp read(driver) do
-    {:ok, cell} = Operator.lookup(driver, "tally", nil)
+    {:ok, cell} = Operator.Server.lookup(driver, "tally", nil)
     Cell.read(cell, 1_000)
   end
 end

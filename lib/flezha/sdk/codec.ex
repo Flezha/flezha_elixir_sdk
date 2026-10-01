@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Codec do
   alias Flezha.SDK.Error
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Topology
-  alias Flezha.SDK.Bounded.Spec
+  alias Flezha.SDK.Steps.Spec
 
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
@@ -100,17 +100,22 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
-  @doc "Build the `UpdateFactories` command tuple from a list of `{id, description, kind}`."
-  @spec update_factories_command([{String.t(), String.t() | nil, String.t()}]) ::
+  @doc """
+  Build the `UpdateFactories` command tuple from a list of
+  `{id, description, run}`, `run` as `run/1` answers it.
+  """
+  @spec update_factories_command([{String.t(), String.t() | nil, map()}]) ::
           {atom(), struct()}
   def update_factories_command(factories) do
     decls =
-      Enum.map(factories, fn {id, desc, kind} ->
+      Enum.map(factories, fn {id, desc, run} ->
         %RunnerCommands.FactoryDecl{
           id: id,
           description: desc || "",
           sdk_lang: @sdk_lang,
-          kind: kind
+          run: run.run,
+          each: run.each,
+          on_failure: run.on_failure
         }
       end)
 
@@ -118,13 +123,22 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc """
-  The kind a registered class is announced as. `Flezha.SDK.register_factory/2`
-  builds a bounded spec for a module of the bounded operator behaviour and a topology
-  for an unbounded operator, so the class it registered already states the kind.
+  How a registered class runs, as its announcement names it: `"flow"`, or
+  `"steps"` with its loop shape and failure mode (empty for flow).
   """
-  @spec kind(Spec.t() | Topology.t()) :: String.t()
-  def kind(%Spec{}), do: "bounded"
-  def kind(%Topology{}), do: "unbounded"
+  @spec run(Spec.t() | Topology.t()) :: %{
+          run: String.t(),
+          each: String.t(),
+          on_failure: String.t()
+        }
+  def run(%Spec{settings: settings}),
+    do: %{
+      run: "steps",
+      each: Atom.to_string(settings.each),
+      on_failure: Atom.to_string(settings.on_failure)
+    }
+
+  def run(%Topology{}), do: %{run: "flow", each: "", on_failure: ""}
 
   @doc """
   The `AdminRequest` command tuple: the verb, and its arguments as a JSON
@@ -137,20 +151,20 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc """
-  The `SpawnBoundedRequest` command tuple. No namespace rides it: the
+  The `SpawnStepsRequest` command tuple. No namespace rides it: the
   controller resolves the request in the namespace of the connection it
   arrived on.
   """
-  @spec spawn_bounded_request_command(
+  @spec spawn_steps_request_command(
           String.t(),
           String.t(),
           binary(),
           :deliver | :error,
           String.t()
         ) :: {atom(), struct()}
-  def spawn_bounded_request_command(instance_id, factory_id, payload, if_running, identity) do
-    {:spawn_bounded_request,
-     %RunnerCommands.SpawnBoundedRequest{
+  def spawn_steps_request_command(instance_id, factory_id, payload, if_running, identity) do
+    {:spawn_steps_request,
+     %RunnerCommands.SpawnStepsRequest{
        instance_id: instance_id,
        factory_id: factory_id,
        payload: payload,
@@ -285,12 +299,12 @@ defmodule Flezha.SDK.Codec do
      }}
   end
 
-  @doc "The `BoundedCompleted` command tuple for a terminated instance."
-  @spec bounded_completed_command(String.t(), String.t(), String.t(), binary()) ::
+  @doc "The `OperatorCompleted` command tuple for a terminated instance."
+  @spec operator_completed_command(String.t(), String.t(), String.t(), binary()) ::
           {atom(), struct()}
-  def bounded_completed_command(operator_id, status, error, result) do
-    {:bounded_completed,
-     %RunnerCommands.BoundedCompleted{
+  def operator_completed_command(operator_id, status, error, result) do
+    {:operator_completed,
+     %RunnerCommands.OperatorCompleted{
        operator_id: operator_id,
        status: status,
        error: error,

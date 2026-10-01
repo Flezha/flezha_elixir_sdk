@@ -209,7 +209,7 @@ defmodule Flezha.SDK.Cell.Tier do
 
   # An inter-tasklet value rides the record that carries its producer's
   # offset, so a restore can deliver it again to a consumer whose own records
-  # never took it. A bounded stage's values wait on its driver instead.
+  # never took it. A steps stage's values wait on its driver instead.
   defp edge_records(%State{persistent?: true, tier: %{stage?: false} = tier}, emits, offset)
        when is_integer(offset) do
     for {value, _meta, _key} <- emits,

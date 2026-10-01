@@ -3,8 +3,8 @@ defmodule ElixirRunner.Part do
   Part fixtures (`parts`): for an input `n` the tasklet sends the parts `1` to
   `n` and then emits `done:<n>` on its sink `answer`; for `retry:<n>` it sends
   the same parts and fails its first attempt retryably, then sends them again
-  and succeeds. `part_echo` is unbounded, `part_echo_bounded` a `per_input`
-  bounded operator doing the same per message.
+  and succeeds. `part_echo` runs as a flow, `part_echo_steps` a `per_input`
+  steps operator doing the same per message.
   """
 
   @failed_once {__MODULE__, :failed_once}
@@ -59,7 +59,7 @@ defmodule ElixirRunner.Part do
 
   defmodule EchoOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "part_echo"
 
     def channels(c) do
@@ -68,11 +68,12 @@ defmodule ElixirRunner.Part do
     end
   end
 
-  defmodule EchoBounded do
+  defmodule EchoSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "part_echo_bounded"
-    def loop_mode, do: :per_input
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "part_echo_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -86,5 +87,5 @@ defmodule ElixirRunner.Part do
     end
   end
 
-  def all, do: [EchoOp, EchoBounded]
+  def all, do: [EchoOp, EchoSteps]
 end

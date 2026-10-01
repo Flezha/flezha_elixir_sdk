@@ -1,7 +1,7 @@
-# Twins of the rust_runner durable structured bounded fixtures
-# (test/apps/rust_runner/src/bounded.rs) under the same factory ids,
+# Twins of the rust_runner durable structured steps fixtures
+# (test/apps/rust_runner/src/steps.rs) under the same factory ids,
 # tasklet names, channel names and output bytes; the loop and bench family
-# is in bounded_loop.ex.
+# is in steps_loop.ex.
 #
 # Elixir SDK notes, each the same for every fixture here:
 #
@@ -13,12 +13,12 @@
 #     fixtures that name an encoder do it to REWRITE the value, never to
 #     correct a default.
 
-defmodule ElixirRunner.Bounded.Gate do
+defmodule ElixirRunner.Steps.Gate do
   @moduledoc false
 
-  @release_env "FLEZHA_BOUNDED_E2E_RELEASE"
+  @release_env "FLEZHA_STEPS_E2E_RELEASE"
   @branch_fail_env "FLEZHA_BRANCH_FAIL"
-  @retry_fails_env "FLEZHA_BOUNDED_RETRY_FAILS"
+  @retry_fails_env "FLEZHA_STEPS_RETRY_FAILS"
 
   @doc """
   Park this Cell until the release env is set. The harness kills the first
@@ -41,7 +41,7 @@ defmodule ElixirRunner.Bounded.Gate do
 
   @doc "Park at `point` when this runner was booted to hold there, until the release."
   def hold_at(point) do
-    if System.get_env("FLEZHA_BOUNDED_E2E_HOLD") == point, do: block_until_released()
+    if System.get_env("FLEZHA_STEPS_E2E_HOLD") == point, do: block_until_released()
     :ok
   end
 
@@ -62,7 +62,7 @@ defmodule ElixirRunner.Bounded.Gate do
   end
 end
 
-defmodule ElixirRunner.Bounded.Seen do
+defmodule ElixirRunner.Steps.Seen do
   @moduledoc false
 
   @doc """
@@ -76,10 +76,10 @@ defmodule ElixirRunner.Bounded.Seen do
       require Flezha.SDK.State
 
       @impl true
-      def init_state(_), do: ElixirRunner.Bounded.Seen.empty()
+      def init_state(_), do: ElixirRunner.Steps.Seen.empty()
 
       Flezha.SDK.State.defchange insert(state, item) do
-        ElixirRunner.Bounded.Seen.insert(state, item)
+        ElixirRunner.Steps.Seen.insert(state, item)
       end
     end
   end
@@ -90,7 +90,7 @@ defmodule ElixirRunner.Bounded.Seen do
     do: %{state | items: state.items |> List.insert_at(0, item) |> Enum.uniq() |> Enum.sort()}
 end
 
-defmodule ElixirRunner.Bounded.Step do
+defmodule ElixirRunner.Steps.Step do
   @moduledoc false
 
   @doc """
@@ -120,7 +120,7 @@ defmodule ElixirRunner.Bounded.Step do
     quote do
       use Flezha.SDK.Tasklet, name: unquote(name)
 
-      use ElixirRunner.Bounded.Seen
+      use ElixirRunner.Steps.Seen
 
       @impl true
       def run(input, state, ctx) do
@@ -149,11 +149,11 @@ defmodule ElixirRunner.Bounded.Step do
   end
 end
 
-defmodule ElixirRunner.Bounded do
+defmodule ElixirRunner.Steps do
   @moduledoc false
-  import ElixirRunner.Bounded.Step
+  import ElixirRunner.Steps.Step
 
-  alias ElixirRunner.Bounded.Gate
+  alias ElixirRunner.Steps.Gate
 
   # -- shared steps ---------------------------------------------------------
 
@@ -223,7 +223,7 @@ defmodule ElixirRunner.Bounded do
   defmodule TierCommitA do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "tier_commit_a"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run(input, state, ctx) do
@@ -238,7 +238,7 @@ defmodule ElixirRunner.Bounded do
   defmodule BranchC do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "branch_c"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run(input, state, ctx) do
@@ -277,7 +277,7 @@ defmodule ElixirRunner.Bounded do
   defmodule DiamB2 do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "diam_b2"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run(input, state, ctx) do
@@ -291,7 +291,7 @@ defmodule ElixirRunner.Bounded do
   defmodule DiamC do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "diam_c"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run(input, state, ctx) do
@@ -312,7 +312,7 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  # Fails its first `FLEZHA_BOUNDED_RETRY_FAILS` attempts, then emits the
+  # Fails its first `FLEZHA_STEPS_RETRY_FAILS` attempts, then emits the
   # attempt it succeeded on. A retry re-runs it in place, so a per-runner
   # counter is the whole ladder's view.
   defmodule RetryFlaky do
@@ -332,7 +332,7 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  # Echoes the first message, which a `:once` bounded operator's one pass runs on.
+  # Echoes the first message, which a `:once` steps operator's one pass runs on.
   defmodule Echo do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "echo"
@@ -346,22 +346,24 @@ defmodule ElixirRunner.Bounded do
 
   # -- classes --------------------------------------------------------------
 
-  defmodule EchoBounded do
+  defmodule EchoSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "echo_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "echo_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.Echo)
+      |> into(ElixirRunner.Steps.Echo)
       |> sink("out")
     end
   end
 
-  # `typed_once_bounded`: a `once` class whose entry channel `order` decodes
+  # `typed_once_steps`: a `once` class whose entry channel `order` decodes
   # a JSON ticket; its one tasklet prints the text, emits it to its sink and
   # completes with it, so the pass runs on the payload it was spawned with.
   defmodule OncePlaced do
@@ -377,104 +379,114 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule TypedOnceBounded do
+  defmodule TypedOnceSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "typed_once_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "typed_once_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input_with("order", &Jason.decode/1)
-      |> into(ElixirRunner.Bounded.OncePlaced)
+      |> into(ElixirRunner.Steps.OncePlaced)
       |> sink("placed")
     end
   end
 
-  defmodule CommitBlockBounded do
+  defmodule CommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "commit_block_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "commit_block_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.CommitA)
+      |> into(ElixirRunner.Steps.CommitA)
       |> named("mid")
-      |> into(ElixirRunner.Bounded.BlockB)
+      |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
-  defmodule SyncDurableBounded do
+  defmodule SyncDurableSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "sync_durable_bounded"
-    def sync_durability, do: true
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "sync_durable_steps"
+    def run, do: :steps
+    def durable, do: :remote
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.CommitA)
+      |> into(ElixirRunner.Steps.CommitA)
       |> named("mid")
-      |> into(ElixirRunner.Bounded.BlockB)
+      |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
-  defmodule OptOutCommitBlockBounded do
+  defmodule OptOutCommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "optout_commit_block"
-    def persistence_enabled, do: false
+    def run, do: :steps
+    def durable, do: false
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.CommitA)
+      |> into(ElixirRunner.Steps.CommitA)
       |> sink_with("mid", fn s -> "a-ran:" <> s end)
-      |> into(ElixirRunner.Bounded.BlockB)
+      |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
   # The hybrid mid-chain shape the conformance fixture's `commit_block_chain`
   # twin is transcribed from: A's channel reaches a plugin sink and feeds B.
-  defmodule TierCommitBlockBounded do
+  defmodule TierCommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "tier_commit_block_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "tier_commit_block_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.TierCommitA)
+      |> into(ElixirRunner.Steps.TierCommitA)
       |> sink_with("mid", & &1)
-      |> into(ElixirRunner.Bounded.BlockB)
+      |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
-  defmodule SagaBlockBounded do
+  defmodule SagaBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "saga_block_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "saga_block_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.SagaA)
+      |> into(ElixirRunner.Steps.SagaA)
       |> named("s1")
-      |> into(ElixirRunner.Bounded.SagaB)
+      |> into(ElixirRunner.Steps.SagaB)
       |> named("s2")
-      |> into(ElixirRunner.Bounded.SagaC)
+      |> into(ElixirRunner.Steps.SagaC)
     end
   end
 
@@ -487,44 +499,48 @@ defmodule ElixirRunner.Bounded do
 
     c
     |> input("in")
-    |> into(ElixirRunner.Bounded.KeySplit)
+    |> into(ElixirRunner.Steps.KeySplit)
     |> named("keys")
     |> key_by(& &1)
-    |> into(ElixirRunner.Bounded.KeyedCommit)
+    |> into(ElixirRunner.Steps.KeyedCommit)
     |> named("committed")
   end
 
-  defmodule KeyedBlockBounded do
+  defmodule KeyedBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "keyed_block_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "keyed_block_steps"
 
     def channels(c),
       do:
         c
-        |> ElixirRunner.Bounded.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Bounded.BlockB)
+        |> ElixirRunner.Steps.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Steps.BlockB)
   end
 
-  defmodule KeyedSagaBounded do
+  defmodule KeyedSagaSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "keyed_saga_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "keyed_saga_steps"
 
     def channels(c),
       do:
         c
-        |> ElixirRunner.Bounded.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Bounded.KeyedFail)
+        |> ElixirRunner.Steps.keyed_commits()
+        |> Flezha.SDK.Channels.into(ElixirRunner.Steps.KeyedFail)
   end
 
-  # A bounded output's identity: `commit_a` commits durable state AND emits
+  # A steps output's identity: `commit_a` commits durable state AND emits
   # once, keyed `k` with one metadata pair, on a keyed hybrid channel; the
   # output rides its Cell's record and reaches the sink once the stage commits.
   defmodule OutboxA do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "commit_a"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run(input, state, ctx) do
@@ -534,36 +550,40 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule OutboxBlockBounded do
+  defmodule OutboxBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "outbox_block_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "outbox_block_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.OutboxA)
+      |> into(ElixirRunner.Steps.OutboxA)
       |> keyed()
       |> sink_with("mid", fn s -> "a-out:" <> s end)
-      |> into(ElixirRunner.Bounded.BlockB)
+      |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
-  defmodule UndoOutboxBounded do
+  defmodule UndoOutboxSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "undo_outbox_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "undo_outbox_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.UndoOutboxA)
+      |> into(ElixirRunner.Steps.UndoOutboxA)
       |> sink_with("mid", fn s -> "out:" <> s end)
-      |> into(ElixirRunner.Bounded.UndoC)
+      |> into(ElixirRunner.Steps.UndoC)
     end
   end
 
@@ -583,28 +603,32 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule FailedStageBounded do
+  defmodule FailedStageSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "failed_stage_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "failed_stage_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.KeySplit)
-      |> into(ElixirRunner.Bounded.FailedStage)
+      |> into(ElixirRunner.Steps.KeySplit)
+      |> into(ElixirRunner.Steps.FailedStage)
       |> sink_with("mid", fn s -> "lost:" <> s end)
     end
   end
 
   # The tasklet TREE. One channel, two consumers, is THE fan-out: both
   # branches read exactly what BranchA released on it.
-  defmodule BranchBounded do
+  defmodule BranchSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "branch_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "branch_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
@@ -612,30 +636,32 @@ defmodule ElixirRunner.Bounded do
       mid =
         c
         |> input("in")
-        |> into(ElixirRunner.Bounded.BranchA)
+        |> into(ElixirRunner.Steps.BranchA)
         |> sink_with("mid", fn s -> "a:" <> s end)
 
       # Fail fast: the compensation scenario is about the rollback order, not
       # the ladder before it.
       mid
-      |> into(ElixirRunner.Bounded.BranchB)
+      |> into(ElixirRunner.Steps.BranchB)
       |> sink_with("bmid", fn s -> "b:" <> s end)
       |> retry_max(1)
-      |> into(ElixirRunner.Bounded.BranchD)
+      |> into(ElixirRunner.Steps.BranchD)
       |> sink("d_out")
 
       mid
-      |> into(ElixirRunner.Bounded.BranchC)
+      |> into(ElixirRunner.Steps.BranchC)
       |> sink("c_out")
     end
   end
 
   # The fan-in DAG. A held handle wired twice is the fan-out; two unnamed
   # mentions of DiamJoin are one node, dispatched once after both arms commit.
-  defmodule DiamondBounded do
+  defmodule DiamondSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "diamond_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "diamond_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
@@ -643,51 +669,53 @@ defmodule ElixirRunner.Bounded do
       fan =
         c
         |> input("in")
-        |> into(ElixirRunner.Bounded.DiamA)
+        |> into(ElixirRunner.Steps.DiamA)
         |> sink_with("dfan", fn s -> "a:" <> s end)
 
       fan
-      |> into(ElixirRunner.Bounded.DiamB1)
+      |> into(ElixirRunner.Steps.DiamB1)
       |> named("db1")
-      |> into(ElixirRunner.Bounded.DiamB2)
+      |> into(ElixirRunner.Steps.DiamB2)
       |> sink_with("db2", & &1)
-      |> into(ElixirRunner.Bounded.DiamJoin)
+      |> into(ElixirRunner.Steps.DiamJoin)
 
       fan
-      |> into(ElixirRunner.Bounded.DiamC)
+      |> into(ElixirRunner.Steps.DiamC)
       |> sink_with("dc", & &1)
-      |> into(ElixirRunner.Bounded.DiamJoin)
+      |> into(ElixirRunner.Steps.DiamJoin)
       |> sink("j_out")
     end
   end
 
-  defmodule RetryBounded do
+  defmodule RetrySteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "retry_bounded"
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "retry_steps"
 
     def channels(c) do
       import Flezha.SDK.Channels
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.RetryA)
+      |> into(ElixirRunner.Steps.RetryA)
       |> sink_with("mid", fn s -> "res:" <> s end)
-      |> into(ElixirRunner.Bounded.RetryFlaky)
+      |> into(ElixirRunner.Steps.RetryFlaky)
       |> sink("out")
     end
   end
 
-  # `timer_loop_bounded`: `in -> tick -> relay -> out`, a per-input loop whose
+  # `timer_loop_steps`: `in -> tick -> relay -> out`, a per-input loop whose
   # `tick` arms a processing-time timer of the delay `after:<ms>` names and
   # emits `armed:<at>`; its firing emits `fired:<at>` and opens a pass of its
   # own. `slow:<ms>` holds `tick` that long, for a firing due mid-pass. On a
-  # runner booted with `FLEZHA_BOUNDED_E2E_HOLD` the firing parks at the gate:
+  # runner booted with `FLEZHA_STEPS_E2E_HOLD` the firing parks at the gate:
   # `timer` inside `on_timer`, before `tick` commits; `relay` in `relay`, after.
   defmodule Tick do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "tick"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def run("after:" <> delay, state, ctx) do
@@ -727,11 +755,12 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule TimerLoopBounded do
+  defmodule TimerLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "timer_loop_bounded"
-    def loop_mode, do: :per_input
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "timer_loop_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -739,20 +768,20 @@ defmodule ElixirRunner.Bounded do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.Tick)
+      |> into(ElixirRunner.Steps.Tick)
       |> named("ticked")
-      |> into(ElixirRunner.Bounded.Relay)
+      |> into(ElixirRunner.Steps.Relay)
       |> sink("out")
     end
   end
 
-  # `event_timer_bounded`: an entry-fed tasklet whose clock is the message's
+  # `event_timer_steps`: an entry-fed tasklet whose clock is the message's
   # leading event time; each message arms an event-time timer 100 later and
   # emits `seen:<t>`, and the firing emits `fired:<at>`.
   defmodule EventTick do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "event_tick"
-    use ElixirRunner.Bounded.Seen
+    use ElixirRunner.Steps.Seen
 
     @impl true
     def event_time(input),
@@ -772,11 +801,12 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule EventTimerBounded do
+  defmodule EventTimerSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "event_timer_bounded"
-    def loop_mode, do: :per_input
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "event_timer_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -784,12 +814,12 @@ defmodule ElixirRunner.Bounded do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.EventTick)
+      |> into(ElixirRunner.Steps.EventTick)
       |> sink("out")
     end
   end
 
-  # `static_cell_bounded`: a per-input loop whose one tasklet declares three
+  # `static_cell_steps`: a per-input loop whose one tasklet declares three
   # static cells and routes every message to two of them; each cell that runs
   # emits `<cell key>:<message>`, so one message yields exactly two outputs.
   defmodule StaticCellStep do
@@ -805,12 +835,12 @@ defmodule ElixirRunner.Bounded do
     end
   end
 
-  defmodule StaticCellBounded do
+  defmodule StaticCellSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.BoundedOperator
-    def factory_id, do: "static_cell_bounded"
-    def loop_mode, do: :per_input
-    def self_terminating?, do: false
+    @behaviour Flezha.SDK.Operator
+    def factory_id, do: "static_cell_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
 
     def channels(c) do
@@ -818,32 +848,32 @@ defmodule ElixirRunner.Bounded do
 
       c
       |> input("in")
-      |> into(ElixirRunner.Bounded.StaticCellStep)
+      |> into(ElixirRunner.Steps.StaticCellStep)
       |> sink("out")
     end
   end
 
-  @doc "The durable structured bounded classes this runner advertises."
+  @doc "The durable structured steps classes this runner advertises."
   def all do
     [
-      EchoBounded,
-      TimerLoopBounded,
-      EventTimerBounded,
-      StaticCellBounded,
-      TypedOnceBounded,
-      CommitBlockBounded,
-      SyncDurableBounded,
-      OptOutCommitBlockBounded,
-      TierCommitBlockBounded,
-      SagaBlockBounded,
-      KeyedBlockBounded,
-      KeyedSagaBounded,
-      OutboxBlockBounded,
-      UndoOutboxBounded,
-      FailedStageBounded,
-      BranchBounded,
-      DiamondBounded,
-      RetryBounded
+      EchoSteps,
+      TimerLoopSteps,
+      EventTimerSteps,
+      StaticCellSteps,
+      TypedOnceSteps,
+      CommitBlockSteps,
+      SyncDurableSteps,
+      OptOutCommitBlockSteps,
+      TierCommitBlockSteps,
+      SagaBlockSteps,
+      KeyedBlockSteps,
+      KeyedSagaSteps,
+      OutboxBlockSteps,
+      UndoOutboxSteps,
+      FailedStageSteps,
+      BranchSteps,
+      DiamondSteps,
+      RetrySteps
     ]
   end
 end

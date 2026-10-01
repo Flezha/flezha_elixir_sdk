@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Local do
   @moduledoc """
   Running a declared operator graph in this process, with no controller.
 
-  `start/2` takes the `Flezha.SDK.UnboundedOperator` module you deploy, compiles
+  `start/2` takes the `Flezha.SDK.Operator` module you deploy, compiles
   the topology its `channels/1` already declares, and stands the operator up on
   an in-node stream pair this run owns. Nothing about the class changes: no
   local-mode callback, no second declaration. Cell lifecycle, key resolution,
@@ -95,7 +95,8 @@ defmodule Flezha.SDK.Local do
     with :ok <- refuse_controller_only(module),
          {:ok, topology} <- Topology.build(module),
          :ok <- refuse_topology_facts(topology) do
-      GenServer.start_link(__MODULE__, {topology, opts})
+      # Nothing would wake a sleeping local run.
+      GenServer.start_link(__MODULE__, {%{topology | sleep_after_ms: nil}, opts})
     end
   end
 
@@ -179,7 +180,7 @@ defmodule Flezha.SDK.Local do
     id = Keyword.get(opts, :operator_id, "#{topology.factory_id}-local")
 
     {:ok, op} =
-      Operator.start_link(
+      Operator.Server.start_link(
         operator_id: id,
         topology: topology,
         range: KeyGroup.decode(0, 0, 0, 0),
@@ -256,6 +257,9 @@ defmodule Flezha.SDK.Local do
 
   def handle_cast({:claim_spawn, _reference_id}, s), do: {:noreply, s}
 
+  # An instance's end is the controller's to act on; a local run has none.
+  def handle_cast({:notify, _command}, s), do: {:noreply, s}
+
   @impl true
   # A sink output: the router writes it under the operator's own payload id.
   def handle_info({:flz_data, _stream, id, payload, metadata}, %{id: id} = s) do
@@ -288,7 +292,7 @@ defmodule Flezha.SDK.Local do
 
   @impl true
   def terminate(_reason, s) do
-    if Process.alive?(s.op), do: Operator.stop(s.op)
+    if Process.alive?(s.op), do: Operator.Server.stop(s.op)
     Transport.close(s.stream)
     :ok
   end
@@ -301,22 +305,24 @@ defmodule Flezha.SDK.Local do
   # declaration: a member's key-group range arrives with `AddOperator`, so a
   # local run is unpartitioned by construction.
   defp refuse_controller_only(module) do
-    if Flezha.SDK.operator_kind(module) == {:ok, :bounded} do
-      needs_controller(
-        inspect(module),
-        "a bounded operator",
-        "a bounded operator's steps are driven from the controller's inbox, and its commit " <>
-          "barriers are durable"
-      )
-    else
-      :ok
+    case Flezha.SDK.Operator.settings(module) do
+      {:ok, %{run: :steps}} ->
+        needs_controller(
+          inspect(module),
+          "run: :steps",
+          "a class that runs in steps is driven from the controller's inbox, and its commit " <>
+            "barriers are durable"
+        )
+
+      _flow_or_refused ->
+        :ok
     end
   end
 
   defp refuse_topology_facts(%Topology{effectively_once?: true, factory_id: id}) do
     needs_controller(
       id,
-      "effectively_once",
+      "exactly: :effectively_once",
       "under the tier an output rides its effect record, and the controller releases it " <>
         "once that record is durable — local mode has no durable store to release from"
     )
@@ -393,7 +399,7 @@ defmodule Flezha.SDK.Local do
 
   # A router that will not answer cannot be walked, so the run is not idle.
   defp settled_cells?(%{op: op} = s) do
-    case Operator.cells(op) do
+    case Operator.Server.cells(op) do
       {:error, _busy} ->
         false
 

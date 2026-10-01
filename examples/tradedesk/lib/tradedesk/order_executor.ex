@@ -1,9 +1,9 @@
 defmodule Tradedesk.OrderExecutor do
   @moduledoc """
-  The desk's bounded operator: one instance per order, which runs its steps
+  The desk's steps operator: one instance per order, which runs its steps
   once and then ends.
 
-  A bounded operator declares its steps the way an unbounded operator declares
+  A steps operator declares its steps the way a flow operator declares
   its graph, on the same builder, and the controller schedules, restarts and
   relocates it in the same way. What differs is the lifecycle: each step's
   output is written down as it commits, so an instance that is interrupted
@@ -16,7 +16,7 @@ defmodule Tradedesk.OrderExecutor do
   is released. A step with no `compensate/3` is skipped, which is why the
   desk's book is left alone.
   """
-  use Flezha.SDK.BoundedOperator, factory_id: "order_executor"
+  use Flezha.SDK.Operator, factory_id: "order_executor", run: :steps
 
   defmodule OrderTicket do
     @moduledoc """

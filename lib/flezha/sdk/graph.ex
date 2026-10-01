@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Graph do
   @moduledoc """
   One Kahn walk over a class's tasklet nodes, read by both declaration
-  surfaces. An unbounded topology asks it only whether a cycle exists; a bounded operator
+  surfaces. A flow topology asks it only whether a cycle exists; a steps operator
   asks it for the order its stages run in, the parents each stage waits on and
   the leaves a chained loop re-seeds from. The rule is one rule, so the walk is
   one walk.
@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Graph do
 
   The queue is FIFO and every seed and child set is ordered by the node's
   declaration `seq`, so `order` is a function of the declaration alone. A
-  bounded operator's `task_idx` is a wire field: two runs of one class must number its
+  steps operator's `task_idx` is a wire field: two runs of one class must number its
   stages identically, and node refs are `make_ref/0` values whose map order is
   not declaration order.
   """

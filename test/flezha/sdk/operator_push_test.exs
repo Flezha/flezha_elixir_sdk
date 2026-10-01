@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.OperatorPushTest do
   @moduledoc """
-  An unbounded operator pushing into a Cell that is mid-run: with room in the
+  A flow operator pushing into a Cell that is mid-run: with room in the
   Cell's queue the push lands at once, so the operator keeps answering; with
   none the pusher waits, and keeps its place in line.
   """
@@ -49,17 +49,17 @@ defmodule Flezha.SDK.OperatorPushTest do
   end
 
   defmodule SheddingGateOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "shedding_gate_op"
+    use Flezha.SDK.Operator, factory_id: "shedding_gate_op"
     def channels(c), do: c |> input("in") |> on_full(:drop_oldest) |> into(NarrowGate)
   end
 
   defmodule GateOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "gate_op"
+    use Flezha.SDK.Operator, factory_id: "gate_op"
     def channels(c), do: c |> input("in") |> into(Gate)
   end
 
   defmodule NarrowGateOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "narrow_gate_op"
+    use Flezha.SDK.Operator, factory_id: "narrow_gate_op"
     def channels(c), do: c |> input("in") |> into(NarrowGate)
   end
 
@@ -72,7 +72,7 @@ defmodule Flezha.SDK.OperatorPushTest do
     {:ok, topology} = Topology.build(module)
     {:ok, runner} = StubRunner.start_link(test: self())
     opts = [operator_id: "gate-1", topology: topology, counters: Counters.new(), runner: runner]
-    {:ok, op} = Operator.start_link(opts)
+    {:ok, op} = Operator.Server.start_link(opts)
     op
   end
 
@@ -82,7 +82,7 @@ defmodule Flezha.SDK.OperatorPushTest do
     assert_receive {:running, "first", cell}, 5_000
 
     Inbox.input(op, "in", "second", %{})
-    assert [{"gate", :single, [{nil, ^cell}]}] = Operator.cells(op)
+    assert [{"gate", :single, [{nil, ^cell}]}] = Operator.Server.cells(op)
 
     send(cell, :release)
     assert_receive {:running, "second", ^cell}, 5_000
@@ -116,7 +116,7 @@ defmodule Flezha.SDK.OperatorPushTest do
     send(cell, :release)
   end
 
-  # A bounded stage sends its value, then the barrier behind it, the same
+  # A steps stage sends its value, then the barrier behind it, the same
   # way: an internal item must not take the slot the value was sent for.
   for policy <- [:drop_oldest, :drop_newest] do
     test "#{policy}: a barrier sent behind a value never costs it the one slot" do

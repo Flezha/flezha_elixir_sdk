@@ -5,7 +5,7 @@ defmodule Echo.Application do
 
   The runner is a child of this application's supervision tree, so a crash
   restarts it and it reconnects under the same identity. Declare every operator
-  you want served in `operators:`, whichever kind it is: the kind is read from
+  you want served in `operators:`, however it runs: how it runs is read from
   the module, never named by the list.
   """
   use Application

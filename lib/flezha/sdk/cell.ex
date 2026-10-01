@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Cell do
   input's event time advances the high-water past it, ahead of that input. A
   firing's ops and outputs ship as a dispatch's do, its removal committed
   even when it parks; a restore, a slot and an eviction re-arm, re-arm and
-  discard the armed set with the pending one. A bounded stage's Cell hands a
+  discard the armed set with the pending one. A steps stage's Cell hands a
   due processing-time firing to its driver, which decides when it runs, and
   when its class journals it holds a served firing's removal until the
   driver releases it on the stage's commit.
@@ -78,7 +78,7 @@ defmodule Flezha.SDK.Cell do
     defstruct [:outputs]
   end
 
-  # A bounded stage's barrier, on the queue behind that stage's batch. It
+  # A steps stage's barrier, on the queue behind that stage's batch. It
   # runs no author code: reaching it is the answer, because the queue is FIFO
   # and every item before it has been dispatched. An invocation that emits
   # nothing reports nothing, so a driver cannot count outputs to know its
@@ -129,7 +129,7 @@ defmodule Flezha.SDK.Cell do
   @doc """
   Enqueue a barrier behind whatever this Cell already holds: `{:stage_done,
   ref, cell_pid, written}` reaches `reply_to` once the queue has drained past
-  it. `written` names the effect records a bounded stage's Cell wrote since
+  it. `written` names the effect records a steps stage's Cell wrote since
   its last barrier (`%{cell_id, first_seq, seq, channels}`), `nil` when none.
   """
   def barrier(pid, ref, reply_to), do: send_item(pid, %Barrier{ref: ref, reply_to: reply_to})
@@ -305,13 +305,13 @@ defmodule Flezha.SDK.Cell do
     {:ok, state |> Records.rebind(Keyword.get(opts, :secondaries, [])) |> Clock.rearm()}
   end
 
-  # A bounded stage's Cell hands its due firings to the driver, which decides
+  # A steps stage's Cell hands its due firings to the driver, which decides
   # when each runs; one whose class journals holds a served firing's removal
   # until the stage's commit.
   defp firing_gate(opts) do
     cond do
       not Keyword.get(opts, :gate_firings, false) -> nil
-      Keyword.get(opts, :persistence_enabled, true) -> :held
+      Keyword.get(opts, :durable, true) -> :held
       true -> :settled
     end
   end
@@ -322,7 +322,7 @@ defmodule Flezha.SDK.Cell do
   # class — so a changeless one writes them too. The class's own opt-out
   # silences both: the seq advances and the frames are discarded.
   defp persists?(changeful?, tier, opts),
-    do: Keyword.get(opts, :persistence_enabled, true) and (changeful? or tier.on?)
+    do: Keyword.get(opts, :durable, true) and (changeful? or tier.on?)
 
   # The slot's interval and floor over the struct's defaults: a replacement
   # re-holds what its predecessor had staged but not yet made durable.
@@ -367,7 +367,7 @@ defmodule Flezha.SDK.Cell do
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.task_state, s.change_seq}, s}
 
-  # What a sleeping bounded operator wakes at: the earliest processing-time timer.
+  # What a sleeping steps operator wakes at: the earliest processing-time timer.
   def handle_call(:earliest_timer, _from, %State{} = s),
     do: {:reply, List.first(Timers.all(s.timers.pending, :processing_time)), s}
 
@@ -441,7 +441,7 @@ defmodule Flezha.SDK.Cell do
   # processing-time timer due by now onto the queue, ascending, so the order
   # never depends on the order two same-millisecond messages arrive in; one
   # that finds no room comes back later rather than dropping.
-  # A bounded stage's Cell reports its firing to the driver instead: the
+  # A steps stage's Cell reports its firing to the driver instead: the
   # driver decides whether it opens a pass, joins the running stage or waits,
   # and hands it back through the queue.
   def handle_info({:timer_due, at}, %State{timers: %{gate: gate}} = s) when gate != nil do
@@ -723,8 +723,8 @@ defmodule Flezha.SDK.Cell do
     flush_emits(s, facts.emits, handout_seq, {offset, facts.call})
   end
 
-  # After the outputs, so the driver has them all when this stage settles. A
-  # stream's Cell never gets here with one: `succeeded/4` refused it.
+  # After the outputs, so the instance has them all when it ends or, in
+  # steps, when this stage settles.
   defp request_completion(%State{} = s, nil), do: s
 
   defp request_completion(%State{} = s, result) do
@@ -735,7 +735,7 @@ defmodule Flezha.SDK.Cell do
   # Under the tier the invocation's whole effect is ONE record: its changes,
   # the outputs it captured itself, the offset it consumed and its timer ops,
   # so state, outputs and the offset can never tear. Only an inter-tasklet
-  # emit still leaves through the router; a bounded stage's Cell hands every
+  # emit still leaves through the router; a steps stage's Cell hands every
   # emit to its driver, which holds the release for the stage's commit.
   defp settle_tier(%State{} = s, new_task_state, facts, offset) do
     {pending, ops, tally} = facts.timers
@@ -751,7 +751,7 @@ defmodule Flezha.SDK.Cell do
       else: flush_emits(s, facts.emits, handout_seq, {offset, facts.call}, report)
   end
 
-  # A bounded operator firing's removal is durable when the stage that served it
+  # A steps operator firing's removal is durable when the stage that served it
   # commits, as a message leaves the input log at the commit that consumed it:
   # it stays out of this dispatch's record until the driver's release.
   defp hold_removal(%State{timers: %{gate: :held}} = s, %Fire{kind: kind, at: at}, facts) do
@@ -823,7 +823,7 @@ defmodule Flezha.SDK.Cell do
         # completion) are cleared here, so nothing of this ref outlives the
         # invocation.
         Ctx.discard(ctx)
-        succeeded(s, new_state, facts, attempt)
+        {:ok, new_state, facts}
 
       {:result, ctx, {:error, {:non_retryable, reason}}} ->
         Ctx.discard(ctx)
@@ -838,20 +838,6 @@ defmodule Flezha.SDK.Cell do
         retry_or_park(s, item, seed, attempt, message)
     end
   end
-
-  # An unbounded operator never completes, so an unbounded tasklet asking to fails its input,
-  # and a retry would only ask again. A bounded stage's Cell is the one that
-  # does not park, and its request goes on to the driver.
-  defp succeeded(%State{park: %{enabled?: true}} = s, _new_state, %{completion: result}, attempt)
-       when is_binary(result) do
-    error =
-      "CompleteOutsideBounded: tasklet `#{s.module.name()}` called complete/2, " <>
-        "but an unbounded operator never completes"
-
-    {:park, error, attempt}
-  end
-
-  defp succeeded(_s, new_state, facts, _attempt), do: {:ok, new_state, facts}
 
   # Anything author code raises becomes `{:raised, ctx, message}` so the ladder
   # can climb it and the ctx's slots still go. A ctx that never came back is
@@ -934,9 +920,9 @@ defmodule Flezha.SDK.Cell do
   # offset it consumed and a parked firing's removal ride one frame, and
   # nothing is held — the record is the durability, so there is no ack to wait
   # for.
-  # A bounded stage's Cell does not park: its exhausted ladder fails the
-  # tasklet, and the driver unwinds the run. An unbounded operator's Cell parks to the
-  # DLQ, which is the only behaviour that existed before bounded operators.
+  # A steps stage's Cell does not park: its exhausted ladder fails the
+  # tasklet, and the driver unwinds the run. A flow operator's Cell parks to the
+  # DLQ, which is the only behaviour that existed before steps operators.
   defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, attempts, _input) do
     GenServer.cast(
       s.operator,

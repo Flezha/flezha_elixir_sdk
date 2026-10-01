@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Native do
   sets `config :flezha_sdk, socket_nif: false`: nothing is downloaded or compiled,
   and every function here raises `:nif_not_loaded`.
 
-  ## Messages sent to an unbounded operator's owner
+  ## Messages sent to a flow operator's owner
 
     * `{:flz_data, stream_id, payload_id, message, metadata}` — one frame
     * `{:flz_closed, stream_id, reason}` — the stream ended

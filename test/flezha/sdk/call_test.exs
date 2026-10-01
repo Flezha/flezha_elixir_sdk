@@ -9,7 +9,7 @@ defmodule Flezha.SDK.CallTest do
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.{Contract, Counters, Error, LocalStream, Operator, Response, Topology, Wire}
-  alias Flezha.SDK.Bounded.{Driver, Spec}
+  alias Flezha.SDK.Steps.{Driver, Spec}
   alias Flezha.SDK.Operator.{Inbox, Routing}
   alias Flezha.SDK.Test.StubRunner
 
@@ -38,7 +38,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule BackIntoCallerOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_back"
+    use Flezha.SDK.Operator, factory_id: "call_back"
 
     def channels(c) do
       asked = c |> input("in") |> into(Ask) |> named("quote")
@@ -48,7 +48,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule FactoryOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_factory"
+    use Flezha.SDK.Operator, factory_id: "call_factory"
 
     def channels(c) do
       c
@@ -63,12 +63,12 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule TierOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_tier"
+    use Flezha.SDK.Operator, factory_id: "call_tier"
+    def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c),
       do:
         c
-        |> effectively_once()
         |> input("in")
         |> into(Ask)
         |> call("p", deadline_ms: 1)
@@ -76,7 +76,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule DecodedOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_decoded"
+    use Flezha.SDK.Operator, factory_id: "call_decoded"
 
     def channels(c) do
       c
@@ -88,7 +88,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule SinkThenCallOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_beside_sink"
+    use Flezha.SDK.Operator, factory_id: "call_beside_sink"
 
     def channels(c) do
       asked = c |> input("in") |> into(Ask) |> sink("out")
@@ -97,7 +97,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule CallThenResponseOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_beside_response"
+    use Flezha.SDK.Operator, factory_id: "call_beside_response"
 
     def channels(c) do
       asked = c |> input("in") |> into(Ask)
@@ -107,12 +107,12 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule DeadlineZeroOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_zero"
+    use Flezha.SDK.Operator, factory_id: "call_zero"
     def channels(c), do: c |> input("in") |> into(Ask) |> call("p", deadline_ms: 0) |> into(Log)
   end
 
   defmodule UnkeyedNoCreateOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_unkeyed"
+    use Flezha.SDK.Operator, factory_id: "call_unkeyed"
 
     def channels(c) do
       c
@@ -124,7 +124,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule UnreadOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_unread"
+    use Flezha.SDK.Operator, factory_id: "call_unread"
 
     def channels(c) do
       _response = c |> input("in") |> into(Ask) |> call("p", deadline_ms: 5)
@@ -132,7 +132,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule OnEntryOp do
-    use Flezha.SDK.UnboundedOperator, factory_id: "call_on_entry"
+    use Flezha.SDK.Operator, factory_id: "call_on_entry"
 
     def channels(c) do
       entry = c |> input("in")
@@ -142,25 +142,26 @@ defmodule Flezha.SDK.CallTest do
   end
 
   defmodule OnceLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
     import Flezha.SDK.Channels
     def factory_id, do: "call_once"
     def channels(c), do: c |> input("in") |> into(Ask) |> call("p", deadline_ms: 5) |> into(Ask)
   end
 
   defmodule ChainedLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "call_chained"
-    def loop_mode, do: :chained
+    def run, do: {:steps, each: :chained}
     def channels(c), do: c |> input("in") |> into(Ask) |> call("p", deadline_ms: 5) |> into(Ask)
   end
 
   defmodule TurnLoop do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
     import Flezha.SDK.Channels
     def factory_id, do: "call_turn"
-    def loop_mode, do: :per_input
+    def run, do: {:steps, each: :per_input}
     def max_duration_ms, do: 600_000
 
     def channels(c),
@@ -178,7 +179,7 @@ defmodule Flezha.SDK.CallTest do
     {:ok, topology} = Topology.build(module)
     {:ok, runner} = StubRunner.start_link(test: self())
     opts = [operator_id: id, topology: topology, counters: Counters.new(), runner: runner]
-    {:ok, op} = Operator.start_link(opts)
+    {:ok, op} = Operator.Server.start_link(opts)
     wire_to(op)
     op
   end
@@ -370,7 +371,6 @@ defmodule Flezha.SDK.CallTest do
         Driver.start_link(
           operator_id: "turn-1",
           counters: Counters.new(),
-          park_idle_ms: 60_000,
           spec: spec,
           runner: runner
         )

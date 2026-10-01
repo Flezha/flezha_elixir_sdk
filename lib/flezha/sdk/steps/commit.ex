@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Bounded.Commit do
+defmodule Flezha.SDK.Steps.Commit do
   @moduledoc """
   Everything a driver sends upward: the two durable barriers and their acks,
   the park record and the terminal frame.
@@ -86,8 +86,8 @@ defmodule Flezha.SDK.Bounded.Commit do
   def resend(runner, driver, ref, command), do: barrier(runner, driver, ref, command)
 
   @doc """
-  Ship `IterPark`: an instance of either kind asks to sleep (a loop that found
-  its inbox empty at a committed boundary, an unbounded operator at iteration `0`) WITHOUT a
+  Ship `IterPark`: an instance of either run asks to sleep (a loop that found
+  its inbox empty at a committed boundary, a flow operator at iteration `0`) WITHOUT a
   terminal frame, which is not an outcome. The controller releases every
   input-log offset up to `consumed_offset`, the last message the run parked
   unread (`nil` when it parked none).
@@ -101,10 +101,10 @@ defmodule Flezha.SDK.Bounded.Commit do
         Codec.iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset)
       )
 
-  @doc "Ship `BoundedCompleted`: the run reached an exit."
+  @doc "Ship `OperatorCompleted`: the run reached an exit."
   @spec completed(pid(), String.t(), String.t(), String.t(), binary()) :: :ok
   def completed(runner, operator_id, status, error, result),
-    do: notify(runner, Codec.bounded_completed_command(operator_id, status, error, result))
+    do: notify(runner, Codec.operator_completed_command(operator_id, status, error, result))
 
   @doc """
   Ship one saga marker on the runner's record wire. Presence is the signal:

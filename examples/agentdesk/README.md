@@ -5,25 +5,25 @@ build, as a standalone project. It depends on `flezha_sdk` and Jason alone, the 
 own project would; until `flezha_sdk` is released, `mix.exs` names it by a path into this
 checkout ([Building from a checkout](#building-from-a-checkout)).
 
-Every conversation is a session of its own: an instance of the bounded operator `agent`,
+Every conversation is a session of its own: an instance of the steps operator `agent`,
 which runs one turn per message and keeps the conversation as its state. A turn is
 answered by a demo model that lives in this project. It is a stand-in, not a model:
 it answers every message with the same sentence, one token at a time, and reports how
 many tokens it used. `lib/agentdesk/demo_model.ex` is where a real model's client would
 be called.
 
-In front of the sessions is `gateway`, an unbounded operator that carries the HTTP
+In front of the sessions is `gateway`, a flow operator that carries the HTTP
 plugin: a POST is a message for a user's session, answered 202 at once, a GET streams
 the session's answer as it is written, and each user has a daily token budget.
 
 | File | What is in it |
 |---|---|
 | `lib/agentdesk/application.ex` | the runner: this node joins the `agents` namespace and registers the `agent` and `gateway` factories |
-| `lib/agentdesk/agent_operator.ex` | a session, a bounded operator: one turn per message, and a failed turn fails alone |
+| `lib/agentdesk/agent_operator.ex` | a session, a steps operator: one turn per message, and a failed turn fails alone |
 | `lib/agentdesk/reply.ex` | answers a message with the demo model, sends the answer as it grows, and keeps the conversation |
 | `lib/agentdesk/deliver.ex` | hands the finished answer to whoever called |
 | `lib/agentdesk/demo_model.ex` | the demo model, and the `Answer` it gives |
-| `lib/agentdesk/gateway_operator.ex` | the HTTP side, an unbounded operator: it carries the HTTP plugin, answers every request, and calls the session a message is for |
+| `lib/agentdesk/gateway_operator.ex` | the HTTP side, a flow operator: it carries the HTTP plugin, answers every request, and calls the session a message is for |
 | `lib/agentdesk/request.ex` | one HTTP request, as the plugin hands it to the gateway, and the two routes the gateway knows |
 | `lib/agentdesk/watch.ex` | answers a request for a session's events with its stream, and any other request with 404 |
 | `lib/agentdesk/budget.ex` | keeps the tokens each user's answers used today, and admits a message while they are under the day's budget |

@@ -30,6 +30,28 @@ Elixir 1.17 or later.
 `Flezha.SDK.Local` runs an operator's declared graph in your own process with no
 controller at all, holding state in memory only.
 
+## Declaring an operator
+
+One macro declares every operator. Its settings say how it runs and where its
+work is kept, and each is optional:
+
+```elixir
+defmodule Checkout do
+  use Flezha.SDK.Operator,
+    factory_id: "checkout",
+    run: {:steps, each: :per_input, on_failure: :keep_progress},
+    durable: {:local, sleep_after: 60_000}
+
+  def channels(c), do: c |> input("orders") |> into(Reserve) |> into(Charge)
+end
+```
+
+`run` is `:flow` (the default, with `exactly: :effectively_once` for the
+effectively-once tier) or `:steps`; `durable` is `false`, `:local` (the
+default; a flow instance never sleeps, a steps instance after six hours idle)
+or `:remote`. A setting written under
+the wrong parent does not compile. `Flezha.SDK.Operator` documents the tree.
+
 ## Answering a caller, calling an operator
 
 A channel can end in `response/1`, which answers the outside call its input

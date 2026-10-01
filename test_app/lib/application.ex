@@ -1,3 +1,19 @@
+defmodule ElixirRunner do
+  @moduledoc false
+
+  @doc """
+  Where a sleeping fixture keeps its work: locally, sleeping after the class
+  default unless the drill or the bench driving it shortens the interval
+  through `FLEZHA_FIXTURE_SLEEP_AFTER_MS`.
+  """
+  def fixture_durable do
+    case Integer.parse(System.get_env("FLEZHA_FIXTURE_SLEEP_AFTER_MS", "")) do
+      {ms, ""} when ms > 0 -> {:local, sleep_after: ms}
+      _unset -> :local
+    end
+  end
+end
+
 defmodule ElixirRunner.Application do
   @moduledoc """
   Boots the standalone Elixir SDK runner: this app runs the SDK under its own
@@ -67,8 +83,8 @@ defmodule ElixirRunner.Application do
         BenchFactories.all() ++
           ElixirRunner.Factories.all() ++
           ElixirRunner.Factories.shorthand() ++
-          ElixirRunner.Bounded.all() ++
-          ElixirRunner.BoundedLoop.all() ++
+          ElixirRunner.Steps.all() ++
+          ElixirRunner.StepsLoop.all() ++
           ElixirRunner.Call.all() ++
           ElixirRunner.OperatorCall.all() ++
           ElixirRunner.Part.all()

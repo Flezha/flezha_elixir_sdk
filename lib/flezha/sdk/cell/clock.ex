@@ -16,7 +16,7 @@ defmodule Flezha.SDK.Cell.Clock do
 
   @doc """
   The `timers` map a fresh Cell starts from, over what its slot held, with the
-  gate a bounded stage's due firings pass through.
+  gate a steps stage's due firings pass through.
   """
   @spec seed(module(), map(), :settled | :held | nil) :: map()
   def seed(module, held, gate) do

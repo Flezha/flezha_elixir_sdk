@@ -35,7 +35,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule CounterOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "counter_op"
 
     def channels(c),
@@ -52,7 +52,7 @@ defmodule Flezha.SDK.LocalTest do
 
     @impl true
     def run(instance_id, state, ctx) do
-      handle = spawn_bounded(ctx, "worker", "payload", id: instance_id)
+      handle = spawn_steps(ctx, "worker", "payload", id: instance_id)
       {:error, refusal} = Spawn.await(handle, 5_000)
       emit(ctx, refusal.code)
       {:ok, state}
@@ -61,7 +61,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule SpawnerOp do
     @moduledoc false
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "spawner"
 
     def channels(c),
@@ -100,7 +100,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule WordCount do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     alias Flezha.SDK.Channels
 
     def factory_id, do: "word_count"
@@ -122,11 +122,12 @@ defmodule Flezha.SDK.LocalTest do
   # --- classes and channels local mode has something to say about ---
 
   defmodule TieredOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "local_tiered"
+    def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c) do
-      Channels.effectively_once(c)
+      c
       |> Channels.input("in")
       |> Channels.into(Normalise)
       |> Channels.named("out")
@@ -136,13 +137,14 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule Job do
-    @behaviour Flezha.SDK.BoundedOperator
+    @behaviour Flezha.SDK.Operator
+    def run, do: :steps
     def factory_id, do: "local_job"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
   end
 
-  # Asks to end its operator on `end`, which an unbounded operator never does. Reports every
-  # invocation, so a retry would show.
+  # Asks to end its operator on `end`. Reports every invocation, so a retry
+  # would show.
   @closer_probe :local_mode_closer
 
   defmodule Closer do
@@ -158,7 +160,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule CloserOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "local_closer"
 
     def channels(c),
@@ -166,7 +168,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule StrictOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "local_strict"
 
     def channels(c) do
@@ -197,7 +199,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule HeldOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "local_held"
 
     def channels(c) do
@@ -242,7 +244,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule StamperOp do
-    @behaviour Flezha.SDK.UnboundedOperator
+    @behaviour Flezha.SDK.Operator
     def factory_id, do: "local_stamper"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Stamper)
   end
@@ -286,7 +288,7 @@ defmodule Flezha.SDK.LocalTest do
     assert_receive {:stamp, "flaky", first}, 5_000
     assert_receive {:stamp, "flaky", ^first}, 5_000
 
-    {:ok, cell} = Operator.lookup(Local.operator(run), "stamper", nil)
+    {:ok, cell} = Operator.Server.lookup(Local.operator(run), "stamper", nil)
     ref = Process.monitor(cell)
 
     log =
@@ -340,7 +342,7 @@ defmodule Flezha.SDK.LocalTest do
     assert :ok = Local.run_until_idle(run, 5_000)
 
     {"tally", :dynamic, keyed} =
-      List.keyfind(Operator.cells(Local.operator(run)), "tally", 0)
+      List.keyfind(Operator.Server.cells(Local.operator(run)), "tally", 0)
 
     assert keyed |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ~w(a b c)
   end
@@ -406,10 +408,10 @@ defmodule Flezha.SDK.LocalTest do
 
     assert tier =~ "effectively_once" and tier =~ "requires a controller"
 
-    assert {:error, %{code: "runtime.local_needs_controller", message: bounded}} =
+    assert {:error, %{code: "runtime.local_needs_controller", message: steps}} =
              Local.start(Job)
 
-    assert bounded =~ "a bounded operator" and bounded =~ "requires a controller"
+    assert steps =~ "run: :steps" and steps =~ "requires a controller"
   end
 
   test "a value released on a sink with no callback is reported by name and counted" do
@@ -439,7 +441,7 @@ defmodule Flezha.SDK.LocalTest do
     assert log =~ "unreadable"
   end
 
-  test "an unbounded tasklet asking to complete fails that input once, by name, and the operator runs on" do
+  test "a flow tasklet's completion is the controller's to act on: a local run runs on" do
     Process.register(self(), @closer_probe)
     run = start_run(CloserOp)
     collect(run, "out")
@@ -451,11 +453,9 @@ defmodule Flezha.SDK.LocalTest do
         assert :ok = Local.run_until_idle(run, 5_000)
       end)
 
-    assert log =~ "parked an input on channel `in`: CompleteOutsideBounded"
-    # Not retried: the ladder would have run it again.
+    refute log =~ "parked an input"
     assert [{:ran, "hi"}, {:ran, "end"}] == for({:ran, _} = m <- collect_ran(), do: m)
-    # The failed input's emit is discarded with it; the one before it shipped.
-    assert payloads() == ["hi"]
+    assert payloads() == ["hi", "end"]
     assert Process.alive?(Local.operator(run))
   end
 

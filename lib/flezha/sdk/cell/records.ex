@@ -21,7 +21,7 @@ defmodule Flezha.SDK.Cell.Records do
   of it was applied — and the tier's consumed floor and the event-time
   high-water come back off the restored effect records. A Cell restores when
   it writes records at all: a stateless one that writes effect records (the
-  tier, a durable bounded operator's stage) folds them onto its initial state.
+  tier, a durable steps operator's stage) folds them onto its initial state.
   """
   @spec restore(State.t(), binary(), binary(), binary(), non_neg_integer()) ::
           {:ok, State.t(), non_neg_integer(), boolean()} | {:error, String.t()}
@@ -271,7 +271,7 @@ defmodule Flezha.SDK.Cell.Records do
     write_slot(hold_or_ship(s, frame, hold_ref))
   end
 
-  # A bounded stage's Cell names the records it wrote at its next barrier, so
+  # A steps stage's Cell names the records it wrote at its next barrier, so
   # the stage's commit names them in turn.
   defp note_written(%State{tier: %{stage?: false}} = s, _seq, _outputs), do: s
 
@@ -339,7 +339,7 @@ defmodule Flezha.SDK.Cell.Records do
     {send_record(s, "cell_state_change", frame), seq + 1}
   end
 
-  # A firing whose removal a bounded stage still holds is pending until the
+  # A firing whose removal a steps stage still holds is pending until the
   # stage commits, so the compaction re-states it too.
   defp restate_timers(%State{timers: %{pending: pending, held: held}} = s) do
     ops = Timers.register_ops(pending) ++ Enum.map(held, &%{&1 | register: true})

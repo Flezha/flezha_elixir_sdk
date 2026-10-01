@@ -17,14 +17,12 @@ defmodule Flezha.SDK.Topology do
        twice, a branch of fewer than two arms;
     2. the derivation those chains determine — the consumer edges in chain
        order, the plugin wire, the channel's `named/2` name applied once for
-       every terminator, and the checkpoint granularity `Channels` implies
-       from any checkpoint key;
-    3. the topology and class facts over the derived shape.
+       every terminator;
+    3. the topology and class facts over the derived shape, the class's
+       settings tree (`Flezha.SDK.Operator`) included.
 
   `test/fixtures/reference_topologies.txt` is the contract both this and the
-  core are measured against. One of its class-fact rows this SDK does not
-  judge: the checkpoint-hold flag cannot be written without its delay, because
-  `outputs_at_checkpoint/2` takes both.
+  core are measured against.
 
   Routing model (v1, keyless channels deferred): an input on an entry channel,
   or a value a node emits, fans out along the source's routes; each route fuses
@@ -33,7 +31,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Error, Graph, Knob, Tasklet, UnboundedOperator, BoundedOperator}
+  alias Flezha.SDK.{Channels, Error, Graph, Knob, Operator, Tasklet}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -48,8 +46,9 @@ defmodule Flezha.SDK.Topology do
             routes: %{},
             order: [],
             keyless?: false,
-            persistence_enabled?: true,
-            sleep_when_idle?: false,
+            settings: %Operator{},
+            durable?: true,
+            sleep_after_ms: nil,
             compact_after_bytes: nil,
             effectively_once?: false,
             checkpoint: nil,
@@ -68,27 +67,34 @@ defmodule Flezha.SDK.Topology do
   @max_channel_name_bytes 255
 
   @doc """
-  Compile `module`'s `channels/1` into a topology. Both kinds author their graph
-  there on the same builder, so they compile through the same function, and
-  `kind` (`:unbounded` or `:bounded`, the class's own) decides which class facts
-  apply.
+  Compile `module`'s `channels/1` into a topology under `settings`, the class's
+  settings tree (read from the module when not given). A class of either run
+  authors its graph there on the same builder, so it compiles through the same
+  function, and the tree decides which class facts apply.
   """
-  @spec build(module(), :unbounded | :bounded) :: {:ok, t()} | {:error, Error.t()}
-  def build(module, kind \\ :unbounded) do
-    with {:issues, issues} <- judge(module, kind), do: {:error, refusal(issues)}
+  @spec build(module(), Operator.t() | nil) :: {:ok, t()} | {:error, Error.t()}
+  def build(module, settings \\ nil) do
+    judged = with {:ok, settings} <- settings_of(module, settings), do: judge(module, settings)
+    with {:issues, issues} <- judged, do: {:error, refusal(issues)}
+  end
+
+  defp settings_of(_module, %Operator{} = settings), do: {:ok, settings}
+
+  defp settings_of(module, nil) do
+    with {:error, issue} <- Operator.settings(module), do: {:issues, [issue]}
   end
 
   @doc """
   `build/2` before its refusal is rendered: the topology, or the issues found,
-  which a bounded class's own shape issues join.
+  which a steps class's own shape issues join.
   """
-  @spec judge(module(), :unbounded | :bounded) :: {:ok, t()} | {:issues, [tuple()]}
-  def judge(module, kind) do
+  @spec judge(module(), Operator.t()) :: {:ok, t()} | {:issues, [tuple()]}
+  def judge(module, %Operator{} = settings) do
     c = Channels.new()
 
     case declare_on(module, c) do
       :ok ->
-        compile(module, kind, Channels.take(c))
+        compile(module, settings, c |> Channels.take() |> Map.put(:tier, Operator.tier(settings)))
 
       {:deferred, message} ->
         _ = Channels.take(c)
@@ -99,20 +105,17 @@ defmodule Flezha.SDK.Topology do
   # The detail keys of each issue's positional fields, in order; the issue's
   # code is `topology.` and its name in snake case.
   @issue_details %{
+    AtCheckpointWithoutMaxDelay: [],
     BranchTooFewArms: [:arms],
     BranchingChainedLoop: [:factory_id, :channel, :leaves],
     CellsForMissing: [:name],
     ChannelNameTooLong: [:channel, :len, :max],
     ChannelEndsTwice: [:channel],
     ChannelNamedTwice: [:channel, :named, :sink],
-    CheckpointAckWithoutTier: [:factory_id],
-    CheckpointEveryZero: [:factory_id],
-    CheckpointMaxDelayZero: [:factory_id],
-    CheckpointOnBounded: [:factory_id],
-    CorrectionWindowOnBounded: [:factory_id],
-    CorrectionWindowZero: [:factory_id],
+    CheckpointEveryZero: [],
+    CheckpointMaxDelayZero: [],
+    CorrectionWindowZero: [],
     CorrectionWithoutEventTime: [:tasklet, :clock_type],
-    CorrectionWithoutTier: [:factory_id],
     Cycle: [:tasklet],
     DanglingTransformChain: [:channel],
     DeferredBuilderSurface: [:module, :reason],
@@ -124,9 +127,8 @@ defmodule Flezha.SDK.Topology do
     DuplicatePluginSink: [:channel, :plugin],
     DuplicateSinkName: [:channel],
     EdgeAlreadyWired: [:channel, :tasklet],
-    EffectivelyOnceOnBounded: [:factory_id],
-    ExternalStopOnly: [:factory_id],
-    InvalidMode: [:factory_id, :knob, :value],
+    EffectivelyOnceWithoutPersistence: [],
+    InvalidSetting: [:declaration, :setting, :value, :expected],
     KeyByOnUnkeyableTarget: [:tasklet, :channel],
     KeyedChannelWithoutPluginWire: [:channel],
     KeyedOnEntry: [:channel],
@@ -134,18 +136,18 @@ defmodule Flezha.SDK.Topology do
     MailboxCapacityZero: [:tasklet, :value],
     MergeTooFewSources: [:tasklet, :sources],
     NamedOnEntry: [:channel],
-    NoBoundedBody: [:factory_id],
+    NoStepsBody: [:factory_id],
     NoEntryChannel: [:factory_id],
     NodeIdentityCollision: [:name],
+    RemoteOnFlow: [:factory_id],
     RetiredCallback: [:tasklet, :callback, :instead],
     RetryMaxZero: [:channel],
-    SleepWithoutPersistence: [:factory_id],
-    SyncDurabilityOnUnbounded: [:factory_id],
     TransformAfterKeyBy: [:channel],
     TransformAfterTerminal: [:channel],
     TwoClocks: [:tasklet],
     UnkeyedChannelUnderEffectivelyOnce: [:channel],
     UnkeyedEdgeIntoDynamicTasklet: [:tasklet, :channel],
+    UnknownField: [:declaration, :fields],
     UnreachableTasklet: [:tasklet],
     UnservableClock: [:tasklet, :clock_type]
   }
@@ -173,14 +175,14 @@ defmodule Flezha.SDK.Topology do
     e in UndefinedFunctionError -> {:deferred, Exception.message(e)}
   end
 
-  defp compile(module, kind, acc) do
+  defp compile(module, settings, acc) do
     {channels, chain_issues} = derive(acc)
     routes = routes(channels)
     incoming = incoming(channels)
     node_mode = derive_modes(acc, incoming)
     shape = %{channels: channels, routes: routes, incoming: incoming, node_mode: node_mode}
 
-    issues = acc.issues ++ chain_issues ++ facts(module, kind, acc, shape)
+    issues = acc.issues ++ chain_issues ++ facts(module, settings, acc, shape)
 
     if issues == [] do
       {:ok,
@@ -200,8 +202,9 @@ defmodule Flezha.SDK.Topology do
          routes: routes,
          order: Map.keys(acc.nodes),
          keyless?: keyless?(acc, channels, node_mode),
-         persistence_enabled?: UnboundedOperator.persistence_enabled?(module),
-         sleep_when_idle?: sleeps?(module, kind),
+         settings: settings,
+         durable?: settings.durable != :memory,
+         sleep_after_ms: settings.sleep_after_ms,
          compact_after_bytes: compact_after_bytes(acc),
          effectively_once?: acc.tier.effectively_once,
          checkpoint: acc.tier.checkpoint,
@@ -507,12 +510,11 @@ defmodule Flezha.SDK.Topology do
 
   # --- stage three: the topology and class facts over the derived shape ---
 
-  defp facts(module, kind, acc, shape) do
+  defp facts(module, settings, acc, shape) do
     names(acc, shape.channels) ++
       Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
-      sleep_facts(module, kind) ++
-      kind_facts(module, kind, acc, mod_name(module)) ++
+      class_facts(settings, acc, module.factory_id()) ++
       cycles(acc, shape.routes) ++
       changeful_identity(acc) ++ Flezha.SDK.CallEnd.unread(shape.channels)
   end
@@ -696,69 +698,45 @@ defmodule Flezha.SDK.Topology do
 
   defp check_shedding(is, _channel, _tier?), do: is
 
-  # A sleeping instance is evicted and restored from its durable state, so a
-  # class of either kind that keeps none cannot sleep.
-  defp sleep_facts(module, kind) do
-    if sleeps?(module, kind) and not UnboundedOperator.persistence_enabled?(module),
-      do: [{:SleepWithoutPersistence, mod_name(module)}],
-      else: []
-  end
+  # What the settings tree refuses beyond its shape: a flow class kept
+  # remotely, which no flow commit point gates yet; the tier without a disk;
+  # and the tier's value checks. A steps class carries no tier.
+  defp class_facts(%Operator{run: :steps}, _acc, _name), do: []
 
-  defp sleeps?(module, :unbounded), do: UnboundedOperator.sleep_when_idle?(module)
-  defp sleeps?(module, :bounded), do: BoundedOperator.knob(module, :sleep_when_idle)
+  defp class_facts(%Operator{} = settings, acc, name) do
+    remote = if settings.durable == :remote, do: [{:RemoteOnFlow, name}], else: []
 
-  # Each kind is judged on its own settings, and a setting of the other kind
-  # is refused by its own name rather than by the rule that assumes its kind.
-  # A bounded operator commits stage by stage, so the tier, its checkpoint policy and
-  # a correction window have nothing to act on there. `sync_durability` is a
-  # bounded operator knob: an unbounded class acknowledges at input rates, where a remote
-  # round trip per acknowledgement is not a guarantee it can keep, and this
-  # SDK's stream behaviour has no such callback: declaring one is an authoring
-  # error, not a knob nothing reads.
-  defp kind_facts(_module, :bounded, %{tier: tier}, name) do
-    for {true, refusal} <- [
-          {tier.effectively_once, :EffectivelyOnceOnBounded},
-          {tier.checkpoint != nil, :CheckpointOnBounded},
-          {tier.correction != nil, :CorrectionWindowOnBounded}
-        ],
-        do: {refusal, name}
-  end
-
-  defp kind_facts(module, :unbounded, acc, name) do
-    sync =
-      if Tasklet.exports?(module, :sync_durability, 0) and module.sync_durability(),
-        do: [{:SyncDurabilityOnUnbounded, name}],
+    memory =
+      if acc.tier.effectively_once and settings.durable == :memory,
+        do: [{:EffectivelyOnceWithoutPersistence}],
         else: []
 
-    sync ++ checkpoint_facts(acc, name) ++ correction_facts(acc, name)
+    remote ++ memory ++ checkpoint_facts(acc.tier.checkpoint) ++ correction_facts(acc)
   end
 
-  # What the checkpoint policy refuses: a policy without the tier it holds the
-  # offset back for, and a cadence or a delay of zero.
-  defp checkpoint_facts(%{tier: %{checkpoint: nil}}, _name), do: []
+  # What the checkpoint policy refuses: outputs held with no delay to release
+  # them by, and a cadence or a delay of zero.
+  defp checkpoint_facts(nil), do: []
 
-  defp checkpoint_facts(%{tier: %{effectively_once: tier?, checkpoint: policy}}, name) do
-    without_tier = if tier?, do: [], else: [{:CheckpointAckWithoutTier, name}]
-    every = if policy.every == 0, do: [{:CheckpointEveryZero, name}], else: []
-    delay = if policy.max_delay_ms == 0, do: [{:CheckpointMaxDelayZero, name}], else: []
-
-    without_tier ++ every ++ delay
+  defp checkpoint_facts(policy) do
+    for {true, issue} <- [
+          {policy.outputs == :at_checkpoint and policy.max_delay_ms == nil,
+           {:AtCheckpointWithoutMaxDelay}},
+          {policy.every == 0, {:CheckpointEveryZero}},
+          {policy.max_delay_ms == 0, {:CheckpointMaxDelayZero}}
+        ],
+        do: issue
   end
 
-  # What a correction window refuses: the tier it replays the input log
-  # against, a window of zero, and an event-time clock to order the replayed
-  # slice by. A shedding policy needs no clause of its own: a window requires
-  # the tier, and `check_shedding/3` already refuses every shedding channel
-  # under it.
-  defp correction_facts(%{tier: %{correction: nil}}, _name), do: []
+  # What a correction window refuses: a window of zero, and a class with no
+  # event-time clock to order the replayed slice by. A shedding policy needs
+  # no clause of its own: `check_shedding/3` refuses every shedding channel
+  # under the tier the window sits in.
+  defp correction_facts(%{tier: %{correction: nil}}), do: []
 
-  defp correction_facts(acc, name) do
-    %{effectively_once: tier?, correction: %{window_ms: window_ms}} = acc.tier
-
-    without_tier = if tier?, do: [], else: [{:CorrectionWithoutTier, name}]
-    zero = if window_ms == 0, do: [{:CorrectionWindowZero, name}], else: []
-
-    without_tier ++ zero ++ event_time_clock(acc)
+  defp correction_facts(%{tier: %{correction: %{window_ms: window_ms}}} = acc) do
+    zero = if window_ms == 0, do: [{:CorrectionWindowZero}], else: []
+    zero ++ event_time_clock(acc)
   end
 
   # Sorted by tasklet name so the refusal names the same tasklet on every
@@ -815,8 +793,8 @@ defmodule Flezha.SDK.Topology do
 
   @doc """
   The retry ladder a node's Cells climb: what the edges into it declare, the
-  shared defaults where they are silent. An unbounded operator's Cells and a bounded operator
-  stage's both read it here, so the two kinds cannot climb different ladders.
+  shared defaults where they are silent. A flow operator's Cells and a steps operator
+  stage's both read it here, so the two runs cannot climb different ladders.
   """
   @spec retry_ladder(t(), reference()) :: %{
           retry_max: pos_integer(),

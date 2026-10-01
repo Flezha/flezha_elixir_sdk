@@ -10,8 +10,8 @@ defmodule Tradedesk.Application do
 
   The guides write the desk's operators one at a time, and each is listed in
   `operators:`. Listing one starts nothing: it offers the controller operators
-  of that type, which are started from it later. The list takes both kinds, the
-  stream that tracks prices and the bounded operator that places one order.
+  of that type, which are started from it later. The list takes both, the flow
+  operator that tracks prices and the steps operator that places one order.
   """
   use Application
 

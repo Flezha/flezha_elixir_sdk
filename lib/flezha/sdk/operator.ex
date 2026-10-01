@@ -1,498 +1,444 @@
 defmodule Flezha.SDK.Operator do
   @moduledoc """
-  One process per operator instance: the routing core plus per-Cell
-  supervision. An input on an entry channel (parsed, a parse failure riding the
-  entry ladder) fans out along that entry's routes; a value a Cell emits fans
-  out along its node's routes. Each route applies at most one fused transform and
-  one key, then delivers to the owning Cell (Single/Static/Dynamic) or a sink.
-  The partition guard admits a dynamic key before any Cell state exists and
-  filters static keys by ownership. Sink outputs and park frames leave on the
-  runner's secondary streams; a sink frame is named by its producing node's
-  channel and, on a sink declared keyed, stamped with the Cell's identity,
-  the seq its dispatch started at with the emit ordinal, and the key. Routing
-  is serialized here (per-Cell ordering); Cells dispatch concurrently.
+  An operator class, declared with `use` (see `__using__/1`), which defines
+  this behaviour's zero-arity callbacks from its options and imports the channel
+  builder. The author writes the graph in `channels/1`, a DAG of Tasklets,
+  Channels and Cells, or the one tasklet's `run/3` of the §5 short form.
 
-  Its Cells are the `Flezha.SDK.Operator.Cells` set, the one a bounded operator
-  driver holds too: minted per mode, capped, and swept by a `:reap` tick that
-  runs in this process, so no push can be routed while it runs. What an
-  evicted Cell could not ship — the records it still held, then its delete —
-  it hands here on the way out, and a rebind replays those before it rebinds
-  the live Cells or replays its own outputs, so a dead Cell's delete cannot
-  arrive behind its replacement's first record.
+  One settings tree says how the class runs and where its work is kept:
 
-  A persistent instance keeps a processed-prefix ledger (`Flezha.SDK.Prefix`):
-  each push of an input with an offset holds it, its Cell releases it, and a
-  tick reports the prefix behind everything written, on every stream.
+      use Flezha.SDK.Operator,
+        factory_id: "checkout",
+        run: {:steps, each: :chained, on_failure: :keep_progress},
+        durable: {:local, sleep_after: 60_000},
+        description: "reserve, charge, ship",
+        max_duration_ms: 600_000
 
-  A class that sleeps arms one idle timer at bind. When it fires, the owed
-  input tail still awaited or a Cell active inside the window re-arms it; with
-  every Cell quiet past the window the instance ships `IterPark` at iteration
-  `0`, and the controller evicts it.
+  `run` is one of:
+
+    * `:flow` (the default), or `{:flow, exactly: exactly}`, where `exactly` is
+      `:at_least_once` (the default), `:effectively_once` or
+      `{:effectively_once, ack: ack, correction_ms: ms, beyond_window: :drop}`
+      (`beyond_window` defaults to `:process_as_arrival`), and `ack` is
+      `:per_input` (the default), `:checkpoint` or
+      `{:checkpoint, every: n, max_delay_ms: ms, outputs: :at_checkpoint}`
+      (`outputs` defaults to `:as_produced`);
+    * `:steps`, or `{:steps, each: each, on_failure: on_failure}`, where `each`
+      is `:once` (the default), `:per_input` or `:chained`, and `on_failure` is
+      `:undo_all` (the default) or `:keep_progress`.
+
+  `durable` is `false` (in memory: a crash starts over), `:local` (the
+  default, on the controller's disk) or `:remote` (in the remote copy before a
+  commit point is acknowledged, for a class that runs in steps), each of the
+  last two optionally written `{:local, sleep_after: ms}`: an instance idle
+  that long sleeps and wakes on its next message with its Cells restored.
+  `sleep_after` defaults by the run: a flow instance never sleeps, a steps
+  instance sleeps after six hours; `false` never sleeps.
+
+  A setting written under a parent that does not carry it is a `CompileError`
+  naming the setting and the parent. A module that writes the callbacks by
+  hand (`@behaviour Flezha.SDK.Operator`) meets the same check at
+  registration, as `topology.unknown_field`.
+
+  A tasklet of either run ends its instance with `complete/2`: a flow
+  instance runs what its Cells already hold to its outputs first.
+  `max_duration_ms` is a wall-clock stop for either run.
   """
 
-  use GenServer
-  require Logger
+  alias Flezha.SDK.{Error, Tasklet}
 
-  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park, Prefix, Record}
-  alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
-  alias Flezha.SDK.Bounded.Commit
+  # The scalar settings `use` takes, each named after the callback it defines.
+  @use_options [:description, :max_duration_ms, :run, :durable]
 
-  # How long a report of the processed prefix waits for more releases.
-  @prefix_tick_ms 5
+  @six_hours_ms 6 * 60 * 60 * 1000
 
-  # What a router that will not answer tells its caller.
-  @busy {:error, :operator_busy}
-  # What an entry input carries into routing: no metadata, no key, no Cell,
-  # and the durable offset the controller stamped.
-  @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, call: nil, replay: nil}
+  defstruct description: nil,
+            max_duration_ms: nil,
+            run: :flow,
+            exactly: :at_least_once,
+            checkpoint: nil,
+            correction: nil,
+            each: :once,
+            on_failure: :undo_all,
+            durable: :local,
+            sleep_after_ms: nil
 
-  defmodule State do
-    @moduledoc false
-    defstruct [
-      :operator_id,
-      :topology,
-      :runner,
-      :cells,
-      :prefix,
-      handed: nil,
-      prefix_tick?: false,
-      # The sleep: the input tail the bind still owes, when it bound, and the
-      # armed idle timer's ref (`nil` once it asked to sleep).
-      owed: 0,
-      bound_at: 0,
-      idle: nil
-    ]
+  @typedoc """
+  The tree, read and checked: the chosen run with its members (the other
+  run's stay at their defaults), and the durability level with its sleep
+  interval (`nil`: never sleeps).
+  """
+  @type t :: %__MODULE__{
+          description: String.t() | nil,
+          max_duration_ms: pos_integer() | nil,
+          run: :flow | :steps,
+          exactly: :at_least_once | :effectively_once,
+          checkpoint:
+            nil
+            | %{
+                every: non_neg_integer() | nil,
+                max_delay_ms: non_neg_integer() | nil,
+                outputs: :as_produced | :at_checkpoint
+              },
+          correction:
+            nil | %{window_ms: non_neg_integer(), beyond_window: :process_as_arrival | :drop},
+          each: :once | :per_input | :chained,
+          on_failure: :undo_all | :keep_progress,
+          durable: :memory | :local | :remote,
+          sleep_after_ms: pos_integer() | nil
+        }
+
+  @doc """
+  Write an operator as a declaration rather than as one-line callbacks.
+
+      use Flezha.SDK.Operator, factory_id: "market"
+
+      @impl true
+      def channels(c) do
+        c |> input("trades") |> into(Candle) |> sink("candles")
+      end
+
+  `factory_id` is required; `description`, `max_duration_ms`, `run` and
+  `durable` are optional, and **only the options written define anything**, so
+  a default stays where `settings/1` resolves it. `channels/1` takes an
+  argument and stays a `def` the author writes. An unknown option is a
+  `CompileError` naming it, and so is a setting of the tree written under a
+  parent that does not carry it, or a value outside its choices.
+
+  `Flezha.SDK.Channels` is imported, so a whole pipe, a merge included, is
+  written with no module prefix.
+
+  ## The §5 short form
+
+  A module that writes its one tasklet's `run/3` instead of `channels/1` is
+  a whole single-tasklet operator:
+
+      use Flezha.SDK.Operator, factory_id: "upcase", sink: "out", input: "words"
+
+      def run(input, state, ctx) do
+        emit(ctx, String.upcase(input))
+        {:ok, state}
+      end
+
+  It generates the tasklet module `Upcase.Tasklet`, whose `name/0` is the
+  factory id and which delegates to this module's tasklet callbacks, and a
+  `channels/1` wiring the entry channel (`input:`, `"input"` when absent) into
+  it and, with `sink:`, it to that plugin channel. With no `sink:` nothing
+  leaves the tasklet but its state. `run/3` is written as in a tasklet, with
+  the ctx functions and a `state do ... end` block available; the options
+  `use Flezha.SDK.Tasklet` takes (`max_cells:`, `logical_clock:`, ...) apply
+  to the generated tasklet, and the class settings to the class, as in the
+  full form. Writing `run/3` and `channels/1` both is a `CompileError`
+  beginning `topology.short_form_with_topology`, and writing neither is one
+  naming both.
+  """
+  defmacro __using__(opts) do
+    quoted = Tasklet.__operator_using__(opts, @use_options, __MODULE__)
+
+    with {:error, issue} <- parse(Keyword.fetch!(opts, :factory_id), opts) do
+      raise CompileError, description: "`use #{inspect(__MODULE__)}`: " <> message(issue)
+    end
+
+    quoted
   end
 
-  # --- API ---
-
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
-
-  def stop(pid), do: GenServer.stop(pid, :normal)
+  @doc "Stable, controller-facing factory identifier."
+  @callback factory_id() :: String.t()
 
   @doc """
-  Whether an instance or Cell process ended cleanly: `:normal`, `:shutdown` or
-  `{:shutdown, _}`. Any other reason is a crash.
+  Declare the graph on the channel builder. A class that runs in steps runs
+  it in topological order: each entry channel roots a chain, a message runs
+  only the chain of the channel it arrived on, and a tasklet becomes runnable
+  once every producer feeding it in that chain has committed.
   """
-  @spec clean_exit?(term()) :: boolean()
-  def clean_exit?(reason), do: reason in [:normal, :shutdown] or match?({:shutdown, _}, reason)
+  @callback channels(Flezha.SDK.Channels.t()) :: any()
+
+  @doc "Optional human description."
+  @callback description() :: String.t()
+
+  @doc "Wall-clock stop in milliseconds, for either run."
+  @callback max_duration_ms() :: pos_integer()
+
+  @doc "How the class runs: `:flow` or `:steps`, with its members."
+  @callback run() :: term()
+
+  @doc "Where the class keeps its work: `false`, `:local` or `:remote`, with its members."
+  @callback durable() :: term()
+
+  @optional_callbacks description: 0, max_duration_ms: 0, run: 0, durable: 0
 
   @doc """
-  The Cell of `tasklet` (its `name/0`) at `key` — `nil` for a Single node.
-  `materialise: true` creates a dynamic key that has no Cell yet, which is
-  what a restore of state the controller holds for it needs.
+  The settings tree `module` declares, read and checked, or the issue that
+  refuses it: `{:UnknownField, declaration, fields}` for a member written
+  under a parent that does not carry it, `{:InvalidSetting, declaration,
+  setting, value, expected}` for a value outside its choices.
   """
-  @spec lookup(GenServer.server(), String.t(), String.t() | nil, keyword()) ::
-          {:ok, pid()}
-          | {:error,
-             :tasklet_not_found
-             | :cell_not_found
-             | :cell_evicted
-             | :cell_capped
-             | :operator_busy}
-  def lookup(pid, tasklet, key, opts \\ []),
-    do: Call.control(pid, {:lookup, tasklet, key, Keyword.get(opts, :materialise, false)}, @busy)
+  @spec settings(module()) :: {:ok, t()} | {:error, tuple()}
+  def settings(module) do
+    values =
+      for key <- @use_options, Tasklet.exports?(module, key, 0), do: {key, apply(module, key, [])}
+
+    parse(module.factory_id(), values)
+  end
+
+  @doc false
+  # The tree as `use` options or callback answers, read into `t()`.
+  @spec parse(term(), keyword()) :: {:ok, t()} | {:error, tuple()}
+  def parse(factory_id, values) do
+    with {:ok, settings} <- class(values),
+         {:ok, settings} <- run(Keyword.get(values, :run), settings),
+         {:ok, settings} <- durable(Keyword.get(values, :durable), settings) do
+      {:ok, settle_sleep(settings)}
+    else
+      {:error, {:unknown, parent, fields}} ->
+        {:error, {:UnknownField, "'#{parent}' of operator '#{factory_id}'", fields}}
+
+      {:error, {:invalid, setting, value, expected}} ->
+        {:error, {:InvalidSetting, "operator '#{factory_id}'", setting, value, expected}}
+    end
+  end
 
   @doc """
-  Every node as `{tasklet_name, mode, [{key, cell_pid}]}` — the live-read
-  walk's input — or `{:error, :operator_busy}` from a router that will not
-  answer. The refusal is deliberately not an empty list: "no Cells" and "the
-  router did not say" are different facts, and a walk that confused them would
-  report a live operator as empty.
+  The effectively-once tier the tree declares, in the shape every Cell and
+  the topology read: whether it is on, the checkpoint policy and the
+  correction policy.
   """
-  @spec cells(GenServer.server()) ::
-          [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
-          | {:error, :operator_busy}
-  def cells(pid), do: Call.control(pid, :cells, @busy)
-
-  # --- server ---
-
-  @impl true
-  def init(opts) do
-    Process.flag(:trap_exit, true)
-
-    counters = Keyword.fetch!(opts, :counters)
-    # The reconnect cap, resolved once: this Operator's holds and every
-    # Cell's are bounded by one number the caller can state, rather than by
-    # what the process-wide variable said at each separate construction.
-    hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
-    topology = Keyword.fetch!(opts, :topology)
-    prefix = if topology.persistence_enabled?, do: Prefix.new()
-
-    cells =
-      opts
-      |> Keyword.take([
-        :operator_id,
-        :topology,
-        :range,
-        :counters,
-        :runner,
-        :secondaries,
-        :credit
-      ])
-      |> Keyword.merge(kind: :unbounded, hold_cap: hold_cap, prefix: prefix)
-      |> Cells.new()
-      |> Cells.schedule_reap()
-
-    s = %State{
-      operator_id: Keyword.fetch!(opts, :operator_id),
-      topology: topology,
-      runner: Keyword.fetch!(opts, :runner),
-      cells: cells,
-      prefix: prefix,
-      # The frames a Cell that stopped handed on. The handoff cannot share
-      # the Cells' output hold: it arrives after outputs it has to precede,
-      # and one FIFO cannot say that.
-      handed: Hold.new(cap: hold_cap, counters: counters),
-      owed: Keyword.get(opts, :owed_inbox, 0),
-      bound_at: now_ms()
+  @spec tier(t()) :: %{
+          effectively_once: boolean(),
+          checkpoint: map() | nil,
+          correction: map() | nil
+        }
+  def tier(%__MODULE__{} = s),
+    do: %{
+      effectively_once: s.exactly == :effectively_once,
+      checkpoint: s.checkpoint,
+      correction: s.correction
     }
 
-    {:ok, if(s.topology.sleep_when_idle?, do: arm_idle(s, Knob.get(:park_idle_ms)), else: s)}
-  end
+  # --- the class members ---
 
-  @impl true
-  def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{} = s) do
-    {reply, cells} = Cells.lookup(s.cells, tasklet, key, materialise?)
-    {:reply, reply, %{s | cells: cells}}
-  end
-
-  def handle_call(:cells, _from, %State{} = s), do: {:reply, Cells.listing(s.cells), s}
-
-  # A restore frame landed. Its saga markers are a bounded operator's; an unbounded operator has
-  # no restore gate to count it toward.
-  def handle_call({:restore_landed, _identity, _intent, _done}, _from, %State{} = s),
-    do: {:reply, :ok, s}
-
-  # The end of a replayed slice: a payload-less broadcast closing every Cell's
-  # slice at once, because an input reaches ONE Cell by key and a marker
-  # riding one would strand the slice every other Cell buffered. It names no
-  # channel, so it is answered before any is resolved.
-  @impl true
-  def handle_cast({:input, _channel, _message, %{"flz.replay_end" => _}}, %State{} = s) do
-    for pid <- Cells.pids(s.cells), do: send(pid, :end_replay_slice)
-    {:noreply, s}
-  end
-
-  # A value a restore delivers again, named by the producer's record: to the
-  # one consumer it names, whose floor drops it when it already took `origin`.
-  def handle_cast({:input, _channel, message, %{"flz.edge" => edge} = metadata}, %State{} = s) do
-    {offset, call, _replay} = frame_facts(metadata)
-    {:noreply, redeliver_edge(s, edge, message, offset, call)}
-  end
-
-  def handle_cast({:input, channel, message, metadata}, %State{} = s) do
-    s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
-
-    {offset, call, replay} = frame_facts(metadata)
-
-    case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message, call) do
-      {:ok, channel, value} ->
-        emit = %{@entry_emit | offset: offset, call: call, replay: replay}
-        # Held while it routes, so the prefix reaches it even when it reaches
-        # no Cell.
-        held = offset && s.prefix
-        if held, do: Prefix.hold(held, offset)
-        {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
-        if held, do: Prefix.release(held, offset)
-        {:noreply, s}
-
-      :parked ->
-        {:noreply, s}
+  defp class(values) do
+    with {:ok, description} <- optional(values, :description, &is_binary/1, "a string"),
+         {:ok, max} <-
+           optional(
+             values,
+             :max_duration_ms,
+             &pos_integer?/1,
+             "a positive number of milliseconds"
+           ) do
+      {:ok, %__MODULE__{description: description, max_duration_ms: max}}
     end
   end
 
-  # One invocation's emits: the ordinal counts its plugin outputs from zero.
-  @impl true
-  def handle_cast(
-        {:emitted, node_ref, cell_key, emits, handout_seq, {offset, call}, report},
-        %State{} = s
-      ) do
-    origin = %{node_ref: node_ref, cell_key: cell_key, seq: handout_seq}
-
-    {s, _ordinal} =
-      Enum.reduce(emits, {s, 0}, fn {value, meta, key}, {acc, ordinal} ->
-        route_from(
-          acc,
-          {:node, node_ref},
-          value,
-          %{meta: meta, key: key, origin: origin, offset: offset, call: call},
-          ordinal
-        )
-      end)
-
-    Inbox.delivered(report)
-
-    {:noreply, s}
-  end
-
-  @impl true
-  def handle_cast({:park, cell_pid, identity, body}, %State{} = s) do
-    Park.ship(s.runner, cell_pid, identity, body)
-    {:noreply, s}
-  end
-
-  # A Cell died — forget it; it is recreated on that key's next input. A
-  # crash must not take the Operator down with it, and must not leave the
-  # key unroutable; the log is what makes a key crashing on every input
-  # visible instead of looking like silent inactivity. Monitored, not linked,
-  # so this process's own exit — `:normal` on `RemOperator` — ends every Cell
-  # through its monitor of this process. The Cell's `after` cannot run for an
-  # untrappable kill, so its in-flight slot is released there too.
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s),
-    do: {:noreply, %{s | cells: Cells.down(s.cells, pid, reason)}}
-
-  # What a stopped Cell handed on goes ahead of the Cells' own records and
-  # outputs: its delete has to reach the controller before a replacement's
-  # first record.
-  def handle_info({:secondaries, secondaries}, %State{} = s) do
-    s = %{s | handed: s.handed |> Hold.bind(secondaries) |> Hold.replay()}
-    {:noreply, %{s | cells: Cells.rebind(s.cells, secondaries)}}
-  end
-
-  # A Cell that stopped in an orderly way hands on what no stream would
-  # take: the records it still held, then the delete it owes. A hold that dies
-  # with the process that owned it is not a hold, and this process outlives it.
-  def handle_info({:handed, identity, frames}, %State{} = s) do
-    handed =
-      Enum.reduce(frames, wire(s, s.handed), fn {key, body, meta}, acc ->
-        {_verdict, acc} = Hold.write(key, acc, {body, meta, identity})
-        acc
-      end)
-
-    {:noreply, %{s | handed: handed}}
-  end
-
-  # The sweep runs here, so no push is routed while it runs: the drain gate.
-  def handle_info(:reap, %State{} = s),
-    do: {:noreply, %{s | cells: s.cells |> Cells.reap(MapSet.new()) |> Cells.schedule_reap()}}
-
-  def handle_info({:idle, ref}, %State{idle: ref} = s), do: {:noreply, idle_due(s)}
-
-  def handle_info(:prefix_tick, %State{} = s) do
-    s = %{s | prefix_tick?: false}
-    report = report_prefix(s)
-    {:noreply, if(report == :owed or Prefix.pending?(s.prefix), do: arm_prefix(s), else: s)}
-  end
-
-  def handle_info(_msg, s), do: {:noreply, s}
-
-  # A crash ends every Cell first and waits for each, so everything the dead
-  # incarnation's Cells wrote is on the wire before the runner reads this
-  # process's exit and reports it. A clean stop leaves them to end through
-  # their monitor of this process.
-  @impl true
-  def terminate(reason, %State{} = s) do
-    if not clean_exit?(reason), do: Cells.kill_all(s.cells)
-    :ok
-  end
-
-  # --- sleeping ---
-
-  defp arm_idle(%State{} = s, after_ms) do
-    ref = make_ref()
-    Process.send_after(self(), {:idle, ref}, max(after_ms, 1))
-    %{s | idle: ref}
-  end
-
-  # The owed tail bounds the wait for itself; a Cell busy or active inside the
-  # window re-arms; every Cell quiet past it sleeps the instance.
-  defp idle_due(%State{} = s) do
-    window = Knob.get(:park_idle_ms)
-    now = now_ms()
-    owed_left = Knob.get(:sdk_owed_inbox_wait_ms) - (now - s.bound_at)
-
-    with :sleep <-
-           if(s.owed > 0 and owed_left > 0, do: {:wait, min(window, owed_left)}, else: :sleep),
-         {:quiet, latest} <- quiet_since(s),
-         quiet_for = now - latest,
-         :sleep <- if(quiet_for < window, do: {:wait, window - quiet_for}, else: :sleep) do
-      Commit.park(s.runner, s.operator_id, 0, 0, nil)
-      %{s | idle: nil}
-    else
-      {:wait, after_ms} -> arm_idle(s, after_ms)
-      :busy -> arm_idle(s, window)
+  defp optional(values, key, valid?, expected) do
+    case Keyword.get(values, key) do
+      nil -> {:ok, nil}
+      value -> if valid?.(value), do: {:ok, value}, else: invalid(key, value, expected)
     end
   end
 
-  # The latest input of any Cell, the bind when none came later, or `:busy`
-  # when one still holds work.
-  defp quiet_since(%State{cells: cells, bound_at: bound_at}) do
-    probe_ms = Knob.get(:sdk_idle_probe_ms)
+  # --- run ---
 
-    Enum.reduce_while(Cells.pids(cells), {:quiet, bound_at}, fn pid, {:quiet, latest} ->
-      case Cell.quiet_since(pid, probe_ms) do
-        {:quiet, at} -> {:cont, {:quiet, max(latest, at)}}
-        :busy -> {:halt, :busy}
-      end
-    end)
-  end
+  defp run(nil, settings), do: {:ok, settings}
 
-  # --- the processed prefix ---
-
-  defp arm_prefix(%State{prefix_tick?: true} = s), do: s
-
-  defp arm_prefix(%State{} = s) do
-    Process.send_after(self(), :prefix_tick, @prefix_tick_ms)
-    %{s | prefix_tick?: true}
-  end
-
-  # The marker goes on every stream, behind everything this process wrote
-  # there, and only when nothing it holds is still waiting for one: a marker
-  # ahead of a held record would confirm what the controller never received.
-  # `:owed` when a prefix could not go out yet, `:done` otherwise.
-  defp report_prefix(%State{prefix: ledger, cells: cells} = s) do
-    with p when is_integer(p) <- Prefix.candidate(ledger),
-         true <- s.handed.n == 0 and cells.held.n == 0 and cells.secondaries != [] do
-      identity = Park.identity(s.operator_id, "", "")
-      frame = Record.prefix_frame(identity, p, length(cells.secondaries))
-
-      sent? =
-        Enum.all?(cells.secondaries, fn handle ->
-          hold = Hold.new(streams: [handle])
-          match?({:ok, _hold}, Hold.write("processed_prefix", hold, {frame, %{}}))
-        end)
-
-      if sent?, do: Prefix.reported(ledger, p)
-      if sent?, do: :done, else: :owed
-    else
-      nil -> :done
-      false -> :owed
+  defp run(value, settings) do
+    case branch(:run, value, [:flow, :steps]) do
+      {:ok, {:flow, members}} -> flow(members, settings)
+      {:ok, {:steps, members}} -> steps(members, settings)
+      error -> error
     end
   end
 
-  # --- routing ---
-
-  # A journaled input the controller re-forwarded or forwarded: stamped with
-  # its input-log offset.
-  defp owed_arrival?(metadata), do: is_map(metadata) and Map.has_key?(metadata, "flz.offset")
-
-  defp now_ms, do: System.monotonic_time(:millisecond)
-
-  # Fan `value` out along `source`'s routes; `emit` is the producing emit's
-  # metadata, key and origin, `ordinal` the invocation's plugin-output count.
-  defp route_from(%State{topology: topo} = s, source, value, emit, ordinal) do
-    routes = Map.get(topo.routes, source, [])
-
-    Enum.reduce(routes, {s, ordinal}, fn route, {acc, ord} ->
-      outputs = route.transform.(value)
-
-      Enum.reduce(outputs, {acc, ord}, fn out, {a, o} ->
-        deliver(a, route, source, out, emit, o)
-      end)
-    end)
+  defp flow(members, settings) do
+    with :ok <- only(:flow, members, [:exactly]),
+         {:ok, settings} <- exactly(Keyword.get(members, :exactly), settings),
+         do: {:ok, %{settings | run: :flow}}
   end
 
-  # Under the effectively-once tier a sink output IS the Cell's effect
-  # record: it never reaches the wire from here, and the ordinal advances as
-  # it would have.
-  defp deliver(
-         %State{topology: %{effectively_once?: true}} = s,
-         %{to: {:sink, _}},
-         _source,
-         _value,
-         _emit,
-         ordinal
-       ),
-       do: {s, ordinal + 1}
-
-  # A sink frame: the producing node's channel name over the user's metadata,
-  # then — on a keyed sink — the identity stamps, which nothing can clobber.
-  # Every plugin output advances the ordinal, stamped or not.
-  defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
-    stamp_with = if route.keyed, do: {s.operator_id, s.topology.node_modules}
-    {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
-    {%{s | cells: Cells.emit_output(s.cells, metadata, bytes)}, ordinal + 1}
+  defp steps(members, settings) do
+    with :ok <- only(:steps, members, [:each, :on_failure]),
+         {:ok, each} <-
+           named(:each, Keyword.get(members, :each), [:once, :per_input, :chained], :once),
+         {:ok, on_failure} <-
+           named(
+             :on_failure,
+             Keyword.get(members, :on_failure),
+             [:undo_all, :keep_progress],
+             :undo_all
+           ),
+         do: {:ok, %{settings | run: :steps, each: each, on_failure: on_failure}}
   end
 
-  defp deliver(
-         %State{} = s,
-         %{to: {:node, node_ref}, key_by: key_by},
-         _source,
-         value,
-         emit,
-         ordinal
-       ) do
-    key = if key_by, do: key_by.(value), else: nil
-    {deliver_to_node(s, node_ref, value, key, emit), ordinal}
-  end
+  defp exactly(nil, settings), do: {:ok, settings}
 
-  # What the controller stamped on a forwarded input: its input-log offset,
-  # the call waiting on it, and whether the frame is a member of a replayed
-  # slice.
-  defp frame_facts(metadata) when is_map(metadata),
-    do:
-      {Inbox.input_offset(metadata), Inbox.input_call(metadata),
-       if(Map.has_key?(metadata, "flz.replay"), do: :member)}
+  defp exactly(value, settings) do
+    case branch(:exactly, value, [:at_least_once, :effectively_once]) do
+      {:ok, {:at_least_once, members}} ->
+        with :ok <- only(:at_least_once, members, []), do: {:ok, settings}
 
-  defp frame_facts(_metadata), do: {nil, nil, nil}
+      {:ok, {:effectively_once, members}} ->
+        effectively_once(members, settings)
 
-  # The queue item: an input with an offset or a call carries them, the replay
-  # mark and whether the controller forwarded it, so the Cell can skip a
-  # re-forward it already took, hold a slice member back and answer the call.
-  # Anything else is the raw value.
-  defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, emit) do
-    item =
-      if topo.effectively_once? or is_integer(emit.offset) or emit.call != nil,
-        do: %Cell.Input{
-          value: value,
-          offset: emit.offset,
-          call: emit.call,
-          replay: Map.get(emit, :replay),
-          forwarded?: emit.origin == nil
-        },
-        else: value
-
-    s =
-      case Cells.deliver(s.cells, node_ref, value, key, item) do
-        {{:misroute, reason}, cells} ->
-          park_misroute(%{s | cells: cells}, node_ref, value, reason, emit.call)
-
-        {_keys, cells} ->
-          %{s | cells: cells}
-      end
-
-    if s.prefix && is_integer(emit.offset), do: arm_prefix(s), else: s
-  end
-
-  # The edge names its producer and consumer by node seq, as the producer's
-  # record wrote it; the value was already through the route's transform.
-  defp redeliver_edge(%State{topology: topo} = s, edge, payload, offset, call) do
-    with [producer, consumer] <- String.split(edge, ":"),
-         {producer, ""} <- Integer.parse(producer),
-         {consumer, ""} <- Integer.parse(consumer),
-         %{key_by: key_by, to: {:node, consumer_ref}} <- edge_route(topo, producer, consumer),
-         {:ok, value} <- Record.decode_body(payload) do
-      key = if key_by, do: key_by.(value)
-      emit = %{@entry_emit | origin: :redelivered, offset: offset, call: call}
-      deliver_to_node(s, consumer_ref, value, key, emit)
-    else
-      _unknown ->
-        Logger.warning("[Flezha.SDK] #{s.operator_id} re-delivered edge #{edge} matches no route")
-        s
+      error ->
+        error
     end
   end
 
-  defp edge_route(topo, producer, consumer) do
-    refs = Map.new(topo.node_seq, fn {ref, seq} -> {seq, ref} end)
-
-    with %{^producer => from, ^consumer => to} <- refs,
-         do: topo.routes |> Map.get({:node, from}, []) |> Enum.find(&(&1.to == {:node, to}))
+  defp effectively_once(members, settings) do
+    with :ok <- only(:effectively_once, members, [:ack, :correction_ms, :beyond_window]),
+         {:ok, checkpoint} <- ack(Keyword.get(members, :ack)),
+         {:ok, window} <- integer(:correction_ms, Keyword.get(members, :correction_ms)),
+         {:ok, beyond} <-
+           named(
+             :beyond_window,
+             Keyword.get(members, :beyond_window),
+             [:process_as_arrival, :drop],
+             :process_as_arrival
+           ) do
+      {:ok,
+       %{
+         settings
+         | exactly: :effectively_once,
+           checkpoint: checkpoint,
+           correction: correction(window, beyond)
+       }}
+    end
   end
 
-  # --- parking (entry-parse + partition mis-route) ---
+  # A beyond-window fate with no window is a window of zero, which is refused:
+  # a fate for a window nobody declared is an authoring error, not a default.
+  defp correction(nil, :process_as_arrival), do: nil
+  defp correction(window, beyond), do: %{window_ms: window || 0, beyond_window: beyond}
 
-  defp park_misroute(%State{} = s, node_ref, value, reason, call) do
-    label = node_ref_label(s, node_ref)
-    Inbox.park_pre_dispatch(s.runner, s.operator_id, label, label, reason, value, reply_to: call)
-    s
+  defp ack(nil), do: {:ok, nil}
+
+  defp ack(value) do
+    case branch(:ack, value, [:per_input, :checkpoint]) do
+      {:ok, {:per_input, members}} ->
+        with :ok <- only(:per_input, members, []), do: {:ok, nil}
+
+      {:ok, {:checkpoint, members}} ->
+        checkpoint(members)
+
+      error ->
+        error
+    end
   end
 
-  # The hold, on the streams bound right now. `secondaries` is the one source
-  # of truth for what is bound, so no hold can hold a stale stream.
-  defp wire(%State{cells: cells}, hold), do: Hold.bind(hold, cells.secondaries)
+  defp checkpoint(members) do
+    with :ok <- only(:checkpoint, members, [:every, :max_delay_ms, :outputs]),
+         {:ok, every} <- integer(:every, Keyword.get(members, :every)),
+         {:ok, delay} <- integer(:max_delay_ms, Keyword.get(members, :max_delay_ms)),
+         {:ok, outputs} <-
+           named(
+             :outputs,
+             Keyword.get(members, :outputs),
+             [:as_produced, :at_checkpoint],
+             :as_produced
+           ),
+         do: {:ok, %{every: every, max_delay_ms: delay, outputs: outputs}}
+  end
 
-  defp node_ref_label(%State{topology: topo}, node_ref),
-    do: topo.node_name[node_ref] || inspect(node_ref)
+  # --- durable ---
+
+  defp durable(nil, settings), do: {:ok, %{settings | sleep_after_ms: :run_default}}
+  defp durable(false, settings), do: {:ok, %{settings | durable: :memory, sleep_after_ms: nil}}
+
+  defp durable(value, settings) do
+    case branch(:durable, value, [false, :local, :remote]) do
+      {:ok, {false, members}} ->
+        with :ok <- only(false, members, []),
+             do: {:ok, %{settings | durable: :memory, sleep_after_ms: nil}}
+
+      {:ok, {level, members}} ->
+        with :ok <- only(level, members, [:sleep_after]),
+             {:ok, after_ms} <- sleep_after(Keyword.fetch(members, :sleep_after)),
+             do: {:ok, %{settings | durable: level, sleep_after_ms: after_ms}}
+
+      error ->
+        error
+    end
+  end
+
+  defp sleep_after(:error), do: {:ok, :run_default}
+  defp sleep_after({:ok, false}), do: {:ok, nil}
+  defp sleep_after({:ok, ms}) when is_integer(ms) and ms > 0, do: {:ok, ms}
+
+  defp sleep_after({:ok, other}),
+    do: invalid(:sleep_after, other, "a positive number of milliseconds or false")
+
+  # A sleeping flow instance has its input journaled before it is forwarded,
+  # so a flow class pays for it only when it asks to sleep.
+  defp settle_sleep(%{sleep_after_ms: :run_default, run: run} = settings),
+    do: %{settings | sleep_after_ms: if(run == :steps, do: @six_hours_ms)}
+
+  defp settle_sleep(settings), do: settings
+
+  # --- the shapes every "one of" is written in ---
+
+  # A branch as the tree writes it: a bare name, or `{name, members}` with the
+  # members a keyword list.
+  defp branch(setting, value, names) do
+    case value do
+      name when is_atom(name) ->
+        choose(setting, name, [], names)
+
+      {name, members} when is_atom(name) and is_list(members) ->
+        choose(setting, name, members, names)
+
+      other ->
+        invalid(setting, other, expected(names))
+    end
+  end
+
+  defp choose(setting, name, members, names) do
+    cond do
+      name not in names -> invalid(setting, name, expected(names))
+      not Keyword.keyword?(members) -> invalid(name, members, "a keyword list")
+      true -> {:ok, {name, members}}
+    end
+  end
+
+  # Any member of `parent` outside `known` is written under the wrong parent.
+  defp only(parent, members, known) do
+    case for({key, _value} <- members, key not in known, do: key) |> Enum.uniq() do
+      [] -> :ok
+      unknown -> {:error, {:unknown, shown(parent), Enum.map_join(unknown, ", ", &shown/1)}}
+    end
+  end
+
+  # A leaf choice: a bare name of `names`, `default` when absent.
+  defp named(_setting, nil, _names, default), do: {:ok, default}
+
+  defp named(setting, value, names, _default) do
+    with {:ok, {name, members}} <- branch(setting, value, names),
+         :ok <- only(name, members, []),
+         do: {:ok, name}
+  end
+
+  defp integer(_setting, nil), do: {:ok, nil}
+  defp integer(_setting, n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp integer(setting, other), do: invalid(setting, other, "a non-negative integer")
+
+  defp invalid(setting, value, expected),
+    do: {:error, {:invalid, shown(setting), shown(value), expected}}
+
+  defp expected(names), do: Enum.map_join(names, " | ", &shown/1)
+
+  defp shown(value) when is_atom(value), do: Atom.to_string(value)
+  defp shown(value), do: inspect(value)
+
+  defp pos_integer?(value), do: is_integer(value) and value > 0
+
+  defp message({:UnknownField, declaration, fields}),
+    do: Error.new("topology.unknown_field", declaration: declaration, fields: fields).message
+
+  defp message({:InvalidSetting, declaration, setting, value, expected}) do
+    Error.new("topology.invalid_setting",
+      declaration: declaration,
+      setting: setting,
+      value: value,
+      expected: expected
+    ).message
+  end
 end

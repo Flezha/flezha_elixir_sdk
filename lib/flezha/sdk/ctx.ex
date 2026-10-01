@@ -32,7 +32,7 @@ defmodule Flezha.SDK.Ctx do
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
   once per invocation — and, inside a firing, the scheduled timestamp. Inside a
-  bounded operator's tasklet timers are unavailable until they fire there: the Cell
+  steps operator's tasklet timers are unavailable until they fire there: the Cell
   hands `timers: :unavailable`, and the four timer calls answer
   `runtime.timers_unavailable` and arm nothing.
 
@@ -48,7 +48,7 @@ defmodule Flezha.SDK.Ctx do
   the Cell for the attempt (`attempt`) and cleared by `discard/1`, which is
   what makes a part through a kept ctx `part.outside_invocation`.
 
-  `spawn_bounded/4` asks the runner for a bounded instance and answers a
+  `spawn_steps/4` asks the runner for a steps instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
   """
@@ -97,7 +97,7 @@ defmodule Flezha.SDK.Ctx do
   `opts` carries the node's channel name, whether its sink is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
   (`key_required?`), the Cell's pending timers (`timers`, empty by default,
-  `:unavailable` inside a bounded operator),
+  `:unavailable` inside a steps operator),
   the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
   runner a spawn request goes to (`runner`, nil for none), whether the input
@@ -214,7 +214,7 @@ defmodule Flezha.SDK.Ctx do
   def cell_key(%__MODULE__{cell_key: k}), do: k
 
   @doc """
-  Request spawn-or-deliver of a bounded instance of `factory_id` in this
+  Request spawn-or-deliver of a steps instance of `factory_id` in this
   runner's namespace, with `payload` as its first input: bytes as they are,
   anything else as JSON, and a term with no JSON form raises. Answers a
   `Flezha.SDK.Spawn` handle without waiting, read with
@@ -234,8 +234,8 @@ defmodule Flezha.SDK.Ctx do
   instance the first ask started. Pass `id:` for at most one instance, or for
   the id on a replay.
   """
-  @spec spawn_bounded(t(), String.t(), term(), [Spawn.option()]) :: Spawn.t()
-  def spawn_bounded(%__MODULE__{} = ctx, factory_id, payload, opts \\ []) do
+  @spec spawn_steps(t(), String.t(), term(), [Spawn.option()]) :: Spawn.t()
+  def spawn_steps(%__MODULE__{} = ctx, factory_id, payload, opts \\ []) do
     payload = plain_payload(payload)
     identity = spawn_identity(ctx, factory_id, payload)
     Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts, identity)
@@ -260,20 +260,21 @@ defmodule Flezha.SDK.Ctx do
   defp spawn_identity(%__MODULE__{}, _factory_id, _payload), do: ""
 
   @doc """
-  End the bounded instance this tasklet runs in, with `result` as the
-  result its completion reports. The rest of the iteration still runs and
+  End the instance this tasklet runs in, with `result` as the result its
+  completion reports. `result` is encoded as `spawn_steps/4` encodes its
+  payload; `nil` carries no result.
+
+  In a class that runs in steps the rest of the iteration still runs and
   commits; once that commit is durable the instance ends instead of waiting
   for its next input, re-seeding a chained loop or parking. In a `:once`
-  bounded operator it only sets the result the pass ends with. `result` is
-  encoded as `spawn_bounded/4` encodes its payload; `nil` carries no result.
+  class it only sets the result the pass ends with. Called more than once in
+  one iteration, the instance ends once, with the result of the tasklet latest
+  in the chain's order and, within it, of the Cell whose key sorts last. A
+  failing invocation discards its call as it discards its emits, and an
+  iteration that fails discards the call with it.
 
-  Called more than once in one iteration, the instance ends once, with the
-  result of the tasklet latest in the chain's order and, within it, of the
-  Cell whose key sorts last. A failing invocation discards its call as it
-  discards its emits, and an iteration that fails discards the call with it.
-
-  An unbounded operator never completes: an unbounded tasklet calling this fails its input,
-  without a retry, with an error beginning `CompleteOutsideBounded`.
+  In a flow class the instance runs what its Cells already hold to its
+  outputs, then ends; a later call before that replaces the result.
   """
   @spec complete(t(), term()) :: :ok
   def complete(%__MODULE__{ref: ref}, result) do
