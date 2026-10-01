@@ -42,6 +42,7 @@ defmodule Flezha.SDK.Declarations do
     |> put_when(topo.effectively_once?, "exactly", "effectively_once")
     |> put_when(topo.checkpoint != nil, "ack", "checkpoint")
     |> corrected(topo.correction)
+    |> put_when(topo.node_scope != %{}, "scopes", scopes(topo))
   end
 
   def for(%Spec{settings: settings} = spec) do
@@ -54,6 +55,15 @@ defmodule Flezha.SDK.Declarations do
     })
     |> put_tasks("compensable_tasks", spec, &Tasklet.compensates?/1)
     |> put_tasks("leaf_tasks", spec, nil)
+  end
+
+  # Each node that embeds a steps class, as `node=factory`, the class the
+  # controller binds one scope of per edge key.
+  defp scopes(topo) do
+    topo.node_scope
+    |> Enum.map(fn {ref, facts} -> "#{topo.node_name[ref]}=#{facts.factory_id}" end)
+    |> Enum.sort()
+    |> Enum.join(",")
   end
 
   # What either run declares: where its work is kept, when it sleeps and when

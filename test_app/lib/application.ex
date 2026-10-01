@@ -87,7 +87,8 @@ defmodule ElixirRunner.Application do
           ElixirRunner.StepsLoop.all() ++
           ElixirRunner.Call.all() ++
           ElixirRunner.OperatorCall.all() ++
-          ElixirRunner.Part.all()
+          ElixirRunner.Part.all() ++
+          ElixirRunner.Inner.all()
 
       topology ->
         ElixirRunner.Conformance.boot_classes(topology)

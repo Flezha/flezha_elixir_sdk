@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Operators do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Operator}
+  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Operator, Scope}
   alias Flezha.SDK.Steps.{Driver, Spec}
 
   @doc """
@@ -21,6 +21,40 @@ defmodule Flezha.SDK.Operators do
   a factory this runner does not carry.
   """
   @spec add(map(), map()) :: {:ok, map(), map()} | {:error, Error.t(), map()}
+  def add(s, %{scope: %{inner: inner, key: key}} = add) do
+    scope_id = Scope.id(add.operator_id, inner, key)
+
+    with {parent, factory_id} <- Map.get(s.operators, add.operator_id),
+         topo when is_map(topo) <- Map.get(s.topologies, factory_id),
+         node_ref when node_ref != nil <- Scope.node_named(topo, inner) do
+      facts = Map.fetch!(topo.node_scope, node_ref)
+
+      ctx = %{
+        operator_id: add.operator_id,
+        topology: topo,
+        parent: parent,
+        runner: self(),
+        counters: s.counters,
+        secondaries: s.secondaries,
+        credit: s.credit
+      }
+
+      pid =
+        Scope.start(ctx, node_ref, facts, key,
+          journal: Codec.journal_facts(add.task_journal),
+          owed_inbox: add.inbox_tail_count || 0,
+          resume_cell_count: add.resume_cell_count || 0,
+          dead_letter_turns: add.dead_letter_turns || false
+        )
+
+      GenServer.cast(parent, {:scope_attached, inner, key, pid})
+      registered(s, %{add | operator_id: scope_id, factory_id: facts.factory_id}, pid, facts.spec)
+    else
+      _no_outer ->
+        {:error, Error.new("runtime.operator_not_found", operator: add.operator_id), s}
+    end
+  end
+
   def add(s, add) do
     s = answered(s, add.operator_id)
 

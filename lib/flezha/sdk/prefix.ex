@@ -102,6 +102,10 @@ defmodule Flezha.SDK.Prefix do
       do: prefix
   end
 
+  @doc "The last prefix reported, `nil` before any."
+  @spec reported(t()) :: non_neg_integer() | nil
+  def reported(ledger), do: value(ledger, :reported, nil)
+
   @doc "`prefix` went out on every stream."
   @spec reported(t(), non_neg_integer()) :: :ok
   def reported(ledger, prefix) do

@@ -95,8 +95,9 @@ defmodule Flezha.SDK.Local do
     with :ok <- refuse_controller_only(module),
          {:ok, topology} <- Topology.build(module),
          :ok <- refuse_topology_facts(topology) do
-      # Nothing would wake a sleeping local run.
-      GenServer.start_link(__MODULE__, {%{topology | sleep_after_ms: nil}, opts})
+      # Nothing would wake a sleeping local run, and nothing it writes is
+      # kept: a scope it embeds runs here, unjournaled.
+      GenServer.start_link(__MODULE__, {%{topology | sleep_after_ms: nil, durable?: false}, opts})
     end
   end
 

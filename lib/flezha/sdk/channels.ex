@@ -99,6 +99,13 @@ defmodule Flezha.SDK.Channels do
   @doc "Entry channel with a custom parser; a parse failure rides the entry ladder."
   def input_with(%__MODULE__{ref: ref}, name, parser)
       when is_binary(name) and is_function(parser, 1) do
+    case inline_frame(ref) do
+      nil -> open_entry(ref, name, parser)
+      frame -> inline_entry(ref, frame, name)
+    end
+  end
+
+  defp open_entry(ref, name, parser) do
     update(ref, fn acc ->
       %{
         acc
@@ -134,11 +141,28 @@ defmodule Flezha.SDK.Channels do
   @doc """
   Route into a tasklet node, or close a merge on one. Unnamed mentions of one
   module unify (fan-in).
+
+  `module` may be an operator class instead. A flow class is inlined: its
+  graph joins this one, its entry fed by this handle and its nodes named
+  `<factory_id>.<node>`, and the handle answered is its graph's last. A steps
+  class becomes a node of its own, named by its factory id, that runs one
+  stepped instance of the class per key of this edge (one on an unkeyed
+  edge), its exit tasklet's output continuing on the handle answered. See
+  `into/3` for the options.
   """
   @spec into(Stream.t() | Merge.t(), module()) :: Stream.t()
   def into(handle, module)
   def into(%Stream{} = s, module), do: do_into(s, module, nil)
   def into(%Merge{} = m, module), do: close_merge(m, module, nil)
+
+  @doc """
+  `into/2` with options for an operator class: `input:` names the entry
+  channel the edge feeds when the class declares several, `name:` the node
+  (the factory id by default), and `max_cells:` caps the stepped instances a
+  keyed edge into a steps class keeps at once.
+  """
+  @spec into(Stream.t(), module(), keyword()) :: Stream.t()
+  def into(%Stream{} = s, module, opts) when is_list(opts), do: embed(s, module, opts)
 
   @doc """
   Route into a named tasklet node, or close a merge on one. Identity
@@ -428,11 +452,80 @@ defmodule Flezha.SDK.Channels do
 
   # --- internals ---
 
-  defp do_into(%Stream{builder: ref} = s, module, name) do
-    node_ref = resolve_node(ref, module, name)
+  defp do_into(%Stream{} = s, module, name) do
+    case Flezha.SDK.Scope.kind(module) do
+      :tasklet -> into_node(s, module, name, nil)
+      _class -> embed(s, module, name: name)
+    end
+  end
+
+  defp into_node(%Stream{builder: ref} = s, module, name, scope) do
+    node_ref = resolve_node(ref, module, prefixed(ref, name, module, scope))
+    if scope, do: update(ref, &put_in(&1, [:nodes, node_ref, :scope], scope))
     _ = link(s, {:into, node_ref})
     %Stream{builder: ref, source: {:node, node_ref}}
   end
+
+  # An operator class at the end of an edge: a steps class is a node of its
+  # own, a flow class is inlined.
+  defp embed(%Stream{} = s, module, opts) do
+    case Flezha.SDK.Scope.kind(module) do
+      :steps ->
+        scope = %{input: opts[:input], max_cells: opts[:max_cells]}
+        into_node(s, module, opts[:name] || module.factory_id(), scope)
+
+      _flow_or_tasklet ->
+        inline(s, module, opts)
+    end
+  end
+
+  # The inlined class's `channels/1` runs on this builder: its `input` answers
+  # the feeding handle, and every node it names is prefixed. Its entry
+  # channels are judged once it returned: one, or the one `input:` names.
+  defp inline(%Stream{builder: ref} = s, module, opts) do
+    prefix = opts[:name] || module.factory_id()
+    frames = Process.get(inline_key(ref), [])
+    frame = %{prefix: prefixed_name(frames, prefix), feed: s, input: opts[:input], entries: []}
+    Process.put(inline_key(ref), [frame | frames])
+    returned = module.channels(%__MODULE__{ref: ref})
+    [%{entries: entries} | _] = Process.get(inline_key(ref))
+    Process.put(inline_key(ref), frames)
+
+    names = Enum.uniq(entries)
+
+    if length(names) > 1 or (opts[:input] && names != [opts[:input]]) do
+      issue = Flezha.SDK.Scope.entry_ambiguous(module.factory_id(), names)
+      update(ref, fn acc -> %{acc | issues: [issue | acc.issues]} end)
+    end
+
+    case returned do
+      %Stream{} = exit -> exit
+      _no_handle -> s
+    end
+  end
+
+  defp inline_entry(ref, frame, name) do
+    [_ | rest] = Process.get(inline_key(ref))
+    Process.put(inline_key(ref), [%{frame | entries: [name | frame.entries]} | rest])
+    frame.feed
+  end
+
+  defp inline_frame(ref), do: ref |> inline_key() |> Process.get([]) |> List.first()
+  defp inline_key(ref), do: {__MODULE__, ref, :inline}
+
+  # A node named inside an inlined class carries the class's prefix.
+  defp prefixed(ref, name, module, scope) do
+    case Process.get(inline_key(ref), []) do
+      [] -> name
+      frames -> prefixed_name(frames, name || node_name(module, scope))
+    end
+  end
+
+  defp prefixed_name([], name), do: name
+  defp prefixed_name([%{prefix: prefix} | _], name), do: prefix <> "." <> name
+
+  defp node_name(module, nil), do: module.name()
+  defp node_name(module, _scope), do: module.factory_id()
 
   # The one body behind `into/2`, `into_named/3` and the router.
   # The node resolves as `into/2`'s does; every source chain takes the merge's

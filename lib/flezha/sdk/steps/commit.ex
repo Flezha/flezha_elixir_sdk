@@ -45,6 +45,7 @@ defmodule Flezha.SDK.Steps.Commit do
         Keyword.get(fields, :result, <<>>),
         Keyword.get(fields, :trigger)
       )
+      |> Codec.with_exit(Keyword.get(fields, :exit))
 
     barrier(runner, driver, ref, command)
     command
@@ -72,6 +73,7 @@ defmodule Flezha.SDK.Steps.Commit do
         Keyword.get(fields, :entry_channel, ""),
         Keyword.get(fields, :dead_letter)
       )
+      |> Codec.with_exit(Keyword.get(fields, :exit))
 
     barrier(runner, driver, ref, command)
     command
@@ -101,10 +103,14 @@ defmodule Flezha.SDK.Steps.Commit do
         Codec.iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset)
       )
 
-  @doc "Ship `OperatorCompleted`: the run reached an exit."
-  @spec completed(pid(), String.t(), String.t(), String.t(), binary()) :: :ok
-  def completed(runner, operator_id, status, error, result),
-    do: notify(runner, Codec.operator_completed_command(operator_id, status, error, result))
+  @doc """
+  Ship `OperatorCompleted`: the run reached an exit; `took` names the input
+  the pass that did not end cleanly took.
+  """
+  @spec completed(pid(), term(), String.t(), String.t(), binary(), non_neg_integer() | nil) ::
+          :ok
+  def completed(runner, operator_id, status, error, result, took \\ nil),
+    do: notify(runner, Codec.operator_completed_command(operator_id, status, error, result, took))
 
   @doc """
   Ship one saga marker on the runner's record wire. Presence is the signal:
