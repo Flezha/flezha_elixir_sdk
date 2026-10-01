@@ -200,7 +200,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
     assert {"topology.effectively_once_without_persistence", %{}} = refused_setting(TierInMemory)
   end
 
-  test "a flow class kept remotely is refused; a steps class is not" do
+  test "a flow class and a steps class may both keep their work remotely" do
     defmodule RemoteFlow do
       def factory_id, do: "remote_flow"
       def durable, do: :remote
@@ -214,12 +214,11 @@ defmodule Flezha.SDK.Steps.SpecTest do
       def channels(c), do: c |> Channels.input("in") |> Channels.into(TailTask)
     end
 
-    assert {"topology.remote_on_flow", %{"factory_id" => "remote_flow"}} =
-             refused_setting(RemoteFlow)
-
-    assert {:ok, spec} = Spec.build(RemoteSteps)
-    assert %{"durable" => "remote"} = declared = Flezha.SDK.Declarations.for(spec)
-    refute Map.has_key?(declared, "sleep_after_ms")
+    for class <- [RemoteFlow, RemoteSteps] do
+      assert {:ok, spec} = Spec.build(class)
+      assert %{"durable" => "remote"} = declared = Flezha.SDK.Declarations.for(spec)
+      refute Map.has_key?(declared, "sleep_after_ms")
+    end
   end
 
   test "each class declares where it keeps its work and when it sleeps" do

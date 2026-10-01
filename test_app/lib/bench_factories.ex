@@ -287,6 +287,18 @@ defmodule Flezha.Bench.TierStore do
   end
 end
 
+defmodule Flezha.Bench.RemoteTierStore do
+  @moduledoc false
+  @behaviour Flezha.SDK.Operator
+  def factory_id, do: "remote_tier_store"
+  def run, do: {:flow, exactly: :effectively_once}
+
+  # `tier_store` kept `durable: remote`: an input is acknowledged only once the
+  # durability backend holds the records it produced.
+  def durable, do: :remote
+  defdelegate channels(c), to: Flezha.Bench.TierStore
+end
+
 defmodule Flezha.Bench.BenchCheckpointTask do
   @moduledoc false
   use Flezha.SDK.Tasklet, name: "bench_checkpoint_tasklet"
@@ -366,6 +378,7 @@ defmodule ElixirRunner.BenchFactories do
       Flezha.Bench.BenchKeyed,
       Flezha.Bench.KeyedNoPersist,
       Flezha.Bench.TierStore,
+      Flezha.Bench.RemoteTierStore,
       Flezha.Bench.BenchCheckpoint
     ]
   end

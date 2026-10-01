@@ -139,7 +139,6 @@ defmodule Flezha.SDK.Topology do
     NoStepsBody: [:factory_id],
     NoEntryChannel: [:factory_id],
     NodeIdentityCollision: [:name],
-    RemoteOnFlow: [:factory_id],
     RetiredCallback: [:tasklet, :callback, :instead],
     RetryMaxZero: [:channel],
     TransformAfterKeyBy: [:channel],
@@ -182,7 +181,7 @@ defmodule Flezha.SDK.Topology do
     node_mode = derive_modes(acc, incoming)
     shape = %{channels: channels, routes: routes, incoming: incoming, node_mode: node_mode}
 
-    issues = acc.issues ++ chain_issues ++ facts(module, settings, acc, shape)
+    issues = acc.issues ++ chain_issues ++ facts(settings, acc, shape)
 
     if issues == [] do
       {:ok,
@@ -510,11 +509,11 @@ defmodule Flezha.SDK.Topology do
 
   # --- stage three: the topology and class facts over the derived shape ---
 
-  defp facts(module, settings, acc, shape) do
+  defp facts(settings, acc, shape) do
     names(acc, shape.channels) ++
       Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
-      class_facts(settings, acc, module.factory_id()) ++
+      class_facts(settings, acc) ++
       cycles(acc, shape.routes) ++
       changeful_identity(acc) ++ Flezha.SDK.CallEnd.unread(shape.channels)
   end
@@ -698,20 +697,17 @@ defmodule Flezha.SDK.Topology do
 
   defp check_shedding(is, _channel, _tier?), do: is
 
-  # What the settings tree refuses beyond its shape: a flow class kept
-  # remotely, which no flow commit point gates yet; the tier without a disk;
+  # What the settings tree refuses beyond its shape: the tier without a disk,
   # and the tier's value checks. A steps class carries no tier.
-  defp class_facts(%Operator{run: :steps}, _acc, _name), do: []
+  defp class_facts(%Operator{run: :steps}, _acc), do: []
 
-  defp class_facts(%Operator{} = settings, acc, name) do
-    remote = if settings.durable == :remote, do: [{:RemoteOnFlow, name}], else: []
-
+  defp class_facts(%Operator{} = settings, acc) do
     memory =
       if acc.tier.effectively_once and settings.durable == :memory,
         do: [{:EffectivelyOnceWithoutPersistence}],
         else: []
 
-    remote ++ memory ++ checkpoint_facts(acc.tier.checkpoint) ++ correction_facts(acc)
+    memory ++ checkpoint_facts(acc.tier.checkpoint) ++ correction_facts(acc)
   end
 
   # What the checkpoint policy refuses: outputs held with no delay to release
