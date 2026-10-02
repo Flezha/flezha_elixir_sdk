@@ -97,61 +97,6 @@ defmodule ElixirRunner.Conformance.EventTimeTask do
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("eventtime")
 end
 
-# The class palette: one operator class per class role the fixture header
-# names, its factory id the role.
-defmodule ElixirRunner.Conformance.InnerSession do
-  @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "inner_session", run: {:steps, each: :per_input}
-
-  @impl true
-  def channels(c), do: c |> input("turns") |> into(ElixirRunner.Conformance.PlainTask)
-end
-
-defmodule ElixirRunner.Conformance.InnerLoop do
-  @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "inner_loop", run: {:steps, each: :chained}
-
-  @impl true
-  def channels(c),
-    do: c |> input("turns") |> into(ElixirRunner.Conformance.PlainTask) |> named("carry")
-end
-
-defmodule ElixirRunner.Conformance.InnerCleanup do
-  @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "inner_cleanup"
-
-  @impl true
-  def channels(c) do
-    c
-    |> input("raw")
-    |> into(ElixirRunner.Conformance.PlainTask)
-    |> into(ElixirRunner.Conformance.SecondTask)
-  end
-end
-
-defmodule ElixirRunner.Conformance.InnerTwoEntries do
-  @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "inner_two_entries", run: {:steps, each: :per_input}
-
-  @impl true
-  def channels(c) do
-    c |> input("a") |> into(ElixirRunner.Conformance.PlainTask)
-    c |> input("b") |> into(ElixirRunner.Conformance.SecondTask)
-  end
-end
-
-defmodule ElixirRunner.Conformance.InnerTwoExits do
-  @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "inner_two_exits", run: {:steps, each: :per_input}
-
-  @impl true
-  def channels(c) do
-    turns = input(c, "turns")
-    into(turns, ElixirRunner.Conformance.PlainTask)
-    into(turns, ElixirRunner.Conformance.SecondTask)
-  end
-end
-
 defmodule ElixirRunner.Conformance.Row do
   @moduledoc false
   @behaviour Flezha.SDK.Operator
@@ -553,7 +498,6 @@ defmodule ElixirRunner.Conformance do
   defp link(link, {stream, acc}, head) do
     case call(link) do
       {"into", role} -> into(stream, role, acc)
-      {"into_class", role} -> into_class(stream, role, acc)
       {"call" <> _ = verb, argument} -> {call_step(verb, argument, stream, head), acc}
       {verb, argument} -> {stream_link(verb, argument, stream), acc}
     end
@@ -586,21 +530,6 @@ defmodule ElixirRunner.Conformance do
     out = Channels.into(stream, tasklet(role))
     {out, %{acc | handles: Map.put(acc.handles, role, out)}}
   end
-
-  # `into_class` answers the class's exit, addressed by the class's role.
-  defp into_class(stream, role, acc) do
-    out = Channels.into(stream, class(role))
-    {out, %{acc | handles: Map.put(acc.handles, role, out)}}
-  end
-
-  defp class("inner_session"), do: ElixirRunner.Conformance.InnerSession
-  defp class("inner_loop"), do: ElixirRunner.Conformance.InnerLoop
-  defp class("inner_cleanup"), do: ElixirRunner.Conformance.InnerCleanup
-  defp class("inner_two_entries"), do: ElixirRunner.Conformance.InnerTwoEntries
-  defp class("inner_two_exits"), do: ElixirRunner.Conformance.InnerTwoExits
-
-  defp class(role),
-    do: raise("the fixture names a class role that is not one: #{role}")
 
   defp stream_link("map", _, stream), do: Channels.map(stream, & &1)
   defp stream_link("filter", _, stream), do: Channels.filter(stream, fn _value -> true end)

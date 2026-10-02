@@ -38,7 +38,6 @@ defmodule Flezha.SDK.Topology do
             entries: %{},
             entry_order: [],
             node_modules: %{},
-            node_scope: %{},
             node_mode: %{},
             node_name: %{},
             node_channel: %{},
@@ -136,9 +135,6 @@ defmodule Flezha.SDK.Topology do
     MailboxCapacityTooLarge: [:tasklet, :value],
     MailboxCapacityZero: [:tasklet, :value],
     MergeTooFewSources: [:tasklet, :sources],
-    NestedSteps: [:outer, :inner],
-    EmbeddedEntryAmbiguous: [:inner, :channels],
-    EmbeddedExitAmbiguous: [:inner, :channels],
     NamedOnEntry: [:channel],
     NoStepsBody: [:factory_id],
     NoEntryChannel: [:factory_id],
@@ -184,9 +180,8 @@ defmodule Flezha.SDK.Topology do
     incoming = incoming(channels)
     node_mode = derive_modes(acc, incoming)
     shape = %{channels: channels, routes: routes, incoming: incoming, node_mode: node_mode}
-    {node_scope, scope_issues} = node_scopes(module, settings, acc)
 
-    issues = acc.issues ++ chain_issues ++ facts(settings, acc, shape) ++ scope_issues
+    issues = acc.issues ++ chain_issues ++ facts(settings, acc, shape)
 
     if issues == [] do
       {:ok,
@@ -198,14 +193,13 @@ defmodule Flezha.SDK.Topology do
          # channel goes, and `flz_core::first_of_kind` answers the same way.
          entry_order: Enum.uniq(acc.entry_order),
          node_modules: node_modules(acc),
-         node_scope: node_scope,
-         node_mode: Map.drop(node_mode, Map.keys(node_scope)),
+         node_mode: node_mode,
          node_name: node_names(acc),
          node_channel: node_channels(acc),
          node_seq: node_seqs(acc),
          node_knobs: node_knobs(channels),
          routes: routes,
-         order: Map.keys(node_modules(acc)),
+         order: Map.keys(acc.nodes),
          keyless?: keyless?(acc, channels, node_mode),
          settings: settings,
          durable?: settings.durable != :memory,
@@ -489,8 +483,8 @@ defmodule Flezha.SDK.Topology do
   end
 
   defp derive_modes(acc, incoming) do
-    Map.new(acc.nodes, fn {ref, node} ->
-      keys = if scope?(node), do: [], else: Tasklet.cell_keys(node.module)
+    Map.new(acc.nodes, fn {ref, %{module: module}} ->
+      keys = Tasklet.cell_keys(module)
       keyed_in? = Enum.any?(Map.get(incoming, ref, []), &(&1.key_by != nil))
 
       mode =
@@ -517,7 +511,7 @@ defmodule Flezha.SDK.Topology do
 
   defp facts(settings, acc, shape) do
     names(acc, shape.channels) ++
-      Enum.flat_map(tasklet_nodes(nodes_in_order(acc)), &tasklet_facts(&1, shape)) ++
+      Enum.flat_map(nodes_in_order(acc), &tasklet_facts(&1, shape)) ++
       Enum.flat_map(shape.channels, &channel_facts(acc, &1)) ++
       class_facts(settings, acc) ++
       cycles(acc, shape.routes) ++
@@ -746,7 +740,6 @@ defmodule Flezha.SDK.Topology do
   defp event_time_clock(acc) do
     clocks =
       acc.nodes
-      |> tasklet_nodes()
       |> Enum.map(fn {_ref, %{module: m}} -> {m.name(), Tasklet.clock(m)} end)
       |> Enum.sort()
 
@@ -773,7 +766,6 @@ defmodule Flezha.SDK.Topology do
   # scenarios pin the tasklet name, so the shape is refused instead.
   defp changeful_identity(acc) do
     acc.nodes
-    |> tasklet_nodes()
     |> Enum.map(fn {_ref, %{module: m}} -> m end)
     |> Enum.filter(&Tasklet.changeful?/1)
     |> Enum.frequencies()
@@ -823,7 +815,6 @@ defmodule Flezha.SDK.Topology do
   # class declares when it differs from the default; nil when nothing journals.
   defp compact_after_bytes(acc) do
     acc.nodes
-    |> tasklet_nodes()
     |> Enum.map(fn {_ref, %{module: m}} -> m end)
     |> Enum.filter(&Tasklet.changeful?/1)
     |> Enum.map(&Tasklet.compact_after_bytes/1)
@@ -832,28 +823,7 @@ defmodule Flezha.SDK.Topology do
 
   defp nodes_in_order(acc), do: Enum.sort_by(acc.nodes, fn {_ref, node} -> node.seq end)
 
-  defp node_modules(acc),
-    do: Map.new(tasklet_nodes(acc.nodes), fn {ref, %{module: m}} -> {ref, m} end)
-
-  # A node that embeds a steps class runs no tasklet of its own.
-  defp tasklet_nodes(nodes), do: Enum.reject(nodes, fn {_ref, node} -> scope?(node) end)
-  defp scope?(node), do: Map.has_key?(node, :scope)
-
-  # Each node that embeds a steps class, judged as the core judges an
-  # embedding, with the edge's options.
-  defp node_scopes(module, settings, acc) do
-    for {ref, %{scope: opts} = node} <- acc.nodes, reduce: {%{}, []} do
-      {scopes, issues} ->
-        case Flezha.SDK.Scope.judge(module.factory_id(), settings.run, node.module, opts.input) do
-          {:ok, facts} ->
-            {Map.put(scopes, ref, Map.put(facts, :max_cells, opts.max_cells)), issues}
-
-          {:issues, found} ->
-            {scopes, issues ++ found}
-        end
-    end
-  end
-
+  defp node_modules(acc), do: Map.new(acc.nodes, fn {ref, %{module: m}} -> {ref, m} end)
   defp node_seqs(acc), do: Map.new(acc.nodes, fn {ref, %{seq: n}} -> {ref, n} end)
   defp node_names(acc), do: Map.new(acc.nodes, fn {ref, %{name: n}} -> {ref, n} end)
 

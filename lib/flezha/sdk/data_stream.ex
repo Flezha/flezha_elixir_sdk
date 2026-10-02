@@ -28,10 +28,6 @@ defmodule Flezha.SDK.DataStream do
 
   @impl true
   def handle_info({:flz_data, _id, operator_id, message, metadata}, state) do
-    # A stepped scope's frame names its outer instance and carries the rest
-    # of the scope's id, which no frame header has room for.
-    operator_id = operator_id <> Flezha.SDK.Scope.suffix(metadata)
-
     case :ets.lookup(state.registry, operator_id) do
       [{^operator_id, op_pid}] ->
         Inbox.input(op_pid, metadata["channel"], message, metadata)

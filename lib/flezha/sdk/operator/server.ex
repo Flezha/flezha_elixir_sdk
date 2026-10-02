@@ -38,7 +38,7 @@ defmodule Flezha.SDK.Operator.Server do
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park, Prefix, Record, Scope}
+  alias Flezha.SDK.{Call, Cell, Hold, Knob, Park, Prefix, Record}
   alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
   alias Flezha.SDK.Steps.Commit
 
@@ -71,14 +71,7 @@ defmodule Flezha.SDK.Operator.Server do
       # The end a tasklet or the wall clock asked for, `{status, result}`,
       # until it is reported.
       asked: nil,
-      reported?: false,
-      # The stepped scopes of each embedding node by key (`Flezha.SDK.Scope`),
-      # and the forwarded inputs whose prefix hold awaits the controller.
-      scopes: %{},
-      scope_holds: %{},
-      # How many values each outer input sent each scope key, by
-      # `{node_ref, key, offset}`, until the reported prefix passes it.
-      scope_sent: %{}
+      reported?: false
     ]
   end
 
@@ -202,24 +195,6 @@ defmodule Flezha.SDK.Operator.Server do
     {:noreply, redeliver_edge(s, edge, message, offset, call)}
   end
 
-  # A logged scope's exit value, journaled by the controller as this
-  # instance's input: on along the graph as the embedding node's emit, at its
-  # offset.
-  def handle_cast({:input, _channel, message, %{"flz.exit" => node} = metadata}, %State{} = s) do
-    s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
-    {offset, call, _replay} = frame_facts(metadata)
-
-    case Scope.node_named(s.topology, node) do
-      nil ->
-        Logger.warning("[Flezha.SDK] #{s.operator_id} has no embedding node #{inspect(node)}")
-        {:noreply, s}
-
-      node_ref ->
-        emit = %{@entry_emit | offset: offset, call: call}
-        {:noreply, route_input(s, {:node, node_ref}, Scope.exited_value(message), emit)}
-    end
-  end
-
   def handle_cast({:input, channel, message, metadata}, %State{} = s) do
     s = if owed_arrival?(metadata), do: %{s | owed: max(s.owed - 1, 0)}, else: s
 
@@ -228,7 +203,13 @@ defmodule Flezha.SDK.Operator.Server do
     case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message, call) do
       {:ok, channel, value} ->
         emit = %{@entry_emit | offset: offset, call: call, replay: replay}
-        {:noreply, route_input(s, {:entry, channel}, value, emit)}
+        # Held while it routes, so the prefix reaches it even when it reaches
+        # no Cell.
+        held = offset && s.prefix
+        if held, do: Prefix.hold(held, offset)
+        {s, _ordinal} = route_from(s, {:entry, channel}, value, emit, 0)
+        if held, do: Prefix.release(held, offset)
+        {:noreply, s}
 
       :parked ->
         {:noreply, s}
@@ -259,37 +240,6 @@ defmodule Flezha.SDK.Operator.Server do
     {:noreply, s}
   end
 
-  # A scope's exit output, on along the graph as the embedding node's emit.
-  def handle_cast({:scope_exit, node_ref, _key, values}, %State{} = s) do
-    {s, _ordinal} =
-      Enum.reduce(values, {s, 0}, fn value, {acc, ordinal} ->
-        route_from(acc, {:node, node_ref}, value, @entry_emit, ordinal)
-      end)
-
-    {:noreply, s}
-  end
-
-  # The controller stopped a scope of this instance, bound or not: a key that
-  # waited for its bind no longer does.
-  def handle_cast({:scope_released, inner, key}, %State{} = s) do
-    case Scope.node_named(s.topology, inner) do
-      nil -> {:noreply, s}
-      node_ref -> {:noreply, Scope.released(s, node_ref, key)}
-    end
-  end
-
-  # A scope the controller bound on this runner joins its family.
-  def handle_cast({:scope_attached, inner, key, pid}, %State{} = s) do
-    case Scope.node_named(s.topology, inner) do
-      nil ->
-        {:noreply, s}
-
-      node_ref ->
-        Process.monitor(pid)
-        {:noreply, Scope.put_child(s, node_ref, key, pid)}
-    end
-  end
-
   # A tasklet asked to end the instance; a later completion replaces the result.
   @impl true
   def handle_cast({:complete, _node_ref, _cell_key, result}, %State{} = s),
@@ -309,16 +259,8 @@ defmodule Flezha.SDK.Operator.Server do
   # through its monitor of this process. The Cell's `after` cannot run for an
   # untrappable kill, so its in-flight slot is released there too.
   @impl true
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s) do
-    case scope_of(s, pid) do
-      {node_ref, key} -> {:noreply, Scope.put_child(s, node_ref, key, nil)}
-      nil -> {:noreply, %{s | cells: Cells.down(s.cells, pid, reason)}}
-    end
-  end
-
-  # The controller journaled a message forwarded to a scope.
-  def handle_info({:barrier_ack, ref, result, error}, %State{} = s),
-    do: {:noreply, Scope.answered(s, ref, result, error, Knob.barrier_resend_attempts())}
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{} = s),
+    do: {:noreply, %{s | cells: Cells.down(s.cells, pid, reason)}}
 
   # What a stopped Cell handed on goes ahead of the Cells' own records and
   # outputs: its delete has to reach the controller before a replacement's
@@ -364,18 +306,8 @@ defmodule Flezha.SDK.Operator.Server do
   # their monitor of this process.
   @impl true
   def terminate(reason, %State{} = s) do
-    for {_node, family} <- s.scopes,
-        {_key, pid} when is_pid(pid) <- family,
-        do: Process.exit(pid, :shutdown)
-
     if not clean_exit?(reason), do: Cells.kill_all(s.cells)
     :ok
-  end
-
-  defp scope_of(%State{scopes: scopes}, pid) do
-    Enum.find_value(scopes, fn {node_ref, family} ->
-      Enum.find_value(family, fn {key, held} -> if held == pid, do: {node_ref, key} end)
-    end)
   end
 
   # --- ending from inside ---
@@ -487,16 +419,6 @@ defmodule Flezha.SDK.Operator.Server do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  # A forwarded input, held while it routes so the prefix reaches it even
-  # when it reaches no Cell.
-  defp route_input(%State{} = s, source, value, emit) do
-    held = emit.offset && s.prefix
-    if held, do: Prefix.hold(held, emit.offset)
-    {s, _ordinal} = route_from(s, source, value, emit, 0)
-    if held, do: Prefix.release(held, emit.offset)
-    s
-  end
-
   # Fan `value` out along `source`'s routes; `emit` is the producing emit's
   # metadata, key and origin, `ordinal` the invocation's plugin-output count.
   defp route_from(%State{topology: topo} = s, source, value, emit, ordinal) do
@@ -559,10 +481,6 @@ defmodule Flezha.SDK.Operator.Server do
   # mark and whether the controller forwarded it, so the Cell can skip a
   # re-forward it already took, hold a slice member back and answer the call.
   # Anything else is the raw value.
-  defp deliver_to_node(%State{topology: %{node_scope: scopes}} = s, node_ref, value, key, emit)
-       when is_map_key(scopes, node_ref),
-       do: Scope.deliver(s, node_ref, value, key, emit)
-
   defp deliver_to_node(%State{topology: topo} = s, node_ref, value, key, emit) do
     item =
       if topo.effectively_once? or is_integer(emit.offset) or emit.call != nil,

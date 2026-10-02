@@ -102,7 +102,6 @@ defmodule Flezha.SDK.Hold do
     iter_park: :control,
     operator_completed: :control,
     operator_exited: :control,
-    scope_input: :control,
     response: :control
   }
 

@@ -105,12 +105,7 @@ defmodule Flezha.SDK.Steps.Instance do
             journal: nil,
             iter: 0,
             compensation_done: nil,
-            cancel: nil,
-            # Set when the instance runs as a stepped scope of another
-            # (`Flezha.SDK.Scope`), with a chained scope's last released batch:
-            # its exit output once the loop converges.
-            scope: nil,
-            exit_hold: []
+            cancel: nil
 
   @type t :: %__MODULE__{}
 
@@ -126,7 +121,6 @@ defmodule Flezha.SDK.Steps.Instance do
       inbox: :queue.new(),
       owed_inbox: Keyword.get(opts, :owed_inbox, 0),
       dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false),
-      scope: Keyword.get(opts, :scope),
       journal: journal,
       taken: journal && Map.get(journal, :released_offset),
       iter: if(journal, do: journal.iter, else: 0),

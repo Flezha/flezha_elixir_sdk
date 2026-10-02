@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Steps.Compensation do
 
       command =
         Commit.task(state.runner, self(), ref,
-          operator_id: Flezha.SDK.Scope.wire(state.operator_id, state.instance.scope),
+          operator_id: state.operator_id,
           task_idx: stage.task_idx,
           iter: Map.get(stage, :iter, state.iter),
           cells_ran: Commit.cells_ran(state.written, stage.node_ref, stage.cells),

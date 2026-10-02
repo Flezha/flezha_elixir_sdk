@@ -169,10 +169,6 @@
       "spawn_requester",
       "spawn_hold_requester",
       "spawn_once_requester"
-    ],
-    "inner_operator": [
-      "session_gateway",
-      "loop_gateway"
     ]
   },
   "docs": "docs/sdk/elixir_sdk.md"

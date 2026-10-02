@@ -39,7 +39,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
   require Logger
 
-  alias Flezha.SDK.{Cell, Knob, Scope}
+  alias Flezha.SDK.{Cell, Knob}
   alias Flezha.SDK.Cell.Records
   alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
   alias Flezha.SDK.Steps.{Commit, Compensation, Instance, Resume, Spec, Stage}
@@ -141,8 +141,7 @@ defmodule Flezha.SDK.Steps.Driver do
         Instance.new(operator_id, spec,
           journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
-          dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false),
-          scope: Keyword.get(opts, :scope)
+          dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false)
         ),
       spec: spec,
       operator_id: operator_id,
@@ -752,7 +751,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.task(s.runner, self(), ref,
-          operator_id: wire(s),
+          operator_id: s.operator_id,
           task_idx: task_idx,
           iter: s.iter,
           cells_ran: Commit.cells_ran(s.written, node_ref, ran),
@@ -760,8 +759,7 @@ defmodule Flezha.SDK.Steps.Driver do
           compensating: s.unwind.status != nil,
           completes: asked != nil,
           result: result_of(asked),
-          trigger: trigger(s, node_ref),
-          exit: stage_exit(s, node_ref, batch, asked)
+          trigger: trigger(s, node_ref)
         )
 
       arm(s, ref, :task, command)
@@ -819,11 +817,7 @@ defmodule Flezha.SDK.Steps.Driver do
         end
       end)
 
-    s =
-      if children == [],
-        do: exits(%{s | carry: (s.carry || []) ++ batch}, node_ref, batch),
-        else: s
-
+    s = if children == [], do: %{s | carry: (s.carry || []) ++ batch}, else: s
     pass_step(s)
   end
 
@@ -840,14 +834,13 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.iter(s.runner, self(), ref,
-          operator_id: wire(s),
+          operator_id: s.operator_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
           entry_channel: s.pass_channel,
           handoff: terminal_handoff(s),
           completes: completion(s) != nil,
-          result: result_of(completion(s)),
-          exit: iteration_exit(s)
+          result: result_of(completion(s))
         )
 
       arm(s, ref, :iter, command)
@@ -950,7 +943,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.iter(s.runner, self(), ref,
-          operator_id: wire(s),
+          operator_id: s.operator_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
           entry_channel: s.pass_channel,
@@ -1060,7 +1053,7 @@ defmodule Flezha.SDK.Steps.Driver do
   # and the last message the run parked unread, which the inbox releases.
   defp park(%State{} = s) do
     wake = earliest_timer(s)
-    Commit.park(s.runner, wire(s), max(s.iter - 1, 0), wake, s.instance.parked_offset)
+    Commit.park(s.runner, s.operator_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
     %{s | terminal: :parked}
   end
 
@@ -1117,63 +1110,11 @@ defmodule Flezha.SDK.Steps.Driver do
   defp complete(s, status, error, result \\ <<>>)
 
   defp complete(%State{terminal: nil} = s, status, error, result) do
-    took = if status == "ok", do: nil, else: s.consumed_offset
-    Commit.completed(s.runner, wire(s), status, error, result, took)
-    if status == "ok" and not logged?(s), do: exit_on_end(s.instance, result)
+    Commit.completed(s.runner, s.operator_id, status, error, result)
     %{s | terminal: {status, error}}
   end
 
   defp complete(%State{} = s, _status, _error, _result), do: s
-
-  # What a scope's frames name: its outer instance, carrying the scope.
-  defp wire(%State{} = s), do: Scope.wire(s.operator_id, s.instance.scope)
-
-  # A scope that ends carries out a chained loop's last batch, and the result.
-  defp exit_on_end(%Instance{scope: nil}, _result), do: :ok
-
-  defp exit_on_end(%Instance{scope: scope, exit_hold: held}, result) do
-    Scope.exit(scope, scope.exit, held)
-    Scope.result(scope, result)
-  end
-
-  # A scope's exit tasklet released `batch` at its commit: on to the outer
-  # graph, or, in a chained loop, held until the loop converges. A logged
-  # scope's commit carried it already.
-  defp exits(%State{instance: %Instance{scope: nil}} = s, _node_ref, _batch), do: s
-  defp exits(%State{} = s, _node_ref, []), do: s
-
-  defp exits(%State{spec: %Spec{settings: %{each: :chained}}} = s, _node_ref, batch),
-    do: %{s | instance: %{s.instance | exit_hold: batch}}
-
-  defp exits(%State{} = s, node_ref, batch) do
-    if not logged?(s), do: Scope.exit(s.instance.scope, node_ref, batch)
-    s
-  end
-
-  # Whether this scope's exit values ride its commits into the outer
-  # instance's input log: a scope that journals, inside a durable instance.
-  defp logged?(%State{instance: %Instance{scope: %Scope{logged: true}}} = s), do: journals?(s)
-  defp logged?(%State{}), do: false
-
-  # The exit a stage's commit carries: the exit tasklet's batch outside a
-  # chained loop, and the result a `once` run ends with at its last stage.
-  defp stage_exit(%State{} = s, node_ref, batch, asked) do
-    if logged?(s) do
-      each = s.spec.settings.each
-      values = if node_ref == s.instance.scope.exit and each != :chained, do: batch, else: []
-      result = if each == :once, do: result_of(asked), else: <<>>
-      Scope.exit_frame(s.instance.scope, values, result)
-    end
-  end
-
-  # The exit an iteration's commit carries when the run ends with it: a
-  # chained loop's last batch, and the result a tasklet ended it with.
-  defp iteration_exit(%State{} = s) do
-    converges? = s.spec.settings.each == :chained and s.carry in [nil, []]
-
-    if logged?(s) and (converges? or completion(s) != nil),
-      do: Scope.exit_frame(s.instance.scope, s.instance.exit_hold, result_of(completion(s)))
-  end
 
   # One exit for every flow function: a run that shipped its terminal frame
   # ends the process, and nothing else does.

@@ -212,19 +212,17 @@ defmodule Flezha.SDK.Codec do
         trigger \\ nil
       ) do
     {:task_commit,
-     named(
-       %RunnerCommands.TaskCommit{
-         task_idx: task_idx,
-         iter: iter,
-         cells_ran: Enum.map(cells_ran, &committed_cell/1),
-         handoff: handoff_items(handoff),
-         compensating: compensating,
-         completes: completes,
-         result: result,
-         trigger: timer_trigger(trigger)
-       },
-       operator_id
-     )}
+     %RunnerCommands.TaskCommit{
+       operator_id: operator_id,
+       task_idx: task_idx,
+       iter: iter,
+       cells_ran: Enum.map(cells_ran, &committed_cell/1),
+       handoff: handoff_items(handoff),
+       compensating: compensating,
+       completes: completes,
+       result: result,
+       trigger: timer_trigger(trigger)
+     }}
   end
 
   # One Cell a stage ran, with the records it wrote there.
@@ -268,18 +266,16 @@ defmodule Flezha.SDK.Codec do
         dead_letter \\ nil
       ) do
     {:iter_commit,
-     named(
-       %RunnerCommands.IterCommit{
-         iter: iter,
-         consumed_offset: consumed_offset,
-         handoff: handoff_items(handoff),
-         completes: completes,
-         result: result,
-         entry_channel: entry_channel,
-         dead_letter: dead_letter && struct(RunnerCommands.DeadLetter, dead_letter)
-       },
-       operator_id
-     )}
+     %RunnerCommands.IterCommit{
+       operator_id: operator_id,
+       iter: iter,
+       consumed_offset: consumed_offset,
+       handoff: handoff_items(handoff),
+       completes: completes,
+       result: result,
+       entry_channel: entry_channel,
+       dead_letter: dead_letter && struct(RunnerCommands.DeadLetter, dead_letter)
+     }}
   end
 
   @doc """
@@ -295,75 +291,26 @@ defmodule Flezha.SDK.Codec do
         ) :: {atom(), struct()}
   def iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset) do
     {:iter_park,
-     named(
-       %RunnerCommands.IterPark{
-         iter: iter,
-         wake_deadline_ms: wake_deadline_ms,
-         consumed_offset: consumed_offset
-       },
-       operator_id
-     )}
-  end
-
-  @doc """
-  The `OperatorCompleted` command tuple for a terminated instance; `took` is
-  the input-log offset of the message the pass that did not end cleanly took.
-  """
-  @spec operator_completed_command(
-          String.t() | {String.t(), struct()},
-          String.t(),
-          String.t(),
-          binary(),
-          non_neg_integer() | nil
-        ) ::
-          {atom(), struct()}
-  def operator_completed_command(operator_id, status, error, result, took \\ nil) do
-    {:operator_completed,
-     named(
-       %RunnerCommands.OperatorCompleted{
-         status: status,
-         error: error,
-         result: result,
-         consumed_offset: took
-       },
-       operator_id
-     )}
-  end
-
-  @doc "The `ScopeExit` a logged scope's commit carries: `values` leaving through `node`."
-  @spec scope_exit(String.t(), [binary()]) :: struct()
-  def scope_exit(node, values), do: %RunnerCommands.ScopeExit{channel: node, values: values}
-
-  @doc "A commit frame carrying a logged scope's exit, or as it was for `nil`."
-  @spec with_exit({atom(), struct()}, struct() | nil) :: {atom(), struct()}
-  def with_exit(command, nil), do: command
-  def with_exit({tag, frame}, exit), do: {tag, %{frame | exit: exit}}
-
-  @doc "The wire `Scope` of a stepped scope: its embedding node and edge key."
-  @spec scope(String.t(), String.t() | nil) :: struct()
-  def scope(inner, key), do: %RunnerCommands.Scope{inner: inner, key: key}
-
-  @doc """
-  The `ScopeInput` command: a message on an edge into a scope of a durable
-  instance, for the controller to journal and forward.
-  """
-  @spec scope_input_command(String.t(), struct(), String.t(), binary(), String.t()) ::
-          {atom(), struct()}
-  def scope_input_command(operator_id, scope, channel, payload, msg_id) do
-    {:scope_input,
-     %RunnerCommands.ScopeInput{
+     %RunnerCommands.IterPark{
        operator_id: operator_id,
-       scope: scope,
-       channel: channel,
-       payload: payload,
-       msg_id: msg_id
+       iter: iter,
+       wake_deadline_ms: wake_deadline_ms,
+       consumed_offset: consumed_offset
      }}
   end
 
-  # A frame names its instance; a stepped scope's names its outer instance
-  # and carries the scope.
-  defp named(frame, {operator_id, scope}), do: %{frame | operator_id: operator_id, scope: scope}
-  defp named(frame, operator_id), do: %{frame | operator_id: operator_id}
+  @doc "The `OperatorCompleted` command tuple for a terminated instance."
+  @spec operator_completed_command(String.t(), String.t(), String.t(), binary()) ::
+          {atom(), struct()}
+  def operator_completed_command(operator_id, status, error, result) do
+    {:operator_completed,
+     %RunnerCommands.OperatorCompleted{
+       operator_id: operator_id,
+       status: status,
+       error: error,
+       result: result
+     }}
+  end
 
   @doc "The committed task-journal a bind carried, as plain Elixir terms."
   @spec journal_facts(struct() | nil) :: map() | nil

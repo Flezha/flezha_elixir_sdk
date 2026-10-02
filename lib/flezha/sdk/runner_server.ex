@@ -506,13 +506,6 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  defp dispatch({:rem_operator, %{operator_id: oid, scope: %{inner: inner, key: key}}}, ref, s) do
-    with {parent, _factory_id} <- Map.get(s.operators, oid),
-         do: GenServer.cast(parent, {:scope_released, inner, key})
-
-    reply_ok(Operators.remove(s, Flezha.SDK.Scope.id(oid, inner, key)), ref)
-  end
-
   defp dispatch({:rem_operator, %{operator_id: oid}}, ref, s) do
     reply_ok(Operators.remove(s, oid), ref)
   end
@@ -540,9 +533,6 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp dispatch({:iter_commit_response, %{error: error}}, ref, s),
     do: settle(s, ref, "", Error.from_wire(error))
-
-  defp dispatch({:scope_input_response, %{error: error, refused: refused}}, ref, s),
-    do: settle(s, ref, if(refused, do: "refused", else: ""), Error.from_wire(error))
 
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, Error.from_wire(error))
