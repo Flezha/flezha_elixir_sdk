@@ -16,7 +16,9 @@ defmodule Tradedesk.OrderExecutor do
   is released. A step with no `compensate/3` is skipped, which is why the
   desk's book is left alone.
   """
-  use Flezha.SDK.Operator, factory_id: "order_executor", run: :steps
+  use Flezha.SDK.Operator,
+    factory_id: "order_executor",
+    run: {:steps, each: :once, on_failure: :undo_all}
 
   defmodule OrderTicket do
     @moduledoc """
