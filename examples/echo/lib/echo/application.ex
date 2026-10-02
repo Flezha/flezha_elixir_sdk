@@ -33,13 +33,11 @@ defmodule Echo.Application do
     # {:ok, %{id: "my_echo"}} = Admin.start_operator(runner, "echo", id: "my_echo")
     #
     # {:ok, _} =
-    #   Admin.enable_plugin(runner, "writer", %{
-    #     "id" => "writer",
-    #     "provider" => "operator_file_sink",
-    #     "operator_id" => "my_echo",
-    #     "opts" => %{"path" => "echo-out.txt"},
-    #     "hooks" => [["on_output", %{}]]
-    #   })
+    #   Admin.enable_plugin(runner, "writer", "operator_file_sink",
+    #     opts: %{"path" => "echo-out.txt"}
+    #   )
+    #
+    # {:ok, _} = Admin.bind_plugin(runner, "writer", "my_echo", hooks: [["on_output", %{}]])
     #
     # {:ok, _} = Admin.send_to(runner, "my_echo", "hello world", "in")
     #

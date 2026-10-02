@@ -37,11 +37,7 @@ defmodule Flezha.SDK.Admin do
   @spec start_operator(runner(), String.t(), keyword()) ::
           {:ok, %{id: String.t(), outcome: :started | :already_running}} | {:error, term()}
   def start_operator(runner, factory_id, opts \\ []) do
-    fields =
-      %{"factory_id" => factory_id}
-      |> put_given("id", Keyword.get(opts, :id))
-      |> put_given("init_values", Keyword.get(opts, :init_values))
-      |> put_given("opts", Keyword.get(opts, :opts))
+    fields = given(%{"factory_id" => factory_id}, opts, [:id, :init_values, :opts])
 
     with {:ok, answer} <- call(runner, "Operator.start", [fields]), do: started(answer)
   end
@@ -59,21 +55,48 @@ defmodule Flezha.SDK.Admin do
   def send_to(runner, operator_id, message, channel \\ ""),
     do: call(runner, "Operator.send", [operator_id, message, channel])
 
-  @doc "Enable a plugin, built from the fields `flz plugin enable` takes."
-  @spec enable_plugin(runner(), String.t(), map()) :: {:ok, term()} | {:error, term()}
-  def enable_plugin(runner, plugin_id, fields),
-    do: call(runner, "PluginManager.enable", [plugin_id, fields])
+  @doc """
+  Enable the plugin `name` in this namespace, of the provider `provider` (for
+  example `"operator_websocket"`). Options: `opts:`, the provider's options;
+  `single: true` to run one copy in the whole cluster; and
+  `operator_id:` with `hooks:` to bind that operator in the same call.
+  """
+  @spec enable_plugin(runner(), String.t(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def enable_plugin(runner, name, provider, opts \\ []) do
+    fields = %{"provider" => provider, "opts" => Keyword.get(opts, :opts, %{})}
 
-  @doc "Disable a plugin, or every partitioned instance of it."
+    call(runner, "PluginManager.enable", [
+      name,
+      given(fields, opts, [:single, :operator_id, :hooks])
+    ])
+  end
+
+  @doc """
+  Bind the operator `operator_id` to the enabled plugin `name`, with the
+  optional `hooks:` and `channel:`.
+  """
+  @spec bind_plugin(runner(), String.t(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def bind_plugin(runner, name, operator_id, opts \\ []) do
+    fields = given(%{"operator_id" => operator_id}, opts, [:hooks, :channel])
+    call(runner, "PluginManager.bind", [name, fields])
+  end
+
+  @doc "Unbind the operator `operator_id` from the plugin `name`, which stays enabled."
+  @spec unbind_plugin(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
+  def unbind_plugin(runner, name, operator_id),
+    do: call(runner, "PluginManager.unbind", [name, %{"operator_id" => operator_id}])
+
+  @doc "Disable the plugin `name`, stopping it wherever it runs."
   @spec disable_plugin(runner(), String.t()) :: {:ok, term()} | {:error, term()}
-  def disable_plugin(runner, plugin_id),
-    do: call(runner, "PluginManager.disable", [plugin_id])
+  def disable_plugin(runner, name), do: call(runner, "PluginManager.disable", [name, %{}])
 
   @doc "The operator ids running in this namespace."
   @spec list_operators(runner()) :: {:ok, term()} | {:error, term()}
   def list_operators(runner), do: call(runner, "Operator.list_operators", [])
 
-  @doc "The plugins enabled on the controller node answering this call."
+  @doc "The plugins enabled in this namespace: name, provider, single, bound operators."
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
   def list_plugins(runner), do: call(runner, "PluginManager.list", [])
 
@@ -110,6 +133,11 @@ defmodule Flezha.SDK.Admin do
 
   defp started(_other), do: {:error, Error.new("admin.unreadable_answer", verb: "Operator.start")}
 
-  defp put_given(fields, _key, nil), do: fields
-  defp put_given(fields, key, value), do: Map.put(fields, key, value)
+  # The `keys` set in `opts`, added to `fields` under their names.
+  defp given(fields, opts, keys) do
+    for key <- keys,
+        (value = Keyword.get(opts, key)) != nil,
+        into: fields,
+        do: {Atom.to_string(key), value}
+  end
 end
