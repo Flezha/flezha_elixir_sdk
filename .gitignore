@@ -6,9 +6,14 @@ flezha_sdk-*.tar
 /native/flz_sdk_nif/target/
 /priv/native/
 # Fetched from a core release and checked against its manifest: the fake
-# controller, and the contract set the fixture tests and the codec resolve against.
+# controller, and the contract set the fixture tests resolve against.
 /.core/
-/contract/
+/contract/**
+!/contract/**/
+# The two members the package compiles from are tracked, so a clone and the Hex
+# package compile without a release; the core's conformance gate holds them equal.
+!/contract/flz_transport/errors.json
+!/contract/protobufs/runner_commands.proto
 # Copied from a core release by `scripts/fetch-core.sh`; a Hex release carries it.
 /checksum-Elixir.Flezha.SDK.Native.exs
 /native/flz_sdk_nif/Cargo.lock

@@ -9,7 +9,12 @@ defmodule Flezha.SDK.Contract do
   package never shadows its live files. The first that resolves is the answer,
   and none resolving is a refusal naming all three rather than a skipped read.
   A directory named by the variable is taken as given; the other two resolve
-  when they hold the set's own list, `test/fixtures/contract.txt`.
+  when they hold the member asked for, or for the directory as a whole the
+  set's own list, `test/fixtures/contract.txt`.
+
+  `contract/` tracks the two members the package compiles from, the error
+  catalogue and the runner command schema, so a clone or the Hex package
+  compiles with no release unpacked.
   """
 
   @package Path.expand("../../..", __DIR__)
@@ -18,25 +23,32 @@ defmodule Flezha.SDK.Contract do
   @spec dir!() :: Path.t()
   def dir!, do: locate!(@package, System.get_env("FLEZHA_CONTRACT_DIR"))
 
-  @doc "The contract directory for a package at `package`, given `$FLEZHA_CONTRACT_DIR`."
-  @spec locate!(Path.t(), String.t() | nil) :: Path.t()
-  def locate!(package, explicit) do
+  @doc """
+  The contract directory for a package at `package`, given `$FLEZHA_CONTRACT_DIR`:
+  the first candidate holding `member`.
+  """
+  @spec locate!(Path.t(), String.t() | nil, Path.t()) :: Path.t()
+  def locate!(package, explicit, member \\ "test/fixtures/contract.txt") do
     candidates = [
       {"the enclosing core tree", Path.expand("../..", package)},
       {"contract/", Path.join(package, "contract")}
     ]
 
-    explicit || Enum.find_value(candidates, &resolved/1) ||
-      raise "no contract set: looked at " <>
+    explicit || Enum.find_value(candidates, &resolved(&1, member)) ||
+      raise "no contract set holds #{member}: looked at " <>
               "$FLEZHA_CONTRACT_DIR (unset), " <>
               Enum.map_join(candidates, ", ", fn {name, dir} -> "#{name} (#{dir})" end) <>
               ". Unpack a release's fixture archive at contract/ or set FLEZHA_CONTRACT_DIR."
   end
 
-  @doc "`relative` inside the contract directory."
+  @doc "`relative` inside the first contract directory that holds it."
   @spec path!(Path.t()) :: Path.t()
-  def path!(relative), do: Path.join(dir!(), relative)
+  def path!(relative) do
+    @package
+    |> locate!(System.get_env("FLEZHA_CONTRACT_DIR"), relative)
+    |> Path.join(relative)
+  end
 
-  defp resolved({_name, dir}),
-    do: if(File.regular?(Path.join(dir, "test/fixtures/contract.txt")), do: dir)
+  defp resolved({_name, dir}, member),
+    do: if(File.regular?(Path.join(dir, member)), do: dir)
 end

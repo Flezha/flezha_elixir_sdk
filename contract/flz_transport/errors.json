@@ -1,0 +1,3323 @@
+{
+  "classes": {
+    "internal": 1,
+    "invalid": 2,
+    "unreachable": 3,
+    "denied": 4,
+    "not_found": 5,
+    "conflict": 6,
+    "unavailable": 7
+  },
+  "sites": ["wire.spawn", "wire.connect", "wire.commit", "wire.message"],
+  "codes": {
+    "admin.args_not_array": {
+      "class": "invalid",
+      "message": "the arguments must be a JSON array",
+      "details": []
+    },
+    "admin.invalid_args_json": {
+      "class": "invalid",
+      "message": "the arguments are not valid JSON: {reason}",
+      "details": ["reason"]
+    },
+    "admin.no_control_plane": {
+      "class": "unavailable",
+      "message": "there is no control plane to administer over: the runner is closed or has no controller",
+      "details": []
+    },
+    "admin.timeout": {
+      "class": "unavailable",
+      "message": "the controller did not answer the administration call within {seconds}s",
+      "details": ["seconds"]
+    },
+    "admin.unknown_function": {
+      "class": "not_found",
+      "message": "no published function is named '{function}'",
+      "details": ["function"]
+    },
+    "admin.unknown_parameter": {
+      "class": "invalid",
+      "message": "unknown parameter '{parameter}'",
+      "details": ["parameter"]
+    },
+    "admin.unreadable_answer": {
+      "class": "internal",
+      "message": "the controller's answer to '{verb}' could not be read",
+      "details": ["verb"]
+    },
+    "admin.wrong_arity": {
+      "class": "invalid",
+      "message": "'{function}' takes no argument list of this length",
+      "details": ["function"]
+    },
+    "audit.closed": {
+      "class": "unavailable",
+      "message": "the audit log writer is closed",
+      "details": [],
+      "reasons": [
+        {"tag": "closed"}
+      ]
+    },
+    "audit.disabled": {
+      "class": "unavailable",
+      "message": "the audit log is disabled; enable it with FLEZHA_AUDIT_ENABLED=true, or :audit_log, :enabled in the configuration",
+      "details": [],
+      "reasons": [
+        {"tag": "audit_log_disabled"}
+      ]
+    },
+    "audit.file_not_found": {
+      "class": "not_found",
+      "message": "the audit log has no file '{file}'",
+      "hint": "flz audit list",
+      "details": ["file"],
+      "reasons": [
+        {"tag": "file_not_found", "args": ["file"]}
+      ]
+    },
+    "audit.writer_unavailable": {
+      "class": "unavailable",
+      "message": "the audit log writer is not running; try again",
+      "details": [],
+      "reasons": [
+        {"tag": "writer_unavailable"}
+      ]
+    },
+    "authz.bootstrap_claimed": {
+      "class": "conflict",
+      "message": "this controller's admin is already claimed, so there is no bootstrap token to claim",
+      "hint": "flz auth rebootstrap",
+      "details": [],
+      "reasons": [
+        {"tag": "bootstrap_already_completed"}
+      ]
+    },
+    "authz.bootstrap_pending": {
+      "class": "denied",
+      "message": "authorization is enforced and no admin has claimed the bootstrap yet; its token is in {path} on the controller",
+      "hint": "flz auth bootstrap <token>",
+      "details": ["path"],
+      "reasons": [
+        {"tag": ["forbidden", "bootstrap_pending"], "args": ["path"]}
+      ]
+    },
+    "authz.bootstrap_token_mismatch": {
+      "class": "denied",
+      "message": "the token does not match the one in the bootstrap token file",
+      "details": [],
+      "reasons": [
+        {"tag": "bootstrap_token_mismatch"}
+      ]
+    },
+    "authz.bootstrap_token_missing": {
+      "class": "not_found",
+      "message": "no bootstrap token at {path}; a controller writes one at boot while no admin is claimed, relative to the directory it was started from",
+      "details": ["path"],
+      "reasons": [
+        {"tag": "bootstrap_token_missing", "args": ["path"]}
+      ]
+    },
+    "authz.bootstrap_token_read_failed": {
+      "class": "internal",
+      "message": "the bootstrap token at {path} could not be read",
+      "details": ["path", "reason"],
+      "reasons": [
+        {"tag": "bootstrap_token_read_failed", "args": ["path", "reason"]}
+      ]
+    },
+    "authz.bootstrap_token_write_failed": {
+      "class": "internal",
+      "message": "the bootstrap token could not be written to {path}",
+      "details": ["path", "reason"],
+      "reasons": [
+        {"tag": "bootstrap_token_write_failed", "args": ["path", "reason"]}
+      ]
+    },
+    "authz.bound_elsewhere": {
+      "class": "conflict",
+      "message": "'{principal}' holds roles in namespace '{namespace}'; unbind it there before binding it elsewhere",
+      "hint": "flz role unbind {principal}",
+      "details": ["principal", "namespace"],
+      "reasons": [
+        {"tag": "bound_elsewhere", "args": ["principal", "namespace"]}
+      ]
+    },
+    "authz.cross_namespace_admin_denied": {
+      "class": "denied",
+      "message": "an admin of one namespace cannot act in another",
+      "hint": "flz auth whoami",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "cross_namespace_admin_denied"]}
+      ]
+    },
+    "authz.invalid_caller_context": {
+      "class": "invalid",
+      "message": "the caller context is not valid: it needs a source of cli, ui, sdk or internal",
+      "details": [],
+      "reasons": [
+        {"tag": "invalid_caller_context"}
+      ]
+    },
+    "authz.invalid_scope": {
+      "class": "invalid",
+      "message": "the call names no valid namespace to be judged in",
+      "details": [],
+      "reasons": [
+        {"tag": "invalid_scope"},
+        {"tag": ["forbidden", "invalid_scope"]}
+      ]
+    },
+    "authz.invalid_ttl": {
+      "class": "invalid",
+      "message": "a token's lifetime must be a positive number of seconds or never, got {ttl}",
+      "details": ["ttl"],
+      "reasons": [
+        {"tag": "invalid_ttl", "args": ["ttl"]}
+      ]
+    },
+    "authz.namespace_mismatch": {
+      "class": "denied",
+      "message": "the caller's namespace is not the namespace this acts in",
+      "hint": "flz auth whoami",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "namespace_mismatch"]}
+      ]
+    },
+    "authz.no_role_binding": {
+      "class": "denied",
+      "message": "the caller's identity holds no role",
+      "hint": "flz role bind <principal> <role> <namespace>",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "no_role_binding"]}
+      ]
+    },
+    "authz.permissive_auth_directory": {
+      "class": "invalid",
+      "message": "the auth directory {path} is writable by its group or by others, so no bootstrap token is written there; remove those permission bits",
+      "details": ["path"],
+      "reasons": [
+        {"tag": "permissive_auth_parent", "args": ["path"]}
+      ]
+    },
+    "authz.principal_not_bound": {
+      "class": "denied",
+      "message": "the call carries no verifiable identity",
+      "hint": "export FLEZHA_TOKEN=<token>",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "principal_not_bound"]}
+      ]
+    },
+    "authz.registry_unavailable": {
+      "class": "unavailable",
+      "message": "the token registry is not open yet; try again",
+      "details": []
+    },
+    "authz.role_insufficient": {
+      "class": "denied",
+      "message": "the caller's role does not allow this",
+      "hint": "flz auth whoami",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "role_insufficient"]}
+      ]
+    },
+    "authz.runner_token_expiry": {
+      "class": "invalid",
+      "message": "a runner credential cannot expire",
+      "hint": "flz token issue <principal> <namespace> runner --ttl never",
+      "details": [],
+      "reasons": [
+        {"tag": "runner_token_cannot_expire"}
+      ]
+    },
+    "authz.runner_token_system": {
+      "class": "invalid",
+      "message": "a runner credential cannot be issued in the _system namespace",
+      "details": [],
+      "reasons": [
+        {"tag": "runner_namespace_cannot_be_system"}
+      ]
+    },
+    "authz.token_ambiguous": {
+      "class": "invalid",
+      "message": "the id '{token}' matches more than one token; give more of it",
+      "hint": "flz token list",
+      "details": ["token"],
+      "reasons": [
+        {"tag": "token_ambiguous", "args": ["token"]}
+      ]
+    },
+    "authz.token_expired": {
+      "class": "denied",
+      "message": "the token has expired",
+      "hint": "flz token issue <principal> <namespace> <role>",
+      "details": []
+    },
+    "authz.token_malformed": {
+      "class": "invalid",
+      "message": "the token is not a Flezha token, which starts flzt_",
+      "details": []
+    },
+    "authz.token_not_found": {
+      "class": "not_found",
+      "message": "no token has the id '{token}'",
+      "hint": "flz token list",
+      "details": ["token"],
+      "reasons": [
+        {"tag": "token_not_found", "args": ["token"]}
+      ]
+    },
+    "authz.token_revoked": {
+      "class": "denied",
+      "message": "the token has been revoked",
+      "details": []
+    },
+    "authz.token_unknown": {
+      "class": "denied",
+      "message": "the token is not one this controller issued",
+      "details": []
+    },
+    "authz.unknown_action": {
+      "class": "internal",
+      "message": "the authorization policy knows no action for this call",
+      "details": [],
+      "reasons": [
+        {"tag": ["forbidden", "unknown_action"]}
+      ]
+    },
+    "authz.unknown_role": {
+      "class": "invalid",
+      "message": "'{role}' is not a role; the roles are viewer, app, ops, admin, runner, spawner and stopper",
+      "details": ["role"],
+      "reasons": [
+        {"tag": "unknown_role", "args": ["role"]}
+      ]
+    },
+    "boot.not_ready": {
+      "class": "unavailable",
+      "message": "the controller is not ready: its readiness is {verdict}, with {unmet} unmet",
+      "hint": "flz boot status",
+      "details": ["verdict", "unmet"],
+      "reasons": [
+        {"tag": "not_ready", "args": ["verdict", "unmet"]}
+      ]
+    },
+    "call.absorbed": {
+      "class": "conflict",
+      "message": "operator '{operator}' took the call's input without running it: it was a duplicate, or an input hook filtered it out, so no answer will come",
+      "details": ["operator"]
+    },
+    "call.busy": {
+      "class": "unavailable",
+      "message": "operator '{operator}' already owes answers to {pending_max} waiting callers; nothing was sent, try again later",
+      "hint": "raise FLEZHA_CALL_PENDING_MAX if the operator is meant to hold more waiting callers",
+      "details": ["operator", "pending_max"]
+    },
+    "call.callee_ended": {
+      "class": "unavailable",
+      "message": "operator '{operator}' ended ({status}) before it answered the call",
+      "details": ["operator", "status"]
+    },
+    "call.failed": {
+      "class": "unavailable",
+      "message": "operator '{operator}' dead-lettered the call's input as '{dlq_ref}': {error}",
+      "hint": "flz dlq list {operator}",
+      "details": ["operator", "dlq_ref", "error"]
+    },
+    "call.not_accepted": {
+      "class": "conflict",
+      "message": "operator '{operator}' runs once over one input and has already taken it, so it cannot take the call's input",
+      "details": ["operator"]
+    },
+    "call.target_unkeyed": {
+      "class": "invalid",
+      "message": "'{operator}' is a partition group; name the key whose member should take the input, or one of its members: {members}",
+      "hint": "pass --key <key>",
+      "details": ["operator", "members"],
+      "reasons": [
+        {"tag": "unkeyed", "args": ["operator", "members"]}
+      ]
+    },
+    "call.timeout": {
+      "class": "unavailable",
+      "message": "operator '{operator}' did not answer within {deadline_ms} ms; the input stays accepted and its turn still runs",
+      "details": ["operator", "deadline_ms"]
+    },
+    "call.unavailable": {
+      "class": "unavailable",
+      "message": "operator '{operator}' cannot answer the call: {reason}",
+      "details": ["operator", "reason"]
+    },
+    "cli.auth_dir_missing": {
+      "class": "not_found",
+      "message": "the auth directory {path} does not exist, so there is nothing to recover",
+      "details": ["path"]
+    },
+    "cli.entropy_unavailable": {
+      "class": "internal",
+      "message": "could not read OS entropy for a bootstrap token: {reason}",
+      "details": ["reason"]
+    },
+    "cli.flzvm_not_runnable": {
+      "class": "internal",
+      "message": "flz could not run {path}: {reason}",
+      "details": ["path", "reason"]
+    },
+    "cli.runner_check_failed": {
+      "class": "unreachable",
+      "message": "a runner on this host cannot reach a controller: {reason}",
+      "details": ["reason"]
+    },
+    "cli.write_failed": {
+      "class": "internal",
+      "message": "could not write {path}: {reason}",
+      "details": ["path", "reason"]
+    },
+    "commit.not_owner": {
+      "class": "conflict",
+      "message": "this controller does not own operator '{operator}', so its commit is refused",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "not_owner", "args": ["operator"]}
+      ]
+    },
+    "commit.oversized_handoff": {
+      "class": "invalid",
+      "message": "a tasklet's handoff of {size} bytes is over the {max}-byte limit",
+      "details": ["size", "max"],
+      "reasons": [
+        {"tag": "oversized_handoff", "args": ["size", "max"]}
+      ]
+    },
+    "commit.turn_not_parked": {
+      "class": "unavailable",
+      "message": "the failed turn could not be parked in the dead-letter queue: {reason}",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "turn_not_parked", "args": ["reason"]}
+      ]
+    },
+    "commit.record_not_durable": {
+      "class": "unavailable",
+      "message": "the record at seq {seq} of Cell '{cell}' did not become durable in time",
+      "details": ["cell", "seq"],
+      "reasons": [
+        {"tag": "record_not_durable", "args": ["cell", "seq"]}
+      ]
+    },
+    "controller.peer_unreachable": {
+      "class": "unavailable",
+      "message": "a peer controller node did not answer the call routed to it",
+      "details": [],
+      "reasons": [
+        {"tag": "routed_call_failed", "args": ["_", "_", "_"]}
+      ]
+    },
+    "controller.process_gone": {
+      "class": "unavailable",
+      "message": "the process serving this request is gone; try again",
+      "details": [],
+      "reasons": [
+        {"tag": "noproc"}
+      ]
+    },
+    "controller.shutting_down": {
+      "class": "unavailable",
+      "message": "the controller is shutting down",
+      "details": [],
+      "reasons": [
+        {"tag": "shutting_down"}
+      ]
+    },
+    "controller.stop_unconfirmed": {
+      "class": "internal",
+      "message": "the controller answered the stop without saying how it ended",
+      "details": ["marker"]
+    },
+    "controller.timeout": {
+      "class": "unavailable",
+      "message": "a part of the controller did not answer in time; try again",
+      "details": [],
+      "reasons": [
+        {"tag": "timeout"}
+      ]
+    },
+    "controller.unreachable": {
+      "class": "unreachable",
+      "message": "the controller could not be reached (its control socket is {socket}): it is not up yet or it stopped after it was reached, this shell's cookie (RELEASE_COOKIE, FLEZHA_COOKIE_FILE, FLEZHA_STATE_DIR) is not the controller's, or its node name (FLEZHA_NODE_NAME, FLEZHA_NODE_HOST) is not",
+      "hint": "flz controller start",
+      "details": ["socket"]
+    },
+    "dlq.bad_entry_ref": {
+      "class": "invalid",
+      "message": "'{entry}' is not an entry reference; write it as <operator>/<tasklet>/<entry-id>",
+      "hint": "flz dlq list",
+      "details": ["entry"],
+      "reasons": [
+        {"tag": "bad_entry_ref", "args": ["entry"]}
+      ]
+    },
+    "dlq.not_found": {
+      "class": "not_found",
+      "message": "no parked entry '{entry}'",
+      "hint": "flz dlq list",
+      "details": ["entry"],
+      "reasons": [
+        {"tag": "entry_not_found", "args": ["entry"]}
+      ]
+    },
+    "dlq.payload_not_replayable": {
+      "class": "conflict",
+      "message": "entry '{entry}' carries no payload bytes (an input between tasklets), so it cannot be replayed; show it or drop it",
+      "hint": "flz dlq drop {entry}",
+      "details": ["entry"],
+      "reasons": [
+        {"tag": "payload_not_replayable", "args": ["entry"]}
+      ]
+    },
+    "durability.sync_ship_failed": {
+      "class": "unavailable",
+      "message": "operator '{operator}' declares durable: remote, and shipping its state to the durability backend failed: {reason}",
+      "details": ["operator", "reason"],
+      "reasons": [
+        {"tag": "sync_ship_failed", "args": ["operator", "reason"]}
+      ]
+    },
+    "http.answer_invalid": {
+      "class": "invalid",
+      "message": "operator '{operator}' answered the request with something that is not an HTTP answer envelope: {reason}",
+      "details": ["operator", "reason"]
+    },
+    "http.body_timeout": {
+      "class": "invalid",
+      "message": "the client stopped sending the request body for {timeout_ms} ms",
+      "details": ["timeout_ms"]
+    },
+    "http.body_too_large": {
+      "class": "invalid",
+      "message": "the request body is larger than the limit of {limit} bytes",
+      "details": ["limit"]
+    },
+    "http.busy": {
+      "class": "unavailable",
+      "message": "operator '{operator}' already has {max_waiting} requests waiting for an answer; try again",
+      "details": ["operator", "max_waiting"]
+    },
+    "http.length_required": {
+      "class": "invalid",
+      "message": "a request body must carry a content-length: a body sent without one is refused before it is read",
+      "details": []
+    },
+    "http.listen_failed": {
+      "class": "unavailable",
+      "message": "the HTTP server of operator '{operator}' cannot listen on {address} port {port}: {reason}",
+      "details": ["operator", "address", "port", "reason"],
+      "reasons": [
+        {"tag": "http_listen_failed", "args": ["details"]}
+      ]
+    },
+    "http.streams_full": {
+      "class": "unavailable",
+      "message": "operator '{operator}' already has {max_streams} streams open; try again",
+      "details": ["operator", "max_streams"]
+    },
+    "http_push.exhausted": {
+      "class": "unavailable",
+      "message": "the output was not delivered to its HTTP endpoint: {reason}",
+      "details": ["reason"]
+    },
+    "http_push.rejected": {
+      "class": "invalid",
+      "message": "the HTTP endpoint refused the output with status {status}",
+      "details": ["status"]
+    },
+    "input.dead_lettered": {
+      "class": "unavailable",
+      "message": "an input of operator '{operator}' on channel '{channel}' was dead-lettered as '{entry}' after {attempts} attempt(s): {error}",
+      "hint": "flz dlq show {entry}",
+      "details": ["operator", "channel", "entry", "tasklet", "attempts", "error"]
+    },
+    "internal.uncatalogued": {
+      "class": "internal",
+      "message": "an unexpected failure: {reason}",
+      "details": ["reason"]
+    },
+    "listener.detached": {
+      "class": "conflict",
+      "message": "the listener on operator '{operator}' was disabled by another caller",
+      "details": ["operator"]
+    },
+    "listener.overrun": {
+      "class": "unavailable",
+      "message": "the listener on operator '{operator}' fell more than {bytes} bytes or {frames} frames behind and was ended",
+      "hint": "flz operator listen {operator} again, or raise FLEZHA_LISTENER_PENDING_BYTES",
+      "details": ["operator", "bytes", "frames"]
+    },
+    "namespace.already_exists": {
+      "class": "conflict",
+      "message": "namespace '{namespace}' already exists",
+      "hint": "flz namespace show {namespace}",
+      "details": ["namespace"],
+      "reasons": [
+        {"tag": "namespace_exists", "args": ["namespace"]}
+      ]
+    },
+    "namespace.invalid_name": {
+      "class": "invalid",
+      "message": "'{namespace}' is not a valid namespace name: a lowercase letter, then up to 62 lowercase letters, digits, '_' or '-'",
+      "details": ["namespace"],
+      "reasons": [
+        {"tag": "invalid_namespace_name", "args": ["namespace"]}
+      ]
+    },
+    "namespace.invalid_quota_value": {
+      "class": "invalid",
+      "message": "quota {field} must be a whole number of zero or more, got {value}",
+      "details": ["field", "value"],
+      "reasons": [
+        {"tag": "invalid_quota_value", "args": ["field", "value"]}
+      ]
+    },
+    "namespace.not_found": {
+      "class": "not_found",
+      "message": "namespace '{namespace}' does not exist",
+      "hint": "flz namespace list",
+      "details": ["namespace"],
+      "reasons": [
+        {"tag": "not_found", "at": ["authz.namespace_delete", "authz.namespace_show", "authz.namespace_set_quota"], "args": ["namespace"]}
+      ]
+    },
+    "namespace.not_running": {
+      "class": "unavailable",
+      "message": "no runner has connected to namespace '{namespace}', so it runs nothing yet",
+      "hint": "flz runner list --namespace {namespace}",
+      "details": ["namespace"],
+      "reasons": [
+        {"tag": "hub_down", "args": ["namespace"]}
+      ]
+    },
+    "namespace.recovering": {
+      "class": "unavailable",
+      "message": "the namespace's recovery did not finish in time; try again",
+      "hint": "flz boot status",
+      "details": [],
+      "reasons": [
+        {"tag": "recovery_timeout"}
+      ]
+    },
+    "namespace.system_undeletable": {
+      "class": "invalid",
+      "message": "the _system namespace cannot be deleted",
+      "details": [],
+      "reasons": [
+        {"tag": "cannot_delete_system_namespace"}
+      ]
+    },
+    "namespace.unknown_quota_field": {
+      "class": "invalid",
+      "message": "'{field}' is not a quota field; the fields are max_operators, max_cells_per_operator, max_mailbox_bytes_total, max_message_rate_per_second, max_state_bytes and max_runners",
+      "details": ["field"],
+      "reasons": [
+        {"tag": "unknown_quota_field", "args": ["field"]}
+      ]
+    },
+    "observability.disabled": {
+      "class": "unavailable",
+      "message": "observability is disabled",
+      "details": [],
+      "reasons": [
+        {"tag": "observability_disabled"}
+      ]
+    },
+    "observability.missing_source": {
+      "class": "invalid",
+      "message": "the query names no source",
+      "hint": "flz observe sources",
+      "details": [],
+      "reasons": [
+        {"tag": "missing_source"}
+      ]
+    },
+    "observability.pubsub_disabled": {
+      "class": "unavailable",
+      "message": "the PubSub sink is disabled, so no source can be tailed; enable :observability, :pubsub_sink_enabled",
+      "details": [],
+      "reasons": [
+        {"tag": "pubsub_sink_disabled"}
+      ]
+    },
+    "operator.already_running": {
+      "class": "conflict",
+      "message": "operator '{operator}' is already running",
+      "hint": "flz operator list",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "id_in_use", "args": ["operator"]}
+      ]
+    },
+    "operator.busy": {
+      "class": "conflict",
+      "message": "the operator is busy moving to another runner; try again",
+      "details": [],
+      "reasons": [
+        {"tag": "busy"}
+      ]
+    },
+    "operator.channel_without_text": {
+      "class": "invalid",
+      "message": "--channel names the entry channel of a first message, and no --text was given",
+      "details": [],
+      "reasons": [
+        {"tag": "channel_without_text"}
+      ]
+    },
+    "operator.factory_run_ambiguous": {
+      "class": "conflict",
+      "message": "factory '{factory}' in namespace '{namespace}' is announced as both flow and steps, and neither is established; serve it from runners that agree on how it runs",
+      "details": ["namespace", "factory"],
+      "reasons": [
+        {"tag": "factory_run_ambiguous", "args": ["namespace", "factory"]}
+      ]
+    },
+    "operator.factory_run_undeclared": {
+      "class": "unavailable",
+      "message": "factory '{factory}' in namespace '{namespace}' is served only by runners that announce no run for it, or a run that is neither flow nor steps, and such a runner is never placed on",
+      "details": ["namespace", "factory"],
+      "reasons": [
+        {"tag": "factory_run_undeclared", "args": ["namespace", "factory"]}
+      ]
+    },
+    "operator.factory_run_unserved": {
+      "class": "unavailable",
+      "message": "factory '{factory}' in namespace '{namespace}' is established as {run}, and every runner serving it announces the other run",
+      "details": ["namespace", "factory", "run"],
+      "reasons": [
+        {"tag": "factory_run_unserved", "args": ["namespace", "factory", "run"]}
+      ]
+    },
+    "operator.factory_language_ambiguous": {
+      "class": "conflict",
+      "message": "factory '{factory}' in namespace '{namespace}' is served in more than one SDK language and none is established; run one language's runners, or clear the factory's durable state",
+      "details": ["namespace", "factory"],
+      "reasons": [
+        {"tag": "factory_language_ambiguous", "args": ["namespace", "factory"]}
+      ]
+    },
+    "operator.factory_language_undeclared": {
+      "class": "unavailable",
+      "message": "factory '{factory}' in namespace '{namespace}' is served only by runners that declare no SDK language, and such a runner is never placed on",
+      "details": ["namespace", "factory"],
+      "reasons": [
+        {"tag": "factory_language_undeclared", "args": ["namespace", "factory"]}
+      ]
+    },
+    "operator.factory_language_unserved": {
+      "class": "unavailable",
+      "message": "factory '{factory}' in namespace '{namespace}' is established in SDK language {language}, and no connected runner of that language serves it; start one, or clear the factory's durable state",
+      "details": ["namespace", "factory", "language"],
+      "reasons": [
+        {"tag": "factory_language_unserved", "args": ["namespace", "factory", "language"]}
+      ]
+    },
+    "operator.factory_mismatch": {
+      "class": "conflict",
+      "message": "'{operator}' in namespace '{namespace}' is an operator of factory '{actual}', not of '{factory}', so a call to factory '{factory}' cannot reach it",
+      "details": ["namespace", "operator", "factory", "actual"],
+      "reasons": [
+        {"tag": "factory_mismatch", "args": ["namespace", "operator", "factory", "actual"]}
+      ]
+    },
+    "operator.factory_not_steps": {
+      "class": "invalid",
+      "message": "factory '{factory}' is a flow operator, and only a steps one can be spawned or scheduled",
+      "details": ["factory", "namespace"],
+      "reasons": [
+        {"tag": ["factory_run_mismatch", "steps"], "args": ["namespace", "factory", "_"]},
+        {"tag": "unschedulable_run", "args": ["factory"]}
+      ]
+    },
+    "operator.factory_not_flow": {
+      "class": "invalid",
+      "message": "factory '{factory}' is a steps operator, and only a flow one is started here",
+      "details": ["factory", "namespace"],
+      "reasons": [
+        {"tag": ["factory_run_mismatch", "flow"], "args": ["namespace", "factory", "_"]}
+      ]
+    },
+    "operator.factory_unknown": {
+      "class": "not_found",
+      "message": "no runner in namespace '{namespace}' serves factory '{factory}'",
+      "hint": "flz runner list --namespace {namespace}",
+      "details": ["namespace", "factory"],
+      "reasons": [
+        {"tag": "factory_unknown", "args": ["namespace", "factory"]}
+      ]
+    },
+    "operator.first_message_not_text": {
+      "class": "invalid",
+      "message": "a first message and its channel must be text",
+      "details": [],
+      "reasons": [
+        {"tag": "first_message_not_text"}
+      ]
+    },
+    "operator.group_base_taken": {
+      "class": "conflict",
+      "message": "'{operator}' names a partition group of {members} live members; start it with --partitions {partitions} to converge it, or stop the group first",
+      "details": ["operator", "members", "partitions"],
+      "reasons": [
+        {"tag": "group_base_claim", "args": ["operator", "members", "partitions"]}
+      ]
+    },
+    "operator.group_id_too_long": {
+      "class": "invalid",
+      "message": "group id '{operator}' is too long for {partitions} partitions: the member suffix leaves at most {max} bytes for it",
+      "details": ["operator", "partitions", "max"],
+      "reasons": [
+        {"tag": "group_id_too_long", "args": ["operator", "partitions", "max"]}
+      ]
+    },
+    "operator.group_not_found": {
+      "class": "not_found",
+      "message": "no partition group '{group}' in namespace '{namespace}'",
+      "hint": "flz operator list --namespace {namespace}",
+      "details": ["namespace", "group"],
+      "reasons": [
+        {"tag": "group_not_found", "args": ["namespace", "group"]}
+      ]
+    },
+    "operator.group_partition_mismatch": {
+      "class": "conflict",
+      "message": "group '{group}' cannot converge to {partitions} partitions: its live member '{member}' declares {declared}, and a start never moves Cell state",
+      "hint": "flz operator scale {group} {partitions}",
+      "details": ["group", "partitions", "member", "declared"],
+      "reasons": [
+        {"tag": "group_partition_mismatch", "args": ["group", "partitions", "member", "declared"]}
+      ]
+    },
+    "operator.group_stop_partial": {
+      "class": "unavailable",
+      "message": "partition group '{group}' did not stop completely: {failed} did not stop",
+      "details": ["group", "failed"],
+      "reasons": [
+        {"tag": "group_stop_partial", "args": ["group", "failed"]}
+      ]
+    },
+    "operator.id_too_long": {
+      "class": "invalid",
+      "message": "operator id '{operator}' is longer than {limit} bytes",
+      "details": ["operator", "limit"],
+      "reasons": [
+        {"tag": "id_too_long", "args": ["operator", "limit"]}
+      ]
+    },
+    "operator.input_refused": {
+      "class": "unavailable",
+      "message": "operator '{operator}' refused the input because its durable append failed",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "input_refused", "args": ["operator"]}
+      ]
+    },
+    "operator.iteration_not_committed": {
+      "class": "invalid",
+      "message": "iteration {iteration} has not committed, so there is no boundary to rewind to there",
+      "details": ["iteration", "committed"],
+      "reasons": [
+        {"tag": "uncommitted_iteration", "args": ["iteration", "committed"]}
+      ]
+    },
+    "operator.member_unreadable": {
+      "class": "unavailable",
+      "message": "partition member '{member}' could not be read to rescale from",
+      "details": ["member", "reason"],
+      "reasons": [
+        {"tag": "member_unreadable", "args": ["member", "reason"]}
+      ]
+    },
+    "operator.missing_fields": {
+      "class": "invalid",
+      "message": "an operator start needs {fields}",
+      "details": ["fields"],
+      "reasons": [
+        {"tag": "missing_fields", "args": ["fields"]}
+      ]
+    },
+    "operator.no_free_id": {
+      "class": "conflict",
+      "message": "no free operator id was found for factory '{factory}' in {draws} draws",
+      "hint": "flz operator start {factory} --id <id>",
+      "details": ["factory", "draws"],
+      "reasons": [
+        {"tag": "no_free_id", "args": ["factory", "draws"]}
+      ]
+    },
+    "operator.no_runner": {
+      "class": "unavailable",
+      "message": "the operator has no runner bound to it yet",
+      "details": [],
+      "reasons": [
+        {"tag": "no_runner"}
+      ]
+    },
+    "operator.no_runners": {
+      "class": "unavailable",
+      "message": "no runner is connected in namespace '{namespace}'",
+      "hint": "flz runner list --namespace {namespace}",
+      "details": ["namespace"],
+      "reasons": [
+        {"tag": "no_runners", "args": ["namespace"]}
+      ]
+    },
+    "operator.not_accepting_input": {
+      "class": "unavailable",
+      "message": "operator '{operator}' is not ready to accept input yet",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "not_accepting_input", "args": ["operator"]}
+      ]
+    },
+    "operator.not_found": {
+      "class": "not_found",
+      "message": "operator '{operator}' is not running in namespace '{namespace}'",
+      "hint": "flz operator list --namespace {namespace}",
+      "details": ["namespace", "operator"],
+      "reasons": [
+        {"tag": "operator_not_found", "args": ["namespace", "operator"]}
+      ]
+    },
+    "operator.not_running": {
+      "class": "unavailable",
+      "message": "operator '{operator}' is not running; start it first",
+      "hint": "flz operator list",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "operator_not_running", "args": ["operator"]}
+      ]
+    },
+    "operator.outside_retention": {
+      "class": "invalid",
+      "message": "seq {target} of Cell '{cell}' is older than its retention window; the earliest point kept is seq {earliest}",
+      "details": ["cell", "target", "earliest"],
+      "reasons": [
+        {"tag": "outside_retention", "args": ["cell", "target", "earliest"]}
+      ]
+    },
+    "operator.partitioned_first_message": {
+      "class": "invalid",
+      "message": "a partitioned start carries no first message, because a group's message reaches its member by key; send it through a keyed forward, or to a member id such as '{member}' once the group runs",
+      "details": ["member"],
+      "reasons": [
+        {"tag": "partitioned_first_message", "args": ["member"]}
+      ]
+    },
+    "operator.partitions_out_of_range": {
+      "class": "invalid",
+      "message": "partitions must be between 2 and {max}, one per key group; got {partitions}",
+      "details": ["partitions", "max"],
+      "reasons": [
+        {"tag": "partitions_out_of_range", "args": ["partitions", "max"]}
+      ]
+    },
+    "operator.replay_steps": {
+      "class": "invalid",
+      "message": "'{cell}' is a Cell of a steps operator, whose baseline is a committed iteration across every Cell rather than one Cell's WAL seq, so it cannot be replayed; take the loop back with a rewind",
+      "hint": "flz operator rewind <operator> --to-iteration <n>",
+      "details": ["cell"],
+      "reasons": [
+        {"tag": "steps_cell", "args": ["cell"]}
+      ]
+    },
+    "operator.rescale_id_held": {
+      "class": "unavailable",
+      "message": "the rescale stopped before anything moved: '{member}' still holds its id {timeout_ms} ms after it was stopped; retry once it has gone",
+      "details": ["member", "timeout_ms"],
+      "reasons": [
+        {"tag": "member_id_held", "args": ["member", "timeout_ms"]}
+      ]
+    },
+    "operator.rescale_move_failed": {
+      "class": "internal",
+      "message": "the rescale stopped: a Cell move failed, so the group is stopped with no member started; run the scale again to finish the remaining moves",
+      "details": ["source", "destination", "reason"],
+      "reasons": [
+        {"tag": "cell_move_failed", "args": ["source", "destination", "reason"]}
+      ]
+    },
+    "operator.rescale_parked_entries": {
+      "class": "conflict",
+      "message": "the group holds parked DLQ entries ({entries}); replay or drop them before a rescale",
+      "hint": "flz dlq list",
+      "details": ["entries"],
+      "reasons": [
+        {"tag": "parked_entries", "args": ["entries"]}
+      ]
+    },
+    "operator.remote_without_backend": {
+      "class": "unavailable",
+      "message": "factory '{factory}' declares durable: remote, and this controller has no durability backend; set FLEZHA_DURABILITY_BACKEND, or declare durable: local",
+      "details": ["factory"],
+      "reasons": [
+        {"tag": "remote_without_backend", "args": ["factory"]}
+      ]
+    },
+    "operator.rescale_quiesce_timeout": {
+      "class": "unavailable",
+      "message": "the rescale stopped before anything moved: '{member}' has not consumed its input log within the timeout; retry with a longer timeout, or let a checkpoint or a pass commit advance it",
+      "details": ["member", "run", "watermark", "last_offset"],
+      "reasons": [
+        {"tag": "quiesce_timeout", "args": ["member", "run", "progress"]}
+      ]
+    },
+    "operator.rescale_running": {
+      "class": "conflict",
+      "message": "a rescale of '{group}' in namespace '{namespace}' is already running; wait for it to finish",
+      "details": ["namespace", "group"],
+      "reasons": [
+        {"tag": "rescale_running", "args": ["namespace", "group"]}
+      ]
+    },
+    "operator.rewind_uncovered": {
+      "class": "conflict",
+      "message": "a rewind to iteration {iteration} would unwind output on {channels}, written by a tasklet that declares no compensate hook, so it is refused",
+      "details": ["iteration", "channels"],
+      "reasons": [
+        {"tag": "uncovered", "args": ["iteration", "channels"]}
+      ]
+    },
+    "operator.start_failed": {
+      "class": "internal",
+      "message": "operator '{operator}' did not start; the controller's log names the cause",
+      "details": ["operator", "reason"],
+      "reasons": [
+        {"tag": "start_failed", "args": ["operator", "reason"]}
+      ]
+    },
+    "operator.state_claimed": {
+      "class": "conflict",
+      "message": "the durable state of '{operator}' belongs to namespace '{owner}'",
+      "details": ["operator", "owner"],
+      "reasons": [
+        {"tag": "namespace_conflict", "args": ["operator", "owner"]}
+      ]
+    },
+    "operator.stop_failed": {
+      "class": "internal",
+      "message": "operator '{operator}' did not stop: its {step} step failed; the controller's log names the cause",
+      "details": ["operator", "step", "reason"],
+      "reasons": [
+        {"tag": "stop_failed", "args": ["operator", "step", "reason"]}
+      ]
+    },
+    "operator.stop_timeout": {
+      "class": "unavailable",
+      "message": "operator '{operator}' did not finish stopping in time; the steps {skipped} were skipped",
+      "details": ["operator", "skipped"],
+      "reasons": [
+        {"tag": "stop_timeout", "args": ["operator", "skipped"]}
+      ]
+    },
+    "operator.unknown_fields": {
+      "class": "invalid",
+      "message": "an operator start does not read {fields}",
+      "details": ["fields"],
+      "reasons": [
+        {"tag": "unknown_fields", "args": ["fields"]}
+      ]
+    },
+    "operator.unknown_opts": {
+      "class": "invalid",
+      "message": "the operator options {opts} are not ones Flezha reads",
+      "details": ["opts"],
+      "reasons": [
+        {"tag": "unknown_opts", "args": ["opts"]}
+      ]
+    },
+    "operator.unpartitioned_running": {
+      "class": "conflict",
+      "message": "'{operator}' is already running as an unpartitioned operator, which a partitioned start cannot converge; stop it first or choose another group id",
+      "hint": "flz operator stop {operator}",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "unpartitioned_running", "args": ["operator"]}
+      ]
+    },
+    "operator.unresponsive": {
+      "class": "unavailable",
+      "message": "the operator did not answer; try again",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "overwatch_unavailable", "args": ["reason"]}
+      ]
+    },
+    "part.no_sink": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' of operator '{operator}' sent a part, but its output channel '{channel}' has no sink",
+      "hint": "declare a sink on the tasklet's channel",
+      "details": ["tasklet", "operator", "channel"]
+    },
+    "part.outside_invocation": {
+      "class": "invalid",
+      "message": "a part was sent through a context whose invocation has already returned",
+      "details": ["tasklet"]
+    },
+    "plugin.ack_needs_correlation": {
+      "class": "invalid",
+      "message": "sink_ack_mode required needs a sink_template containing the {placeholder} placeholder, because a frame the upstream cannot correlate cannot be acknowledged",
+      "details": ["placeholder"],
+      "reasons": [
+        {"tag": "ack_needs_correlation", "args": ["placeholder"]}
+      ]
+    },
+    "plugin.activation_failed": {
+      "class": "unavailable",
+      "message": "the plugin was prepared but could not start; the controller's log names the cause",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "activation_failed", "args": ["reason"]}
+      ]
+    },
+    "plugin.already_attached": {
+      "class": "conflict",
+      "message": "plugin '{plugin}' is already attached to this operator",
+      "hint": "flz plugin list",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_already_subscribed", "args": ["plugin"]}
+      ]
+    },
+    "plugin.already_enabled": {
+      "class": "conflict",
+      "message": "plugin '{plugin}' is already enabled",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "already_enabled", "args": ["plugin"]}
+      ]
+    },
+    "plugin.app_callback": {
+      "class": "invalid",
+      "message": "application {application} depends on flezha and declares an application callback; a plugin's processes are its providers' declared workers",
+      "details": ["application"],
+      "reasons": [
+        {"tag": "app_callback", "args": ["application"]}
+      ]
+    },
+    "plugin.channel_spelled_twice": {
+      "class": "invalid",
+      "message": "a {provider} plugin was given channel together with {options}; channel already names both directions, so write it alone or write the pair instead",
+      "details": ["provider", "options"],
+      "reasons": [
+        {"tag": "channel_spelled_twice", "args": ["provider", "options"]}
+      ]
+    },
+    "plugin.channel_unused": {
+      "class": "invalid",
+      "message": "option '{option}' names a channel this {provider} plugin never uses: it neither feeds the operator on it nor reads it through an on_input or on_output hook",
+      "details": ["provider", "option", "job"],
+      "reasons": [
+        {"tag": "channel_unused", "args": ["provider", "option", "job"]}
+      ]
+    },
+    "plugin.channel_written_twice": {
+      "class": "invalid",
+      "message": "payload_metadata names channel '{metadata_channel}' and a channel option names '{channel}'; write one of the two",
+      "details": ["metadata_channel", "channel"],
+      "reasons": [
+        {"tag": "channel_written_twice", "args": ["metadata_channel", "channel"]}
+      ]
+    },
+    "plugin.digest_mismatch": {
+      "class": "invalid",
+      "message": "the archive from {source} has SHA-256 {actual}, not the pinned {expected}",
+      "details": ["source", "expected", "actual"],
+      "reasons": [
+        {"tag": "digest_mismatch", "args": ["source", "expected", "actual"]}
+      ]
+    },
+    "plugin.duplicate_id": {
+      "class": "conflict",
+      "message": "the archives {files} in the plugin root all declare package '{plugin}', so none of them is loaded",
+      "hint": "flz plugin uninstall {plugin}",
+      "details": ["plugin", "files"],
+      "reasons": [
+        {"tag": "duplicate_id", "args": ["plugin", "files"]}
+      ]
+    },
+    "plugin.enable_failed": {
+      "class": "unavailable",
+      "message": "plugin '{plugin}' could not be enabled in namespace '{namespace}': its namespace's hub did not start it",
+      "details": ["plugin", "namespace"],
+      "reasons": [
+        {"tag": "plugin_enable_failed", "args": ["plugin", "namespace"]}
+      ]
+    },
+    "plugin.entry_channel_required": {
+      "class": "invalid",
+      "message": "a {provider} plugin needs an entry channel: write channel or channel_in",
+      "details": ["provider"],
+      "reasons": [
+        {"tag": "entry_channel_required", "args": ["provider"]}
+      ]
+    },
+    "plugin.entry_channel_set": {
+      "class": "invalid",
+      "message": "a {provider} plugin injects on exactly one channel, and option '{option}' names several",
+      "details": ["provider", "option"],
+      "reasons": [
+        {"tag": "entry_channel_set", "args": ["provider", "option"]}
+      ]
+    },
+    "plugin.fetch_failed": {
+      "class": "unavailable",
+      "message": "the package could not be fetched from {source}: {reason}",
+      "details": ["source", "reason"],
+      "reasons": [
+        {"tag": "fetch_failed", "args": ["source", "reason"]}
+      ]
+    },
+    "plugin.fields_missing": {
+      "class": "invalid",
+      "message": "a plugin needs {fields}",
+      "details": ["fields"],
+      "reasons": [
+        {"tag": "plugin_fields_missing", "args": ["fields"]}
+      ]
+    },
+    "plugin.fields_unknown": {
+      "class": "invalid",
+      "message": "a plugin does not read {fields}",
+      "details": ["fields"],
+      "reasons": [
+        {"tag": "plugin_fields_unknown", "args": ["fields"]}
+      ]
+    },
+    "plugin.file_commit_unsupported": {
+      "class": "invalid",
+      "message": "file plugin path '{path}' is an S3 object, which is never appended to, so commit {commit} cannot grow it; set commit rename",
+      "details": ["path", "commit"],
+      "reasons": [
+        {"tag": "file_commit_unsupported", "args": ["path", "commit"]}
+      ]
+    },
+    "plugin.file_directory_missing": {
+      "class": "not_found",
+      "message": "file plugin path '{path}': the directory '{directory}' does not exist",
+      "details": ["path", "directory"],
+      "reasons": [
+        {"tag": "file_directory_missing", "args": ["path", "directory"]}
+      ]
+    },
+    "plugin.file_directory_unmakeable": {
+      "class": "unavailable",
+      "message": "the directory '{path}' that commit rename writes into cannot be made",
+      "details": ["path", "reason"],
+      "reasons": [
+        {"tag": "file_directory_unmakeable", "args": ["path", "reason"]}
+      ]
+    },
+    "plugin.file_path_not_directory": {
+      "class": "invalid",
+      "message": "file plugin path '{path}' is not a directory, and commit rename writes its parts into one",
+      "details": ["path"],
+      "reasons": [
+        {"tag": "file_path_not_directory", "args": ["path"]}
+      ]
+    },
+    "plugin.file_path_outside_root": {
+      "class": "invalid",
+      "message": "file plugin path '{path}' resolves outside the root '{root}'",
+      "details": ["path", "root"],
+      "reasons": [
+        {"tag": "file_path_outside_root", "args": ["path", "root"]}
+      ]
+    },
+    "plugin.file_path_too_many_links": {
+      "class": "invalid",
+      "message": "file plugin path '{path}' crosses more than {max} symbolic links",
+      "details": ["path", "max"],
+      "reasons": [
+        {"tag": "file_path_too_many_links", "args": ["path", "max"]}
+      ]
+    },
+    "plugin.file_path_unreadable": {
+      "class": "unavailable",
+      "message": "file plugin path '{path}' cannot be read",
+      "details": ["path", "reason"],
+      "reasons": [
+        {"tag": "file_path_unreadable", "args": ["path", "reason"]}
+      ]
+    },
+    "plugin.file_root_invalid": {
+      "class": "unavailable",
+      "message": "the file plugin root '{root}' names no bucket, or climbs out of it",
+      "details": ["root"],
+      "reasons": [
+        {"tag": "file_root_invalid", "args": ["root"]}
+      ]
+    },
+    "plugin.file_root_missing": {
+      "class": "unavailable",
+      "message": "the file plugin root folder '{root}' does not exist or is not a directory",
+      "details": ["root"],
+      "reasons": [
+        {"tag": "file_root_missing", "args": ["root"]}
+      ]
+    },
+    "plugin.file_root_overlaps_durability": {
+      "class": "conflict",
+      "message": "the file plugin root '{root}' overlaps the durability tier's objects in bucket '{bucket}': the prefixes {tier_prefix} and {prefix} contain one another",
+      "details": ["root", "bucket", "tier_prefix", "prefix"],
+      "reasons": [
+        {"tag": "file_root_overlaps_durability", "args": ["root", "bucket", "tier_prefix", "prefix"]}
+      ]
+    },
+    "plugin.file_root_setting_missing": {
+      "class": "unavailable",
+      "message": "the file plugin root '{root}' needs {setting}, which is not set",
+      "details": ["root", "setting"],
+      "reasons": [
+        {"tag": "file_root_setting_missing", "args": ["root", "setting"]}
+      ]
+    },
+    "plugin.forward_across_namespaces": {
+      "class": "denied",
+      "message": "target_operator_id '{target}' runs in namespace '{target_namespace}', across the namespace boundary",
+      "details": ["target", "target_namespace"],
+      "reasons": [
+        {"tag": "forward_across_namespaces", "args": ["target", "target_namespace"]}
+      ]
+    },
+    "plugin.forward_to_self": {
+      "class": "invalid",
+      "message": "target_operator_id '{target}' is the operator the plugin is attached to",
+      "details": ["target"],
+      "reasons": [
+        {"tag": "forward_to_self", "args": ["target"]}
+      ]
+    },
+    "plugin.group_disable_partial": {
+      "class": "unavailable",
+      "message": "the plugin could not be disabled on {failed}",
+      "details": ["failed"],
+      "reasons": [
+        {"tag": "group_disable_partial", "args": ["failed"]}
+      ]
+    },
+    "plugin.group_enable_partial": {
+      "class": "unavailable",
+      "message": "the plugin was enabled on {enabled} of {total} partitions and failed on {failed}",
+      "details": ["enabled", "total", "failed"],
+      "reasons": [
+        {"tag": "group_enable_partial", "args": ["enabled", "total", "failed"]}
+      ]
+    },
+    "plugin.headers_invalid": {
+      "class": "invalid",
+      "message": "option '{option}' must be a JSON object mapping header names to text or number values, without a header the plugin sets itself or one a request cannot carry",
+      "details": ["provider", "option", "header"],
+      "reasons": [
+        {"tag": "headers_invalid", "args": ["provider", "option"]},
+        {"tag": "headers_invalid", "args": ["provider", "option", "header"]}
+      ]
+    },
+    "plugin.help_failed": {
+      "class": "internal",
+      "message": "the help of plugin provider '{provider}' failed to render",
+      "details": ["provider", "reason"],
+      "reasons": [
+        {"tag": "plugin_help_failed", "args": ["provider", "reason"]}
+      ]
+    },
+    "plugin.hook_invalid": {
+      "class": "invalid",
+      "message": "hook {hook} is not a name, a [name, opts] pair, or an object with a name and an opts object",
+      "details": ["hook"],
+      "reasons": [
+        {"tag": ["invalid_hook", "unrecognised_shape"], "args": ["hook"]},
+        {"tag": ["invalid_hook", "opts_not_a_map"], "args": ["hook"]}
+      ]
+    },
+    "plugin.hook_key_missing": {
+      "class": "invalid",
+      "message": "an on_message hook needs its key option",
+      "details": [],
+      "reasons": [
+        {"tag": ["invalid_hook_opts", "missing_key"]}
+      ]
+    },
+    "plugin.hook_key_taken": {
+      "class": "conflict",
+      "message": "another plugin already answers key '{key}' on hook '{hook}'",
+      "details": ["hook", "key"],
+      "reasons": [
+        {"tag": "key_conflict", "args": ["hook", "key"]}
+      ]
+    },
+    "plugin.hook_not_implemented": {
+      "class": "invalid",
+      "message": "the plugin's provider does not implement hook '{hook}'",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["hook"],
+      "reasons": [
+        {"tag": "missing_callback", "args": ["hook"]}
+      ]
+    },
+    "plugin.hook_option_invalid": {
+      "class": "invalid",
+      "message": "hook option '{option}' does not accept the value {value}",
+      "details": ["option", "value"],
+      "reasons": [
+        {"tag": "invalid_hook_opts", "args": ["option", "value"]}
+      ]
+    },
+    "plugin.hook_options_not_object": {
+      "class": "invalid",
+      "message": "a hook's options must be an object of names and values",
+      "details": [],
+      "reasons": [
+        {"tag": ["invalid_hook_opts", "not_a_keyword"]}
+      ]
+    },
+    "plugin.hook_position_refused": {
+      "class": "invalid",
+      "message": "this hook does not take a position; only a transform or fold hook does",
+      "details": [],
+      "reasons": [
+        {"tag": "position_not_applicable"}
+      ]
+    },
+    "plugin.hooks_missing": {
+      "class": "invalid",
+      "message": "a plugin needs a list of at least one hook",
+      "hint": "flz plugin help <provider_id>",
+      "details": [],
+      "reasons": [
+        {"tag": ["invalid_hook", "empty"]},
+        {"tag": ["invalid_hook", "not_a_list"]}
+      ]
+    },
+    "plugin.id_taken": {
+      "class": "conflict",
+      "message": "plugin '{plugin}' is already enabled in namespace '{namespace}'",
+      "hint": "flz plugin list --namespace {namespace}",
+      "details": ["plugin", "namespace"],
+      "reasons": [
+        {"tag": "plugin_id_taken", "args": ["plugin", "namespace"]}
+      ]
+    },
+    "plugin.init_after_start": {
+      "class": "invalid",
+      "message": "an on_operator_init plugin can only be attached when its operator starts",
+      "hint": "flz operator start <factory> --plugins '<json-array>'",
+      "details": [],
+      "reasons": [
+        {"tag": "init_plugin_after_start"}
+      ]
+    },
+    "plugin.invalid_regex": {
+      "class": "invalid",
+      "message": "option 'regex_pattern' is not a valid regular expression",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "invalid_regex", "args": ["reason"]}
+      ]
+    },
+    "plugin.library_conflict": {
+      "class": "conflict",
+      "message": "the package bundles {application} {version}, and {holder} already holds {application} {loaded_version}; a controller holds one version of each library",
+      "hint": "pin {application} to {loaded_version} in the plugin project and package it again",
+      "details": ["application", "version", "loaded_version", "holder"],
+      "reasons": [
+        {"tag": "library_conflict", "args": ["application", "version", "loaded_version", "holder"]}
+      ]
+    },
+    "plugin.list_declared": {
+      "class": "conflict",
+      "message": "this node declares its plugins in {variable}, so install and uninstall are refused; change the list and restart the controller",
+      "details": ["variable"],
+      "reasons": [
+        {"tag": "list_declared", "args": ["variable"]}
+      ]
+    },
+    "plugin.list_not_declared": {
+      "class": "invalid",
+      "message": "{variable} is not set, so there is no plugin list to sync",
+      "details": ["variable"],
+      "reasons": [
+        {"tag": "list_not_declared", "args": ["variable"]}
+      ]
+    },
+    "plugin.load_failed": {
+      "class": "internal",
+      "message": "the package could not be loaded: {what} failed ({reason})",
+      "details": ["what", "reason"],
+      "reasons": [
+        {"tag": "load_failed", "args": ["what", "reason"]}
+      ]
+    },
+    "plugin.module_conflict": {
+      "class": "conflict",
+      "message": "the package's module {module} is already held by {holder}",
+      "details": ["module", "holder"],
+      "reasons": [
+        {"tag": "module_conflict", "args": ["module", "holder"]}
+      ]
+    },
+    "plugin.native_code": {
+      "class": "invalid",
+      "message": "the package carries native code ({entry}); a plugin package holds only BEAM code",
+      "details": ["entry"],
+      "reasons": [
+        {"tag": "native_code", "args": ["entry"]}
+      ]
+    },
+    "plugin.not_bindable": {
+      "class": "invalid",
+      "message": "plugin '{plugin}' is a controller plugin, which is bound to no operator",
+      "hint": "flz plugin update <name> --hook <hook>",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_not_bindable", "args": ["plugin"]}
+      ]
+    },
+    "plugin.not_found": {
+      "class": "not_found",
+      "message": "plugin '{plugin}' is not enabled",
+      "hint": "flz plugin list",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_not_found", "args": ["plugin"]}
+      ]
+    },
+    "plugin.not_bound": {
+      "class": "not_found",
+      "message": "operator '{operator}' is not bound to plugin '{plugin}'",
+      "hint": "flz plugin list",
+      "details": ["plugin", "operator"],
+      "reasons": [
+        {"tag": "plugin_not_bound", "args": ["plugin", "operator"]}
+      ]
+    },
+    "plugin.not_installed": {
+      "class": "not_found",
+      "message": "plugin '{plugin}' is not installed",
+      "hint": "flz plugin list --installed",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_not_installed", "args": ["plugin"]}
+      ]
+    },
+    "plugin.not_running": {
+      "class": "unavailable",
+      "message": "plugin '{plugin}' runs as one copy in the cluster, and no copy of it is running yet",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_not_running", "args": ["plugin"]}
+      ]
+    },
+    "plugin.not_shareable": {
+      "class": "conflict",
+      "message": "plugin '{plugin}' cannot be shared, and operator '{operator}' is already bound to it",
+      "hint": "enable another plugin of the same provider for this operator",
+      "details": ["plugin", "operator"],
+      "reasons": [
+        {"tag": "plugin_not_shareable", "args": ["plugin", "operator"]}
+      ]
+    },
+    "plugin.operator_not_declared": {
+      "class": "not_found",
+      "message": "the plugin's operator is not declared in its namespace, so nothing records the plugin",
+      "details": [],
+      "reasons": [
+        {"tag": "operator_not_declared"}
+      ]
+    },
+    "plugin.option_above_maximum": {
+      "class": "invalid",
+      "message": "option '{option}' is {value}, above its maximum of {max}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["option", "value", "max"],
+      "reasons": [
+        {"tag": "option_above_maximum", "args": ["option", "value", "max"]}
+      ]
+    },
+    "plugin.option_below_minimum": {
+      "class": "invalid",
+      "message": "option '{option}' is {value}, below its minimum of {min}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["option", "value", "min"],
+      "reasons": [
+        {"tag": "option_below_minimum", "args": ["option", "value", "min"]}
+      ]
+    },
+    "plugin.option_invalid": {
+      "class": "invalid",
+      "message": "option '{option}' does not accept the value {value}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["option", "value"],
+      "reasons": [
+        {"tag": "invalid_option_value", "args": ["option", "value"]}
+      ]
+    },
+    "plugin.option_requires": {
+      "class": "invalid",
+      "message": "option '{option}' needs option '{required}' as well",
+      "details": ["option", "required"],
+      "reasons": [
+        {"tag": "option_requires", "args": ["option", "required"]}
+      ]
+    },
+    "plugin.options_exclusive": {
+      "class": "invalid",
+      "message": "options '{option}' and '{other}' cannot be set together",
+      "details": ["option", "other"],
+      "reasons": [
+        {"tag": "options_exclusive", "args": ["option", "other"]}
+      ]
+    },
+    "plugin.options_required": {
+      "class": "invalid",
+      "message": "a {provider} plugin needs the option {options}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["provider", "options"],
+      "reasons": [
+        {"tag": "options_required", "args": ["provider", "options"]}
+      ]
+    },
+    "plugin.package_invalid": {
+      "class": "invalid",
+      "message": "the plugin package is refused: {problem}",
+      "hint": "package it again with mix flezha.plugin.package",
+      "details": ["problem"],
+      "reasons": [
+        {"tag": "package_invalid", "args": ["problem", "found"]}
+      ]
+    },
+    "plugin.partition_placeholder_unfilled": {
+      "class": "invalid",
+      "message": "option '{option}' carries {placeholder}, but this plugin has no partition identity; the placeholder is filled only on a partitioned start",
+      "details": ["option", "placeholder"],
+      "reasons": [
+        {"tag": "partition_placeholder_unfilled", "args": ["option", "placeholder"]}
+      ]
+    },
+    "plugin.partitioned_host": {
+      "class": "invalid",
+      "message": "a {provider} plugin cannot be enabled on '{operator}', a member of a partition group: it cannot tell which member a record's key belongs to",
+      "hint": "enable it on an operator that is not partitioned",
+      "details": ["provider", "operator"],
+      "reasons": [
+        {"tag": "partitioned_host", "args": ["details"]}
+      ]
+    },
+    "plugin.prepare_failed": {
+      "class": "invalid",
+      "message": "plugin '{plugin}' was refused while its operator started, so the operator did not start",
+      "details": ["plugin", "reason"],
+      "reasons": [
+        {"tag": "plugin_prepare_failed", "args": ["plugin", "reason"]}
+      ]
+    },
+    "plugin.protocol_consolidation_failed": {
+      "class": "internal",
+      "message": "protocol {protocol} could not be consolidated again with the package's implementations",
+      "details": ["protocol", "reason"],
+      "reasons": [
+        {"tag": "protocol_consolidation_failed", "args": ["protocol", "reason"]}
+      ]
+    },
+    "plugin.provider_bad_answer": {
+      "class": "internal",
+      "message": "the plugin's provider answered with a value it may not return",
+      "details": ["answer"],
+      "reasons": [
+        {"tag": "invalid_init_provider_return", "args": ["answer"]},
+        {"tag": "invalid_activate_return", "args": ["answer"]}
+      ]
+    },
+    "plugin.provider_conflict": {
+      "class": "conflict",
+      "message": "provider id '{provider}' is already taken by {holder}",
+      "details": ["provider", "holder"],
+      "reasons": [
+        {"tag": "provider_id_taken", "args": ["provider", "holder"]}
+      ]
+    },
+    "plugin.provider_crashed": {
+      "class": "internal",
+      "message": "provider {provider} crashed while preparing the plugin; the controller's log names the cause",
+      "details": ["provider", "kind", "reason"],
+      "reasons": [
+        {"tag": "init_provider_crashed", "args": ["provider", "kind", "reason"]}
+      ]
+    },
+    "plugin.provider_failed": {
+      "class": "internal",
+      "message": "provider '{provider}' of package '{plugin}' failed to start its worker: {reason}",
+      "details": ["plugin", "provider", "reason"],
+      "reasons": [
+        {"tag": "provider_failed", "args": ["plugin", "provider", "reason"]}
+      ]
+    },
+    "plugin.provider_not_loaded": {
+      "class": "not_found",
+      "message": "provider module {provider} is not loaded on {controller}, and no plugin package installed there provides it",
+      "hint": "flz plugin list --installed",
+      "details": ["provider", "controller"],
+      "reasons": [
+        {"tag": "module_not_loaded", "args": ["provider", "controller"]}
+      ]
+    },
+    "plugin.provider_refused": {
+      "class": "invalid",
+      "message": "provider '{provider}' of package '{plugin}' refused its options: {reason}",
+      "details": ["plugin", "provider", "reason"],
+      "reasons": [
+        {"tag": "provider_refused", "args": ["plugin", "provider", "reason"]}
+      ]
+    },
+    "plugin.provider_unavailable": {
+      "class": "unavailable",
+      "message": "provider {provider} belongs to package '{plugin}', which is {status} on this controller",
+      "hint": "flz plugin list --installed",
+      "details": ["provider", "plugin", "status", "code"],
+      "reasons": [
+        {"tag": "provider_unavailable", "args": ["provider", "plugin", "status", "code"]}
+      ]
+    },
+    "plugin.registry_unavailable": {
+      "class": "unavailable",
+      "message": "the operator registry of the plugin's namespace did not answer; try again",
+      "details": [],
+      "reasons": [
+        {"tag": "registry_unavailable", "at": ["plugin.enable", "plugin.disable"]},
+        {"tag": "hub_unavailable", "at": ["plugin.enable", "plugin.disable"]},
+        {"tag": "no_response", "at": ["plugin.enable", "plugin.disable"]}
+      ]
+    },
+    "plugin.runtime_mismatch": {
+      "class": "conflict",
+      "message": "{why}; the package was built on OTP {package_otp}, Elixir {package_elixir} and Flezha {package_flezha}; this controller runs OTP {otp}, Elixir {elixir} and Flezha {flezha}",
+      "hint": "package it again in flezha/plugin-builder:{flezha}",
+      "details": ["rule", "why", "package_otp", "package_elixir", "package_flezha", "otp", "elixir", "flezha"],
+      "reasons": [
+        {"tag": "runtime_mismatch", "args": ["runtimes"]}
+      ]
+    },
+    "plugin.service_failed": {
+      "class": "internal",
+      "message": "the plugin service failed; the controller's log names the cause",
+      "details": ["kind", "reason"],
+      "reasons": [
+        {"tag": "plugin_manager_crash", "args": ["kind", "reason"]}
+      ]
+    },
+    "plugin.service_unavailable": {
+      "class": "unavailable",
+      "message": "the plugin service did not answer; try again",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "plugin_manager_unavailable", "args": ["reason"]}
+      ]
+    },
+    "plugin.signature_invalid": {
+      "class": "denied",
+      "message": "the package signature does not verify against any trusted key",
+      "details": [],
+      "reasons": [
+        {"tag": "signature_invalid"}
+      ]
+    },
+    "plugin.signature_required": {
+      "class": "denied",
+      "message": "the controller requires signed plugin packages, and this one carries no signature.sig",
+      "hint": "package it with mix flezha.plugin.package --sign <key.pem>",
+      "details": [],
+      "reasons": [
+        {"tag": "signature_required"}
+      ]
+    },
+    "plugin.single_sink": {
+      "class": "invalid",
+      "message": "plugin '{plugin}' runs as one copy in the cluster, so it takes no on_output hook",
+      "details": ["plugin"],
+      "reasons": [
+        {"tag": "plugin_single_sink", "args": ["plugin"]}
+      ]
+    },
+    "plugin.source_unsupported": {
+      "class": "invalid",
+      "message": "'{source}' is neither a local path nor an https:// URL",
+      "details": ["source"],
+      "reasons": [
+        {"tag": "source_unsupported", "args": ["source"]}
+      ]
+    },
+    "plugin.spec_field_missing": {
+      "class": "invalid",
+      "message": "a plugin spec needs a non-empty '{field}' string",
+      "details": ["field"],
+      "reasons": [
+        {"tag": "plugin_spec_field_missing", "args": ["field"]}
+      ]
+    },
+    "plugin.spec_field_not_object": {
+      "class": "invalid",
+      "message": "a plugin spec's '{field}' must be a JSON object",
+      "details": ["field"],
+      "reasons": [
+        {"tag": "plugin_spec_field_not_object", "args": ["field"]}
+      ]
+    },
+    "plugin.spec_invalid_json": {
+      "class": "invalid",
+      "message": "the plugins spec is not a JSON array of plugin objects",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "invalid_plugins_json", "args": ["reason"]}
+      ]
+    },
+    "plugin.spec_not_object": {
+      "class": "invalid",
+      "message": "each plugin spec must be a JSON object",
+      "details": [],
+      "reasons": [
+        {"tag": "plugin_spec_not_object"}
+      ]
+    },
+    "plugin.target_missing": {
+      "class": "invalid",
+      "message": "a plugin needs the namespace and the operator it attaches to",
+      "details": ["namespace", "operator"],
+      "reasons": [
+        {"tag": "plugin_target_missing", "args": ["namespace", "operator"]}
+      ]
+    },
+    "plugin.template_missing_placeholder": {
+      "class": "invalid",
+      "message": "option '{option}' must contain the {placeholder} placeholder",
+      "details": ["option", "placeholder"],
+      "reasons": [
+        {"tag": "template_missing_placeholder", "args": ["option", "placeholder"]}
+      ]
+    },
+    "plugin.timeout_not_below_interval": {
+      "class": "invalid",
+      "message": "timeout_ms {timeout_ms} must be below interval_ms {interval_ms}, so that a poll cannot outlast its own interval",
+      "details": ["timeout_ms", "interval_ms"],
+      "reasons": [
+        {"tag": "timeout_not_below_interval", "args": ["timeout_ms", "interval_ms"]}
+      ]
+    },
+    "plugin.trust_store_empty": {
+      "class": "invalid",
+      "message": "signed packages are required and no trusted key is configured, so no package can be verified",
+      "hint": "set FLEZHA_PLUGIN_TRUSTED_KEYS to the public keys packages are signed with",
+      "details": [],
+      "reasons": [
+        {"tag": "trust_store_empty"}
+      ]
+    },
+    "plugin.unknown_hook": {
+      "class": "not_found",
+      "message": "no hook is named '{hook}'; this plugin takes {allowed}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["hook", "allowed"],
+      "reasons": [
+        {"tag": "unknown_hook", "args": ["hook", "allowed"]}
+      ]
+    },
+    "plugin.unknown_hook_option": {
+      "class": "invalid",
+      "message": "a {kind} hook has no option '{option}'",
+      "details": ["kind", "option"],
+      "reasons": [
+        {"tag": "unknown_hook_opt", "args": ["kind", "option"]}
+      ]
+    },
+    "plugin.unknown_options": {
+      "class": "invalid",
+      "message": "a {provider} plugin has no option {options}",
+      "hint": "flz plugin help <provider_id>",
+      "details": ["provider", "options"],
+      "reasons": [
+        {"tag": "unknown_options", "args": ["provider", "options"]}
+      ]
+    },
+    "plugin.unknown_provider": {
+      "class": "not_found",
+      "message": "no plugin provider is named '{provider}'",
+      "hint": "flz plugin list --installed",
+      "details": ["provider"],
+      "reasons": [
+        {"tag": "unknown_provider", "args": ["provider"]}
+      ]
+    },
+    "plugin.unread_options": {
+      "class": "invalid",
+      "message": "flz plugin enable does not read {options}; provider settings are written --X<key>=<value>, and hooks --hook=<name>",
+      "hint": "flz plugin help <provider>",
+      "details": ["options"],
+      "reasons": [
+        {"tag": "unread_plugin_options", "args": ["options"]}
+      ]
+    },
+    "plugin.url_has_credentials": {
+      "class": "invalid",
+      "message": "option '{option}' must not embed credentials; put a secret in '{headers_option}'",
+      "details": ["provider", "option", "headers_option"],
+      "reasons": [
+        {"tag": "url_has_credentials", "args": ["provider", "option", "headers_option"]}
+      ]
+    },
+    "plugin.url_scheme_unsupported": {
+      "class": "invalid",
+      "message": "option '{option}' must be an http or https URL, got {url}",
+      "details": ["provider", "option", "url"],
+      "reasons": [
+        {"tag": "url_scheme_unsupported", "args": ["provider", "option", "url"]}
+      ]
+    },
+    "plugin.url_without_host": {
+      "class": "invalid",
+      "message": "option '{option}' names {url}, which has no host",
+      "details": ["provider", "option", "url"],
+      "reasons": [
+        {"tag": "url_without_host", "args": ["provider", "option", "url"]}
+      ]
+    },
+    "plugin.window_needs_idempotence": {
+      "class": "invalid",
+      "message": "max_in_flight {max_in_flight} needs idempotent set to true: only the broker's per-partition sequence check keeps a retry inside the window ordered",
+      "details": ["max_in_flight"],
+      "reasons": [
+        {"tag": "window_needs_idempotence", "args": ["max_in_flight"]}
+      ]
+    },
+    "plugin.write_failed": {
+      "class": "internal",
+      "message": "the plugin could not be recorded on its operator; the controller's log names the cause",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "declared_mutate_failed", "args": ["reason"]}
+      ]
+    },
+    "postgres_cdc.publication_missing": {
+      "class": "not_found",
+      "message": "the publication '{publication}' does not exist, and the plugin names no tables to create it from",
+      "details": ["publication"],
+      "reasons": [
+        {"tag": "postgres_cdc_publication_missing", "args": ["details"]}
+      ]
+    },
+    "postgres_cdc.replica_identity_missing": {
+      "class": "invalid",
+      "message": "the published table {table} has no usable replica identity: give it a primary key or set REPLICA IDENTITY FULL",
+      "details": ["table"],
+      "reasons": [
+        {"tag": "postgres_cdc_replica_identity_missing", "args": ["details"]}
+      ]
+    },
+    "postgres_cdc.replication_failed": {
+      "class": "unavailable",
+      "message": "the plugin cannot read changes from {where}: {reason}",
+      "details": ["where", "reason"],
+      "reasons": [
+        {"tag": "postgres_cdc_replication_failed", "args": ["details"]}
+      ]
+    },
+    "postgres_cdc.server_too_old": {
+      "class": "invalid",
+      "message": "the database server is version {version}; change capture needs 14 or newer",
+      "details": ["version"],
+      "reasons": [
+        {"tag": "postgres_cdc_server_too_old", "args": ["details"]}
+      ]
+    },
+    "postgres_cdc.slot_lag": {
+      "class": "unavailable",
+      "message": "the replication slot {slot} holds back {lag_bytes} bytes of write-ahead log, past max_lag_bytes {max_lag_bytes}",
+      "details": ["slot", "lag_bytes", "max_lag_bytes"],
+      "reasons": [
+        {"tag": "postgres_cdc_slot_lag", "args": ["details"]}
+      ]
+    },
+    "postgres_cdc.wal_level_not_logical": {
+      "class": "invalid",
+      "message": "the database server's wal_level is {wal_level}; change capture needs logical",
+      "details": ["wal_level"],
+      "reasons": [
+        {"tag": "postgres_cdc_wal_level_not_logical", "args": ["details"]}
+      ]
+    },
+    "quota.exceeded": {
+      "class": "conflict",
+      "message": "the namespace's {kind} quota is reached ({current} of {limit})",
+      "hint": "flz namespace show",
+      "details": ["kind", "current", "limit"],
+      "reasons": [
+        {"tag": "quota_exceeded", "args": ["kind", "usage"]}
+      ]
+    },
+    "rabbitmq.channel_closed": {
+      "class": "unavailable",
+      "message": "the RabbitMQ broker closed the plugin's channel with {code}: {text}",
+      "details": ["code", "text"],
+      "reasons": [
+        {"tag": "rabbitmq_channel_closed", "args": ["details"]}
+      ]
+    },
+    "rabbitmq.connection_failed": {
+      "class": "unavailable",
+      "message": "the plugin has no connection to the RabbitMQ broker at {host}: {reason}",
+      "details": ["host", "reason"],
+      "reasons": [
+        {"tag": "rabbitmq_connection_failed", "args": ["details"]}
+      ]
+    },
+    "rabbitmq.exhausted": {
+      "class": "unavailable",
+      "message": "the output was not confirmed by the RabbitMQ broker: {reason}",
+      "details": ["reason"]
+    },
+    "rabbitmq.unroutable": {
+      "class": "invalid",
+      "message": "the RabbitMQ broker returned the output: exchange '{exchange}' routes key '{routing_key}' to no queue",
+      "details": ["exchange", "routing_key"]
+    },
+    "reset.confirmation_required": {
+      "class": "invalid",
+      "message": "flz reset printed its plan and cleared nothing: pass --yes to apply it, or --dry-run to preview without an error",
+      "hint": "flz reset --yes",
+      "details": []
+    },
+    "reset.controller_running": {
+      "class": "conflict",
+      "message": "flz reset refuses to run while the controller is up",
+      "hint": "flz controller stop",
+      "details": []
+    },
+    "reset.partial": {
+      "class": "internal",
+      "message": "the reset stopped at {path} after clearing some roots: {reason}",
+      "details": ["path", "reason"]
+    },
+    "reset.path_refused": {
+      "class": "invalid",
+      "message": "refusing to clear {path}: it is, or overlaps, {collides_with}; --app-data-root or a symlink may alias the two",
+      "details": ["path", "collides_with"]
+    },
+    "reset.path_unreadable": {
+      "class": "internal",
+      "message": "{path} could not be read before anything was cleared: {reason}",
+      "details": ["path", "reason"]
+    },
+    "runner.bad_reply": {
+      "class": "internal",
+      "message": "the runner answered with a reply the controller could not read",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "decode_error", "args": ["reason"]}
+      ]
+    },
+    "runner.command_failed": {
+      "class": "internal",
+      "message": "the runner refused the command without saying why",
+      "details": []
+    },
+    "runner.controller_unreachable": {
+      "class": "unreachable",
+      "message": "the runner could not reach a controller: {reason}",
+      "details": ["reason"]
+    },
+    "runner.data_streams_failed": {
+      "class": "unavailable",
+      "message": "the runner could not open its data streams: {reason}",
+      "details": ["reason"]
+    },
+    "runner.hub_unavailable": {
+      "class": "unavailable",
+      "message": "the operator hub of namespace '{namespace}' could not be started for the runner; try again",
+      "details": ["namespace", "reason"],
+      "reasons": [
+        {"tag": "hub_unavailable", "args": ["namespace", "reason"]}
+      ]
+    },
+    "runner.identity_taken": {
+      "class": "conflict",
+      "message": "another live runner already holds identity '{runner}'",
+      "details": ["runner"],
+      "reasons": [
+        {"tag": "identity_taken", "args": ["runner"]}
+      ]
+    },
+    "runner.namespace_not_entitled": {
+      "class": "denied",
+      "message": "the runner asked for namespace '{claimed}', and its credential entitles it only to '{proven}'",
+      "details": ["claimed", "proven"],
+      "reasons": [
+        {"tag": "namespace_not_entitled", "args": ["claimed", "proven"]}
+      ]
+    },
+    "runner.namespace_not_proven": {
+      "class": "denied",
+      "message": "the runner proved no namespace: it presented no runner credential, or one this controller does not know",
+      "hint": "flz token issue runner@<namespace> <namespace> runner --ttl never",
+      "details": [],
+      "reasons": [
+        {"tag": "namespace_not_proven"}
+      ]
+    },
+    "runner.not_admitted": {
+      "class": "unavailable",
+      "message": "the runner's session ended before it was admitted",
+      "details": [],
+      "reasons": [
+        {"tag": "not_admitted"}
+      ]
+    },
+    "runner.not_connected": {
+      "class": "unavailable",
+      "message": "the runner this request needs is not connected",
+      "details": [],
+      "reasons": [
+        {"tag": "no_control_unit"},
+        {"tag": "control_unit_exit"},
+        {"tag": "control_channel_exit"},
+        {"tag": "no_control_channel"},
+        {"tag": "no_connection_available"},
+        {"tag": "control_channel_not_running"},
+        {"tag": "dead_runner"}
+      ]
+    },
+    "runner.quic_addresses_invalid": {
+      "class": "invalid",
+      "message": "FLEZHA_QUIC_ADDRESSES cannot be read: {reason}",
+      "details": ["reason"]
+    },
+    "runner.quic_addresses_unresolved": {
+      "class": "unreachable",
+      "message": "no FLEZHA_QUIC_ADDRESSES entry resolved: {reason}",
+      "details": ["reason"]
+    },
+    "runner.session_unavailable": {
+      "class": "unavailable",
+      "message": "the controller could not start the runner's session; try again",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "runner_supervisor_down", "args": ["reason"]}
+      ]
+    },
+    "runner.socket_dir_refused": {
+      "class": "invalid",
+      "message": "the runner could not settle on a controller socket directory: {reason}",
+      "details": ["reason"]
+    },
+    "runner.system_namespace_refused": {
+      "class": "denied",
+      "message": "no runner can connect in the _system namespace",
+      "details": [],
+      "reasons": [
+        {"tag": "system_namespace_refused"}
+      ]
+    },
+    "runner.uds_unavailable": {
+      "class": "invalid",
+      "message": "the UDS transport is not available on this platform",
+      "hint": "FLEZHA_TRANSPORT=quic",
+      "details": []
+    },
+    "runtime.argument_not_utf8": {
+      "class": "invalid",
+      "message": "{argument} is not valid UTF-8",
+      "details": ["argument"]
+    },
+    "runtime.change_without_apply_change": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' recorded a change but declares no applyChange, so the change cannot rebuild the state it describes",
+      "details": ["tasklet"]
+    },
+    "runtime.channel_not_produced": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' emits on channel '{channel}', which it does not produce on",
+      "details": ["tasklet", "channel"]
+    },
+    "runtime.channel_undeclared": {
+      "class": "not_found",
+      "message": "operator '{operator}' has no {kind} channel '{channel}'; it declares {channels}",
+      "details": ["operator", "channel", "kind", "channels"]
+    },
+    "runtime.channel_wrong_kind": {
+      "class": "invalid",
+      "message": "operator '{operator}' channel '{channel}' is a {declared} channel, not a {kind} one",
+      "details": ["operator", "channel", "declared", "kind"]
+    },
+    "runtime.class_not_registered": {
+      "class": "not_found",
+      "message": "no operator class is registered as '{factory}' on this runner",
+      "details": ["factory"]
+    },
+    "runtime.command_crashed": {
+      "class": "internal",
+      "message": "the runner failed while answering the command: {reason}",
+      "details": ["reason"]
+    },
+    "runtime.completion_too_many_effects": {
+      "class": "invalid",
+      "message": "the completion carries more effects than the activation had items",
+      "details": []
+    },
+    "runtime.connect_unconfirmed": {
+      "class": "unreachable",
+      "message": "the controller connect was not confirmed within {seconds}s",
+      "details": ["seconds"]
+    },
+    "runtime.edge_closure_panicked": {
+      "class": "internal",
+      "message": "the edge {closure} panicked: {reason}",
+      "details": ["closure", "reason"]
+    },
+    "runtime.event_time_timer_without_event_time_clock": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declared clock '{clock}'; an event-time timer needs an event-time clock",
+      "details": ["tasklet", "clock"]
+    },
+    "runtime.executor_unavailable": {
+      "class": "unavailable",
+      "message": "the {executor} executor cannot run here: {reason}",
+      "details": ["executor", "reason"]
+    },
+    "runtime.factory_in_service": {
+      "class": "conflict",
+      "message": "'{module}' cannot be unregistered, because a running runner cannot stop serving a started declaration",
+      "details": ["module"]
+    },
+    "runtime.factory_run_mismatch": {
+      "class": "conflict",
+      "message": "factory '{factory}' is registered as a {declared} class, and the controller started it as {run}",
+      "details": ["factory", "declared", "run"]
+    },
+    "runtime.forked_process": {
+      "class": "invalid",
+      "message": "the core was started in process {owner} and this is process {pid}; fork does not carry the core's threads, so start the core in each child",
+      "details": ["owner", "pid"]
+    },
+    "runtime.hook_missing": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' {action}, and declares no {hook} to handle it",
+      "details": ["tasklet", "action", "hook"]
+    },
+    "runtime.host_command_failed": {
+      "class": "internal",
+      "message": "the host failed the {command} activation: {reason}",
+      "details": ["command", "reason"]
+    },
+    "runtime.host_dropped_activation": {
+      "class": "internal",
+      "message": "the host context dropped the {activation} activation",
+      "details": ["activation"]
+    },
+    "runtime.host_state_in_process": {
+      "class": "internal",
+      "message": "a host-run Cell's state is reached only through its host activation, never in-process",
+      "details": []
+    },
+    "runtime.host_state_unreadable": {
+      "class": "internal",
+      "message": "the host's state JSON failed to parse: {reason}",
+      "details": ["reason"]
+    },
+    "runtime.host_timeout": {
+      "class": "unavailable",
+      "message": "the host did not complete the {activation} activation within {seconds}s",
+      "details": ["activation", "seconds"]
+    },
+    "runtime.host_wrong_outcome": {
+      "class": "internal",
+      "message": "the host answered the {command} activation with an outcome of another kind",
+      "details": ["command"]
+    },
+    "runtime.identity_too_long": {
+      "class": "invalid",
+      "message": "the {part} '{value}' is longer than {limit} bytes",
+      "details": ["part", "value", "limit"]
+    },
+    "runtime.invalid_if_running": {
+      "class": "invalid",
+      "message": "if_running must be deliver or error, not '{value}'",
+      "details": ["value"]
+    },
+    "runtime.invalid_transport": {
+      "class": "invalid",
+      "message": "'{transport}' is not a transport; use native, uds or quic",
+      "details": ["transport"]
+    },
+    "runtime.key_not_allowed_on_non_keyed_channel": {
+      "class": "invalid",
+      "message": "channel '{channel}' is not keyed, so an emit on it cannot carry a key",
+      "details": ["channel"]
+    },
+    "runtime.key_outside_partition": {
+      "class": "invalid",
+      "message": "key '{key}' hashes to key group {group}, which partition {partition} of {partitions} does not own (it owns groups {from} to {to}); the routing item's key must equal the key_by result",
+      "details": ["key", "group", "partition", "partitions", "from", "to"]
+    },
+    "runtime.key_required_on_keyed_channel": {
+      "class": "invalid",
+      "message": "channel '{channel}' is keyed and this tasklet is single-cell, so there is no Cell key to emit under; emit with a key",
+      "details": ["channel"]
+    },
+    "runtime.local_needs_controller": {
+      "class": "invalid",
+      "message": "class '{factory}' declares {capability}, which requires a controller; a local run cannot serve it",
+      "details": ["factory", "capability"]
+    },
+    "runtime.local_run_busy": {
+      "class": "unavailable",
+      "message": "operator '{operator}' was still working after {budget_ms} ms",
+      "details": ["operator", "budget_ms"]
+    },
+    "runtime.local_run_unanswered": {
+      "class": "unavailable",
+      "message": "the local run did not answer within {budget_ms} ms",
+      "details": ["budget_ms"]
+    },
+    "runtime.max_cells_reached": {
+      "class": "unavailable",
+      "message": "the tasklet's max_cells cap is reached, so an input for a new key is dropped",
+      "details": []
+    },
+    "runtime.metadata_on_inter_tasklet_channel": {
+      "class": "invalid",
+      "message": "channel '{channel}' is between two tasklets, and only a plugin-bound channel carries metadata",
+      "details": ["channel"]
+    },
+    "runtime.no_local_run": {
+      "class": "conflict",
+      "message": "there is no local run on this context: start one before feeding it",
+      "details": []
+    },
+    "runtime.no_operators": {
+      "class": "invalid",
+      "message": "the runner declares no operator; register one before starting it",
+      "details": []
+    },
+    "runtime.no_output_channel": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' emits but declares no output channel",
+      "details": ["tasklet"]
+    },
+    "runtime.not_a_consumer": {
+      "class": "internal",
+      "message": "an edge output names tasklet {tasklet}, which does not consume channel '{channel}'",
+      "details": ["tasklet", "channel"]
+    },
+    "runtime.not_host_tasklet": {
+      "class": "internal",
+      "message": "the Cell is not run by a host, so it has no host crossing",
+      "details": []
+    },
+    "runtime.operator_busy": {
+      "class": "unavailable",
+      "message": "operator '{operator}' did not answer in time; try again",
+      "details": ["operator"]
+    },
+    "runtime.operator_message_unsupported": {
+      "class": "unavailable",
+      "message": "operator '{operator}' does not handle direct messages",
+      "details": ["operator"]
+    },
+    "runtime.operator_not_found": {
+      "class": "not_found",
+      "message": "no instance of operator '{operator}' runs on this runner",
+      "details": ["operator"]
+    },
+    "runtime.operator_type_in_use": {
+      "class": "conflict",
+      "message": "factory '{factory_id}' has {live_instances} live operator instance(s); stop them before removing the type",
+      "details": ["factory_id", "live_instances"]
+    },
+    "runtime.plugin_serializer_panicked": {
+      "class": "internal",
+      "message": "the plugin serializer of channel '{channel}' panicked: {reason}",
+      "details": ["channel", "reason"]
+    },
+    "runtime.prepare_unknown_channel": {
+      "class": "invalid",
+      "message": "the prepare answer names a channel the operator does not declare",
+      "details": []
+    },
+    "runtime.reserved_metadata_key": {
+      "class": "invalid",
+      "message": "metadata key '{key}' is in the reserved 'flz.' namespace, which only the runtime stamps",
+      "details": ["key"]
+    },
+    "runtime.result_undecodable": {
+      "class": "invalid",
+      "message": "the activation result failed to decode: {reason}",
+      "details": ["reason"]
+    },
+    "runtime.runner_already_running": {
+      "class": "conflict",
+      "message": "the runner on this context is already started",
+      "details": []
+    },
+    "runtime.runner_closed": {
+      "class": "unavailable",
+      "message": "the runner of namespace '{namespace}' is closed",
+      "details": ["namespace"]
+    },
+    "runtime.runner_not_started": {
+      "class": "conflict",
+      "message": "the runner is not started; start it first",
+      "details": []
+    },
+    "runtime.runner_shutting_down": {
+      "class": "unavailable",
+      "message": "the runner is shutting down, so the {activation} activation was not handed to the host",
+      "details": ["activation"]
+    },
+    "runtime.runner_unavailable": {
+      "class": "unavailable",
+      "message": "the runner thread is gone or answered out of turn: {reason}",
+      "details": ["reason"]
+    },
+    "runtime.schema_mismatch": {
+      "class": "invalid",
+      "message": "activation schema version mismatch: the shim speaks {shim}, the core speaks {core}",
+      "details": ["shim", "core"]
+    },
+    "runtime.spawn_handle_released": {
+      "class": "not_found",
+      "message": "spawn handle {handle} was released: the activation that made it was completed or abandoned",
+      "details": ["handle"]
+    },
+    "runtime.state_mutated": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' assigned state.{path} directly, which a restart loses; record it with a change instead",
+      "details": ["tasklet", "path"]
+    },
+    "runtime.state_unencodable": {
+      "class": "internal",
+      "message": "the state could not be encoded as JSON: {reason}",
+      "details": ["reason"]
+    },
+    "runtime.tasklet_failed": {
+      "class": "internal",
+      "message": "{error}",
+      "details": ["error"]
+    },
+    "runtime.timer_cap_exceeded": {
+      "class": "conflict",
+      "message": "tasklet '{tasklet}' reached its timer cap ({max})",
+      "details": ["tasklet", "max"]
+    },
+    "runtime.timer_without_on_timer": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' registered a timer but declares no onTimer",
+      "details": ["tasklet"]
+    },
+    "runtime.timers_unavailable": {
+      "class": "invalid",
+      "message": "timers are not available here; only a tasklet's run or on_timer may register one",
+      "details": []
+    },
+    "runtime.unknown_activation_token": {
+      "class": "invalid",
+      "message": "activation token {token} is unknown or already answered",
+      "details": ["token"]
+    },
+    "runtime.unknown_channel": {
+      "class": "not_found",
+      "message": "channel '{channel}' is not declared on this operator",
+      "details": ["channel"]
+    },
+    "runtime.unknown_channel_id": {
+      "class": "internal",
+      "message": "an edge output names unknown channel {channel_id}",
+      "details": ["channel_id"]
+    },
+    "runtime.unreadable_reply": {
+      "class": "internal",
+      "message": "the controller's reply could not be read: {reply}",
+      "details": ["reply"]
+    },
+    "runtime.value_not_json": {
+      "class": "invalid",
+      "message": "{owner} sends a {type} that has no JSON form: {reason}",
+      "details": ["owner", "type", "reason"]
+    },
+    "runtime.value_wrong_for_codec": {
+      "class": "invalid",
+      "message": "channel '{channel}' names the {codec} codec and cannot send a {type}",
+      "details": ["channel", "codec", "type"]
+    },
+    "schedule.already_exists": {
+      "class": "conflict",
+      "message": "a schedule named '{schedule}' already exists",
+      "hint": "flz schedule list",
+      "details": ["schedule"],
+      "reasons": [
+        {"tag": "schedule_exists", "args": ["schedule"]}
+      ]
+    },
+    "schedule.cron_field_count": {
+      "class": "invalid",
+      "message": "cron expression '{cron}' must have 5 fields (minute hour day month weekday), got {fields}",
+      "details": ["cron", "fields"],
+      "reasons": [
+        {"tag": "cron_field_count", "args": ["cron", "fields"]}
+      ]
+    },
+    "schedule.cron_invalid_field": {
+      "class": "invalid",
+      "message": "cron expression '{cron}': the {field} field has an invalid element '{element}' (allowed {min}-{max})",
+      "details": ["cron", "field", "element", "min", "max"],
+      "reasons": [
+        {"tag": "cron_invalid_field", "args": ["cron", "field", "element", "min", "max"]}
+      ]
+    },
+    "schedule.cron_required": {
+      "class": "invalid",
+      "message": "a schedule needs a cron expression",
+      "details": [],
+      "reasons": [
+        {"tag": "cron_required"}
+      ]
+    },
+    "schedule.factory_required": {
+      "class": "invalid",
+      "message": "a schedule needs the factory it starts",
+      "details": [],
+      "reasons": [
+        {"tag": "factory_required"}
+      ]
+    },
+    "schedule.init_values_not_object": {
+      "class": "invalid",
+      "message": "a schedule's init values must be a JSON object",
+      "details": [],
+      "reasons": [
+        {"tag": "init_values_not_object"}
+      ]
+    },
+    "schedule.invalid_name": {
+      "class": "invalid",
+      "message": "schedule name '{schedule}' must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most {max} bytes, so that each firing's '<name>@<slot>' fits an operator id",
+      "details": ["schedule", "max"],
+      "reasons": [
+        {"tag": "invalid_schedule_name", "args": ["schedule", "max"]}
+      ]
+    },
+    "schedule.invalid_timezone": {
+      "class": "invalid",
+      "message": "'{timezone}' is not an IANA time zone",
+      "details": ["timezone"],
+      "reasons": [
+        {"tag": "invalid_timezone", "args": ["timezone"]}
+      ]
+    },
+    "schedule.name_required": {
+      "class": "invalid",
+      "message": "a schedule needs a name",
+      "details": [],
+      "reasons": [
+        {"tag": "schedule_name_required"}
+      ]
+    },
+    "schedule.not_found": {
+      "class": "not_found",
+      "message": "schedule '{schedule}' does not exist",
+      "hint": "flz schedule list",
+      "details": ["schedule"],
+      "reasons": [
+        {"tag": "schedule_not_found", "args": ["schedule"]}
+      ]
+    },
+    "schedule.plugins_not_array": {
+      "class": "invalid",
+      "message": "a schedule's plugins must be a JSON array of plugin specs",
+      "details": [],
+      "reasons": [
+        {"tag": "plugins_not_array"}
+      ]
+    },
+    "schedule.timezone_required": {
+      "class": "invalid",
+      "message": "a schedule needs a time zone",
+      "details": [],
+      "reasons": [
+        {"tag": "timezone_required"}
+      ]
+    },
+    "shutdown.coordinator_exited": {
+      "class": "internal",
+      "message": "the shutdown coordinator stopped before reporting an outcome; the controller's log names the cause",
+      "details": ["reason"],
+      "reasons": [
+        {"tag": "coordinator_exited", "args": ["reason"]}
+      ]
+    },
+    "shutdown.partial_drain": {
+      "class": "unavailable",
+      "message": "the shutdown drained partially: operators were still on this node when its timeout ran out",
+      "details": ["still_local"],
+      "reasons": [
+        {"tag": "partial_drain", "args": ["still_local"]}
+      ]
+    },
+    "spawn.timeout": {
+      "class": "unavailable",
+      "message": "no spawn result arrived within {seconds}s",
+      "details": ["seconds"]
+    },
+    "spawn.unavailable": {
+      "class": "unavailable",
+      "message": "there is no control plane to request a spawn on: the runner is closed or has no controller",
+      "details": []
+    },
+    "state.apply_failed": {
+      "class": "invalid",
+      "message": "the state could not be applied: {reason}",
+      "details": ["reason"]
+    },
+    "state.apply_not_supported": {
+      "class": "unavailable",
+      "message": "this runner does not apply state to a live operator",
+      "details": []
+    },
+    "state.bad_cell_path": {
+      "class": "invalid",
+      "message": "'{path}' is not a Cell path; write it as <operator>/<tasklet>/<cell_key>",
+      "details": ["path"],
+      "reasons": [
+        {"tag": "bad_cell_path", "args": ["path"]}
+      ]
+    },
+    "state.bad_live_path": {
+      "class": "invalid",
+      "message": "'{path}' is not a live state path; write it as <operator>/<tasklet>[/<cell_key>]",
+      "details": ["path"],
+      "reasons": [
+        {"tag": "bad_live_path", "args": ["path"]}
+      ]
+    },
+    "state.cell_busy": {
+      "class": "unavailable",
+      "message": "Cell '{cell}' is inside an activation older than {seconds}s",
+      "details": ["cell", "seconds"]
+    },
+    "state.cell_evicted": {
+      "class": "not_found",
+      "message": "Cell '{cell_key}' of tasklet '{tasklet}' was idle-evicted; eviction is destructive, so there is no durable value to serve",
+      "hint": "flz state at <operator>/{tasklet}/{cell_key} <seq|ts>",
+      "details": ["tasklet", "cell_key"]
+    },
+    "state.cell_key_without_tasklet": {
+      "class": "invalid",
+      "message": "a Cell key is unique only within its tasklet, so name the tasklet as well",
+      "details": []
+    },
+    "state.cell_not_found": {
+      "class": "not_found",
+      "message": "tasklet '{tasklet}' holds no Cell keyed '{cell_key}'",
+      "hint": "flz state at <operator>/{tasklet}/{cell_key} <seq|ts>",
+      "details": ["tasklet", "cell_key"]
+    },
+    "state.cell_not_live": {
+      "class": "not_found",
+      "message": "no live Cell matches cell id '{cell_id}'",
+      "details": ["cell_id"]
+    },
+    "state.inbox_unreadable": {
+      "class": "unavailable",
+      "message": "the input log of '{instance}' did not answer",
+      "details": ["instance", "reason"],
+      "reasons": [
+        {"tag": "inbox_unreadable", "args": ["instance", "reason"]}
+      ]
+    },
+    "state.init_values_invalid_json": {
+      "class": "invalid",
+      "message": "init_values is not valid JSON: {reason}",
+      "details": ["reason"]
+    },
+    "state.init_values_not_object": {
+      "class": "invalid",
+      "message": "init_values must be a JSON object, got {kind}",
+      "details": ["kind"]
+    },
+    "state.migration_unreadable": {
+      "class": "invalid",
+      "message": "the migrated state is not UTF-8 text: {reason}",
+      "details": ["reason"]
+    },
+    "state.no_operator": {
+      "class": "not_found",
+      "message": "no running operator '{operator}' in any namespace",
+      "hint": "flz operator list",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "no_operator", "args": ["operator"]}
+      ]
+    },
+    "state.no_owning_runner": {
+      "class": "unavailable",
+      "message": "no connected runner owns operator '{operator}', so nothing can compact its Cell",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "no_owning_runner", "args": ["operator"]}
+      ]
+    },
+    "state.no_persisted_state": {
+      "class": "not_found",
+      "message": "Cell '{cell}' has no persisted state",
+      "hint": "flz state list <operator>",
+      "details": ["cell"],
+      "reasons": [
+        {"tag": "no_persisted_state", "args": ["cell"]}
+      ]
+    },
+    "state.not_resident": {
+      "class": "unavailable",
+      "message": "operator '{operator}' is {state}, so no Cell of it is held in memory; read its durable state instead",
+      "hint": "flz state at <operator>/<tasklet>/<cell_key> <seq>",
+      "details": ["operator", "state"],
+      "reasons": [
+        {"tag": "not_resident", "args": ["state", "operator"]}
+      ]
+    },
+    "state.oversized_read": {
+      "class": "invalid",
+      "message": "the selected state is {bytes} bytes, over the {limit}-byte read ceiling; narrow the read to one cell key",
+      "hint": "flz state get <operator>/<tasklet>/<cell_key>",
+      "details": ["bytes", "limit"],
+      "reasons": [
+        {"tag": "oversized_state", "args": ["bytes", "limit"]}
+      ]
+    },
+    "state.persistence_off": {
+      "class": "conflict",
+      "message": "operator '{operator}' declares persistence off, so its Cells hold no durable state and live reads are refused",
+      "details": ["operator"],
+      "reasons": [
+        {"tag": "persistence_off", "args": ["operator"]}
+      ]
+    },
+    "state.restore_failed": {
+      "class": "internal",
+      "message": "the Cell's state could not be restored: {reason}",
+      "details": ["reason"]
+    },
+    "state.serialize_failed": {
+      "class": "internal",
+      "message": "the state of tasklet '{tasklet}' failed to serialize: {reason}",
+      "details": ["tasklet", "reason"]
+    },
+    "state.snapshot_failed": {
+      "class": "internal",
+      "message": "the Cell's snapshot could not be taken: {reason}",
+      "details": ["reason"]
+    },
+    "state.tasklet_not_found": {
+      "class": "not_found",
+      "message": "operator '{operator}' has no tasklet named '{tasklet}'",
+      "details": ["operator", "tasklet"]
+    },
+    "topology.at_checkpoint_without_max_delay": {
+      "class": "invalid",
+      "message": "checkpoint_outputs at_checkpoint requires checkpoint_max_delay_ms: an interval that never closes would hold its outputs forever on a quiet Cell",
+      "details": []
+    },
+    "topology.branch_too_few_arms": {
+      "class": "invalid",
+      "message": "branch requires at least two arms; {arms} given",
+      "details": ["arms"]
+    },
+    "topology.branching_chained_loop": {
+      "class": "invalid",
+      "message": "a handoff-chained loop needs exactly one terminal tasklet per chain; the chain of entry channel '{channel}' has {leaves}",
+      "details": ["channel", "leaves"]
+    },
+    "topology.call_deadline_zero": {
+      "class": "invalid",
+      "message": "channel '{channel}' calls with a deadline of 0 ms; a call needs a positive deadline_ms",
+      "details": ["channel"]
+    },
+    "topology.call_outside_per_input_loop": {
+      "class": "invalid",
+      "message": "channel '{channel}' ends in a call, and only a :per_input steps operator reads the later message its Response is; declare the class :per_input, or make the call from a flow operator",
+      "details": ["channel"]
+    },
+    "topology.call_response_unread": {
+      "class": "invalid",
+      "message": "channel '{channel}' calls another operator and its Response channel '{response}' feeds no tasklet, so every outcome would be journaled and read by nobody; wire the Response channel into a tasklet, or forward with operator_forward when no outcome is wanted",
+      "details": ["channel", "response"]
+    },
+    "topology.call_without_key": {
+      "class": "invalid",
+      "message": "channel '{channel}' calls a factory with create: false and no key_by before the call, so nothing names the instance it may reach; key the chain, or let the call create its callee",
+      "details": ["channel"]
+    },
+    "topology.cell_keys_without_static_mode": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declares cell_keys without static mode",
+      "details": ["tasklet"]
+    },
+    "topology.cells_for_missing": {
+      "class": "invalid",
+      "message": "tasklet '{name}' declares non-empty cell_keys but does not override cells_for; write its cells_for (a Rust tasklet also sets CELLS_FOR_OVERRIDDEN)",
+      "details": ["name"]
+    },
+    "topology.chained_loop_terminal_without_handoff": {
+      "class": "invalid",
+      "message": "a durable handoff-chained loop's terminal tasklet '{tasklet}' releases no inter-tasklet handoff; iteration N+1 is seeded from iteration N's terminal batch, and a tasklet that owns no output channel, or whose only output is plugin-bound, has nothing the journal carries. Take the sink off the terminal's own channel, or declare the loop per_input; wiring another tasklet behind the sink only moves the rule onto that one",
+      "details": ["tasklet"]
+    },
+    "topology.change_without_state": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declares applyChange but no initial state, so there is nothing for a change to fold into",
+      "details": ["tasklet"]
+    },
+    "topology.channel_ends_twice": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares two plugin ends; a channel ends in one sink, one response() or one call, so route the value through a pass-through tasklet to give it both",
+      "details": ["channel"]
+    },
+    "topology.channel_name_too_long": {
+      "class": "invalid",
+      "message": "channel '{channel}' has a {len}-byte name; the name rides every frame this channel produces, under a one-byte length prefix, so it may be at most {max} bytes",
+      "details": ["channel", "len", "max"]
+    },
+    "topology.channel_named_twice": {
+      "class": "invalid",
+      "message": "channel '{channel}' is named twice: named('{named}') and sink('{sink}') both name it. A sink names the channel it terminates, so write the name once: sink('{named}') to keep the channel's name, or named('{named}') with a sink that takes no name",
+      "details": ["channel", "named", "sink"]
+    },
+    "topology.checkpoint_every_zero": {
+      "class": "invalid",
+      "message": "the operator declares checkpoint_every(0); an interval that closes every zero inputs is not an interval, so omit it to close only on an explicit checkpoint call",
+      "details": []
+    },
+    "topology.checkpoint_max_delay_zero": {
+      "class": "invalid",
+      "message": "checkpoint_max_delay_ms must be greater than zero",
+      "details": []
+    },
+    "topology.class_not_constructible": {
+      "class": "invalid",
+      "message": "class '{class}' could not be constructed through a public no-argument constructor: {reason}",
+      "details": ["class", "reason"]
+    },
+    "topology.codec_with_callable": {
+      "class": "invalid",
+      "message": "channel '{channel}' names both a codec and its own callable; give one",
+      "details": ["channel"]
+    },
+    "topology.consumer_out_of_range": {
+      "class": "invalid",
+      "message": "channel '{channel}' names consumer {consumer} but the class declares {tasklets} tasklet(s)",
+      "details": ["channel", "consumer", "tasklets"]
+    },
+    "topology.correction_window_zero": {
+      "class": "invalid",
+      "message": "the operator declares correction_window(0); a zero window can correct nothing",
+      "details": []
+    },
+    "topology.correction_without_event_time": {
+      "class": "invalid",
+      "message": "the operator declares correction_window but tasklet '{tasklet}' declares clock '{clock_type}'; correction orders a replayed slice by event time, which only an event-time clock yields",
+      "details": ["tasklet", "clock_type"]
+    },
+    "topology.cycle": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' is on a cycle; an operator topology is a DAG, so a node's output may never reach its own input",
+      "details": ["tasklet"]
+    },
+    "topology.dangling_transform_chain": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares a transform or key_by that is never closed by into; a transform chain is stored on the consumer edge it terminates in, so a dangling one would silently do nothing",
+      "details": ["channel"]
+    },
+    "topology.declaration_unreadable": {
+      "class": "invalid",
+      "message": "the class declaration is not valid JSON for the schema: {reason}",
+      "details": ["reason"]
+    },
+    "topology.deferred_builder_surface": {
+      "class": "invalid",
+      "message": "operator '{module}' uses a builder call this SDK does not have yet: {reason}",
+      "details": ["module", "reason"]
+    },
+    "topology.dropping_policy_under_effectively_once": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares on_full({policy}) on an operator that declares effectively_once; a shed input's offset is still advanced past by the tier's watermark, so the loss is permanent and reported nowhere. Declare one or the other, not both (a correction window implies the tier, so it is refused here too)",
+      "details": ["channel", "policy"]
+    },
+    "topology.duplicate_channel": {
+      "class": "invalid",
+      "message": "channel '{channel}' is declared more than once on this operator",
+      "details": ["channel"]
+    },
+    "topology.duplicate_factory_id": {
+      "class": "invalid",
+      "message": "factory '{factory_id}' is already declared on this runner",
+      "details": ["factory_id"]
+    },
+    "topology.duplicate_key_by": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares key_by twice before one into",
+      "details": ["channel"]
+    },
+    "topology.duplicate_merge_source": {
+      "class": "invalid",
+      "message": "merge subscribes channel '{channel}' twice; each merge source must be a distinct channel (one mapping per channel into the merged input)",
+      "details": ["channel"]
+    },
+    "topology.duplicate_persistent_tasklet": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' journals changes and is wired as more than one node; a changeful tasklet may appear once per class",
+      "details": ["tasklet"]
+    },
+    "topology.duplicate_plugin_sink": {
+      "class": "invalid",
+      "message": "channel '{channel}' was declared with sink more than once; only one plugin sink per channel is allowed",
+      "details": ["channel"]
+    },
+    "topology.duplicate_sink_name": {
+      "class": "invalid",
+      "message": "channel '{channel}' is named by two plugin sinks; a sink names the channel it terminates, so two channels cannot name one sink. Give each its own name; a plugin still reaches both by attaching to the operator with no channel filter",
+      "details": ["channel"]
+    },
+    "topology.edge_already_wired": {
+      "class": "invalid",
+      "message": "channel '{channel}' already feeds tasklet '{tasklet}'; an edge carries exactly one transform and one key or neither, so a re-declaration where either side carries one is refused rather than silently keeping the first",
+      "details": ["channel", "tasklet"]
+    },
+    "topology.effectively_once_without_persistence": {
+      "class": "invalid",
+      "message": "exactly: effectively_once needs a durable other than false: the tier is durable state",
+      "details": []
+    },
+    "topology.entry_channel_with_producer": {
+      "class": "invalid",
+      "message": "entry channel '{channel}' cannot name a producer",
+      "details": ["channel"]
+    },
+    "topology.entry_channel_without_consumer": {
+      "class": "invalid",
+      "message": "entry channel '{channel}' names no consumer",
+      "details": ["channel"]
+    },
+    "topology.inter_task_channel_without_producer": {
+      "class": "invalid",
+      "message": "inter_task channel '{channel}' names no producer",
+      "details": ["channel"]
+    },
+    "topology.invalid_mode": {
+      "class": "invalid",
+      "message": "operator '{factory_id}' sets {knob} to {value}, which is not one of its modes",
+      "details": ["factory_id", "knob", "value"]
+    },
+    "topology.invalid_setting": {
+      "class": "invalid",
+      "message": "{declaration} sets {setting} to {value}, and it must be {expected}",
+      "details": ["declaration", "setting", "value", "expected"]
+    },
+    "topology.invalid_tasklet": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' cannot be declared: {reason}",
+      "details": ["tasklet", "reason"]
+    },
+    "topology.key_by_on_unkeyable_target": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares key_by into tasklet '{tasklet}', which declares non-empty cell_keys (static mode); static keying routes by cells_for and may name several Cells, edge keying names exactly one, so declare one or the other, not both",
+      "details": ["channel", "tasklet"]
+    },
+    "topology.keyed_channel_without_plugin_wire": {
+      "class": "invalid",
+      "message": "channel '{channel}' is declared keyed but has no plugin wire; output identity stamps only exist on plugin-bound frames, so add a sink",
+      "details": ["channel"]
+    },
+    "topology.keyed_on_entry": {
+      "class": "invalid",
+      "message": "entry channel '{channel}' is declared keyed; only a plugin-bound output channel carries a natural key",
+      "details": ["channel"]
+    },
+    "topology.mailbox_capacity_too_large": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declared mailbox_capacity {value}; capacity must be between 1 and 1048576",
+      "details": ["tasklet", "value"]
+    },
+    "topology.mailbox_capacity_zero": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declared mailbox_capacity 0; capacity must be between 1 and 1048576",
+      "details": ["tasklet"]
+    },
+    "topology.max_cells_zero": {
+      "class": "invalid",
+      "message": "dynamic tasklet '{tasklet}' declares max_cells 0",
+      "details": ["tasklet"]
+    },
+    "topology.merge_too_few_sources": {
+      "class": "invalid",
+      "message": "merge into tasklet '{tasklet}' declares {sources} source channel(s); a merge consumes two or more, so wire a single source with into instead",
+      "details": ["tasklet", "sources"]
+    },
+    "topology.missing_body": {
+      "class": "invalid",
+      "message": "{declaration} declares no body; it needs {body}",
+      "details": ["declaration", "body"]
+    },
+    "topology.missing_factory_id": {
+      "class": "invalid",
+      "message": "operator '{operator}' declares no factory id, and every operator needs one",
+      "details": ["operator"]
+    },
+    "topology.multiple_output_channels": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' produces more than one channel; a tasklet emits on exactly one output channel",
+      "details": ["tasklet"]
+    },
+    "topology.named_on_entry": {
+      "class": "invalid",
+      "message": "entry channel '{channel}' cannot be renamed with named; an entry channel is named where it is declared",
+      "details": ["channel"]
+    },
+    "topology.negative_setting": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' sets {setting} to {value}, and it must not be negative",
+      "details": ["tasklet", "setting", "value"]
+    },
+    "topology.no_steps_body": {
+      "class": "invalid",
+      "message": "steps class '{factory_id}' declares no channels body, so it has no tasklets to run",
+      "details": ["factory_id"]
+    },
+    "topology.no_entry_channel": {
+      "class": "invalid",
+      "message": "the steps class declares no entry channel for its messages to arrive on",
+      "details": []
+    },
+    "topology.no_operator_exported": {
+      "class": "invalid",
+      "message": "module '{module}' exports no operator declaration",
+      "details": ["module"]
+    },
+    "topology.no_tasklets": {
+      "class": "invalid",
+      "message": "the class declares no tasklet; a host class declares at least one",
+      "details": []
+    },
+    "topology.node_identity_collision": {
+      "class": "invalid",
+      "message": "node identity '{name}' is declared by two distinct nodes; a node name must be unique per operator and distinct from every tasklet name",
+      "details": ["name"]
+    },
+    "topology.operator_field_on_tasklet": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declares {fields}, which an operator declaration carries; declare the short form with {instead}",
+      "details": ["tasklet", "fields", "instead"]
+    },
+    "topology.partitions_without_keyed_tasklet": {
+      "class": "invalid",
+      "message": "factory '{factory}' has no keyed entry-fed tasklet, so each partition would fold a slice of the input into its own copy of the same state; declare key_by on the entry edge before partitioning",
+      "details": ["factory"],
+      "reasons": [
+        {"tag": "partitions_without_keyed_tasklet", "args": ["factory"]}
+      ]
+    },
+    "topology.partitions_without_per_input_loop": {
+      "class": "invalid",
+      "message": "factory '{factory}' reads one message (each {each}), so its {partitions} partitions would each wait for a message that reaches only one of them; declare each per_input before partitioning",
+      "details": ["factory", "each", "partitions"],
+      "reasons": [
+        {"tag": "partitions_without_per_input_loop", "args": ["factory", "each", "partitions"]}
+      ]
+    },
+    "topology.payload_type_mismatch": {
+      "class": "invalid",
+      "message": "channel '{channel}' delivers {delivered}, which does not match the input type {input} of tasklet '{tasklet}'",
+      "details": ["channel", "delivered", "tasklet", "input"]
+    },
+    "topology.plugin_channel_with_consumers": {
+      "class": "invalid",
+      "message": "plugin channel '{channel}' cannot name consumers",
+      "details": ["channel"]
+    },
+    "topology.producer_out_of_range": {
+      "class": "invalid",
+      "message": "channel '{channel}' names producer {producer} but the class declares {tasklets} tasklet(s)",
+      "details": ["channel", "producer", "tasklets"]
+    },
+    "topology.retired_callback": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' defines {callback}, which no longer exists; use {instead}",
+      "details": ["tasklet", "callback", "instead"]
+    },
+    "topology.retry_max_zero": {
+      "class": "invalid",
+      "message": "channel '{channel}' declared retry_max 0; at least one attempt is required (fail an input as non-retryable to park it without retries)",
+      "details": ["channel"]
+    },
+    "topology.schema_floor_above_version": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' reads back to schema version {floor}, above its own schema version {version}",
+      "details": ["tasklet", "floor", "version"]
+    },
+    "topology.schema_floor_without_migration": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' reads back to schema version {floor} but supplies no migration, so the first older record would fail instead of the start",
+      "details": ["tasklet", "floor"]
+    },
+    "topology.setting_on_short_form": {
+      "class": "invalid",
+      "message": "short form '{factory_id}' declares {fields}, which a short form does not carry: its kind is its declaration's, its tasklet is named after its id, and every class-level setting keeps its default",
+      "details": ["factory_id", "fields"]
+    },
+    "topology.short_form_field_on_full_form": {
+      "class": "invalid",
+      "message": "operator '{factory_id}' declares {fields} beside its channels body; a full form wires entry channels, codecs and sinks in channels and declares each tasklet's fields on the tasklet",
+      "details": ["factory_id", "fields"]
+    },
+    "topology.short_form_name_mismatch": {
+      "class": "invalid",
+      "message": "'{class}' declares operator id '{factory_id}' and tasklet name '{name}'; a short form's tasklet is named after its id, so the two must be equal",
+      "details": ["class", "factory_id", "name"]
+    },
+    "topology.short_form_not_a_tasklet": {
+      "class": "invalid",
+      "message": "'{class}' is declared a short-form operator with {annotation} but is not a tasklet",
+      "details": ["class", "annotation"]
+    },
+    "topology.short_form_with_topology": {
+      "class": "invalid",
+      "message": "operator '{factory_id}' is a single-tasklet short form and also declares a channels body; declare one or the other",
+      "details": ["factory_id"]
+    },
+    "topology.sink_on_entry": {
+      "class": "invalid",
+      "message": "entry channel '{channel}' is given a plugin sink, and a sink is fed by a tasklet; wire the entry channel into one first",
+      "details": ["channel"]
+    },
+    "topology.sink_without_output": {
+      "class": "invalid",
+      "message": "operator '{factory_id}' names a sink, and its tasklet declares no output to feed it",
+      "details": ["factory_id"]
+    },
+    "topology.state_not_constructible": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' has state class '{state}' with no accessible no-argument constructor; add one, or write initState",
+      "details": ["tasklet", "state"]
+    },
+    "topology.state_type_id_collision": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' has state types '{first}' and '{second}' that derive the same encoding id {id}; rename one, or list the types to own their ids",
+      "details": ["tasklet", "first", "second", "id"]
+    },
+    "topology.state_unrepresentable": {
+      "class": "invalid",
+      "message": "{path} cannot be encoded for durable state: {reason}",
+      "details": ["path", "reason"]
+    },
+    "topology.static_tasklet_without_cell_keys": {
+      "class": "invalid",
+      "message": "static tasklet '{tasklet}' declares no cell_keys",
+      "details": ["tasklet"]
+    },
+    "topology.tasklet_name_missing": {
+      "class": "invalid",
+      "message": "tasklet class '{tasklet}' declares no name, and the name is where its state is saved",
+      "details": ["tasklet"]
+    },
+    "topology.transform_after_key_by": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares a transform after key_by; the key is evaluated on the final post-transform value, so it must be the last link before into",
+      "details": ["channel"]
+    },
+    "topology.transform_after_terminal": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares a transform or key_by after a plugin sink; the sink serializes the channel's own value, so nothing downstream of it can be reshaped",
+      "details": ["channel"]
+    },
+    "topology.two_clocks": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declares two clocks: it exports event_time and its logical_clock answers true; declare one",
+      "details": ["tasklet"]
+    },
+    "topology.unkeyed_channel_under_effectively_once": {
+      "class": "invalid",
+      "message": "channel '{channel}' has a plugin wire but is not declared keyed; the effectively-once tier deduplicates by output identity, so every plugin-bound channel of an effectively_once operator must opt in with keyed",
+      "details": ["channel"]
+    },
+    "topology.unkeyed_edge_into_dynamic_tasklet": {
+      "class": "invalid",
+      "message": "channel '{channel}' feeds tasklet '{tasklet}' without a key_by, but another edge keys it into dynamic mode; every edge into a dynamic-mode tasklet must name the Cell its inputs reach",
+      "details": ["channel", "tasklet"]
+    },
+    "topology.unknown_codec": {
+      "class": "invalid",
+      "message": "channel '{channel}' names codec '{codec}', which is not one of {codecs}",
+      "details": ["channel", "codec", "codecs"]
+    },
+    "topology.unknown_field": {
+      "class": "invalid",
+      "message": "{declaration} declares {fields}, which it does not carry",
+      "details": ["declaration", "fields"]
+    },
+    "topology.unknown_sdk_lang": {
+      "class": "invalid",
+      "message": "sdk_lang {sdk_lang} is not an allocated SDK language; every class declares the byte its SDK holds in the allocation table, because the controller places an operator only on a runner of its factory's language",
+      "details": ["sdk_lang"]
+    },
+    "topology.unreachable_tasklet": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' is not reachable from any entry channel",
+      "details": ["tasklet"]
+    },
+    "topology.unresolved_type_argument": {
+      "class": "invalid",
+      "message": "tasklet class '{tasklet}' leaves its {parameter} type argument unresolved; declare it concretely where the class implements the tasklet",
+      "details": ["tasklet", "parameter"]
+    },
+    "topology.unservable_clock": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' declares clock '{clock_type}' with no change type (NoChange); the runtime cannot serve it, because logical time is the durable change seq, which never advances without persistent changes",
+      "details": ["tasklet", "clock_type"]
+    },
+    "topology.unusable_sdk_version": {
+      "class": "invalid",
+      "message": "class '{factory_id}' declares no usable SDK version ('{sdk_version}'); every class declares the released version of the SDK that writes its records, because the durable header names the writer and a veneer releases apart from the core it links against",
+      "details": ["factory_id", "sdk_version"]
+    },
+    "usage.command_required": {
+      "class": "invalid",
+      "message": "{command} needs a command",
+      "hint": "{command} help",
+      "details": ["command"]
+    },
+    "usage.invalid_json": {
+      "class": "invalid",
+      "message": "{option} is not valid JSON: {reason}",
+      "details": ["option", "reason"]
+    },
+    "usage.invalid_number": {
+      "class": "invalid",
+      "message": "invalid {option} value '{value}'",
+      "details": ["option", "value"]
+    },
+    "usage.invalid_plugins": {
+      "class": "invalid",
+      "message": "--plugins is not a plugin list: {reason}",
+      "details": ["reason"]
+    },
+    "usage.json_not_object": {
+      "class": "invalid",
+      "message": "{option} must be a JSON object",
+      "details": ["option"]
+    },
+    "usage.missing_argument": {
+      "class": "invalid",
+      "message": "the command is missing an argument",
+      "hint": "{usage}",
+      "details": ["usage"]
+    },
+    "usage.negative": {
+      "class": "invalid",
+      "message": "{option} must be zero or more, got {value}",
+      "details": ["option", "value"]
+    },
+    "usage.not_positive": {
+      "class": "invalid",
+      "message": "{option} must be a whole number of one or more, got {value}",
+      "details": ["option", "value"]
+    },
+    "usage.option_required": {
+      "class": "invalid",
+      "message": "{option} is required",
+      "hint": "{usage}",
+      "details": ["option", "usage"]
+    },
+    "usage.option_requires_value": {
+      "class": "invalid",
+      "message": "{option} requires a value",
+      "details": ["option"]
+    },
+    "usage.option_takes_no_value": {
+      "class": "invalid",
+      "message": "{option} takes no value",
+      "details": ["option"]
+    },
+    "usage.options_conflict": {
+      "class": "invalid",
+      "message": "{option} and {other} cannot be given together",
+      "details": ["option", "other"]
+    },
+    "usage.text_only": {
+      "class": "invalid",
+      "message": "{what} is rendered as text only",
+      "hint": "{alternative}",
+      "details": ["what", "alternative"]
+    },
+    "usage.unexpected_argument": {
+      "class": "invalid",
+      "message": "unexpected argument '{argument}'",
+      "hint": "{usage}",
+      "details": ["argument", "usage"]
+    },
+    "usage.unknown_command": {
+      "class": "invalid",
+      "message": "'{word}' is not a {command} command; use one of {allowed}",
+      "hint": "{command} help",
+      "details": ["command", "word", "allowed"]
+    },
+    "usage.unknown_option": {
+      "class": "invalid",
+      "message": "unknown option '{option}'",
+      "hint": "{usage}",
+      "details": ["option", "usage"]
+    },
+    "usage.unknown_word": {
+      "class": "invalid",
+      "message": "unknown {noun} '{value}'; use one of {allowed}",
+      "details": ["noun", "value", "allowed"]
+    }
+  },
+  "internal": [
+    "already_exist", "already_exists", "already_loaded", "already_present", "already_started", "awake", "bad_header_size",
+    "bad_marker_body", "bad_payload", "call_not_relearned", "chmod", "claim_held", "client_not_running", "column_missing", "corrupt_index",
+    "crc_mismatch", "delivery_crashed", "delivery_failed", "dispatch_timeout", "dlq_entry_missing",
+    "durability_tier_disabled", "durability_tier_not_running", "einval", "enoent", "exception",
+    "exit", "fetch_crashed", "gap", "http", "http_status", "id_taken", "input_log_unavailable",
+    "invalid_cert", "invalid_cluster_domain", "invalid_config", "invalid_json", "invalid_kinds",
+    "invalid_pid_format", "invalid_pod_ip_lookup", "invalid_reconfigure_return",
+    "invalid_return", "invalid_sink_module",
+    "invalid_source_entry", "invalid_source_name", "invalid_static_nodes", "invalid_worker_specs",
+    "items_must_be_strings", "malformed", "malformed_declared_manifest", "malformed_payload",
+    "missing_artifact", "missing_config_keys", "missing_config_schema", "missing_filter",
+    "missing_items", "namespace_unknown", "no_ca_store", "no_channel", "no_connection",
+    "no_endpoint_configured", "no_entry", "no_group_members", "no_partition_in_response",
+    "no_pending_swap", "no_producer", "no_runner_id", "no_stream", "no_subscription_source", "no_such_factory", "no_target_nodes",
+    "no_topic_in_response", "not_a_regular_file", "not_a_target", "not_an_ed25519_private_key",
+    "not_an_object", "not_grouped_hashing",
+    "not_in_manifest", "not_pem", "not_reusable", "not_running", "not_seq_addressed", "not_snapshotted",
+    "not_whole_payload", "nothing_to_correct", "part_ahead_of_progress", "partial", "pem_decode_failed",
+    "permanent", "ping_failed", "precondition_failed", "process_not_found", "progress_ahead",
+    "progress_corrupt", "progress_unreadable", "queue_full", "raised", "record_append_failed",
+    "refused", "remote_node_rejected", "remove", "replaced", "restart_failed", "retiring", "retries_exhausted",
+    "runner_not_found", "running", "same_node", "send_buffer_full", "send_crashed", "send_failed",
+    "service_account_path_missing", "shipper_unavailable", "short_entry", "short_read",
+    "sink_start_failed", "spki_decode_failed", "split_state_key", "stale_writer", "start_crashed",
+    "start_operator_failed", "startup_failed", "stream_unbound", "struct_build_failed",
+    "subject_decode_failed", "superseded", "symlink", "table_missing", "task_exit", "too_long", "too_many_links",
+    "too_short", "topic_already_exists", "trusted_keys_empty", "unavailable", "unbound",
+    "undisabled", "unexpected_start_result", "unknown_discovery_handler", "unknown_entry_type",
+    "unknown_file", "unknown_hub", "unknown_key", "unknown_stream_type", "unknown_topic_or_partition",
+    "unparseable", "unreachable", "unsafe_artifact_name", "unsupported_key_format", "unsupported_pem",
+    "unsupported_pem_entry", "unsupported_spki", "wal_writer_unavailable", "worker_start_failed"
+  ]
+}

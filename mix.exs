@@ -38,8 +38,8 @@ defmodule Flezha.SDK.MixProject do
     ]
   end
 
-  # The schema is read at compile time, so the package carries the one file of
-  # the contract set it compiles.
+  # The error catalogue and the schema are read at compile time, so the package
+  # carries the two files of the contract set it compiles.
   defp package do
     [
       licenses: ["Apache-2.0"],
@@ -48,6 +48,7 @@ defmodule Flezha.SDK.MixProject do
         lib
         native/flz_sdk_nif/src
         native/flz_sdk_nif/Cargo.toml
+        contract/flz_transport/errors.json
         contract/protobufs/runner_commands.proto
         checksum-Elixir.Flezha.SDK.Native.exs
         mix.exs
