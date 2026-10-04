@@ -572,6 +572,24 @@
       "hint": "flz operator listen {operator} again, or raise FLEZHA_LISTENER_PENDING_BYTES",
       "details": ["operator", "bytes", "frames"]
     },
+    "mcp.unknown_code": {
+      "class": "not_found",
+      "message": "no error code is named '{requested}'",
+      "hint": "call flezha_docs with page errors for every code",
+      "details": ["requested"]
+    },
+    "mcp.unknown_language": {
+      "class": "invalid",
+      "message": "there is no SDK example for the language '{language}'",
+      "hint": "use one of: {languages}",
+      "details": ["language", "languages"]
+    },
+    "mcp.unknown_page": {
+      "class": "not_found",
+      "message": "no guide page is named '{page}'",
+      "hint": "call flezha_guide for the pages it lists",
+      "details": ["page"]
+    },
     "namespace.already_exists": {
       "class": "conflict",
       "message": "namespace '{namespace}' already exists",
