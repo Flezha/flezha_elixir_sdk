@@ -127,10 +127,67 @@ defmodule Flezha.SDK do
   The one place a caller outside this module reads the handle's server, so the
   struct's shape stays this module's business.
   """
-  @spec server(result()) :: {:ok, pid()} | {:error, Error.t()}
+  @spec server(result() | pid() | atom()) :: {:ok, pid() | atom()} | {:error, Error.t()}
+  def server(server) when is_pid(server) or is_atom(server), do: {:ok, server}
   def server({:error, _reason} = e), do: e
   def server(%__MODULE__{server: nil}), do: {:error, Error.new("runtime.runner_not_started")}
   def server(%__MODULE__{server: pid}), do: {:ok, pid}
+
+  @doc """
+  Send `message` to the entry channel `channel` of `operator_id`.
+
+  Through the controller by default, under the same role check as
+  `Flezha.SDK.Control`, answering its verdict: `{:ok, %{"to" => operator,
+  "verdict" => "delivered" | "absorbed" | "suspended"}}`. Options:
+
+    * `msg_id:` the message's id, stamped as `flz.msg_id`: an operator whose
+      input log still holds an input of this id absorbs the repeat.
+    * `key:` the partition key whose member of a partition group takes it.
+    * `local: true` in process, without the controller: the message is on no
+      disk, is lost if the runner stops before handling it, and an operator's
+      input log does not cover it. Answers `{:ok, nil}`; refused with
+      `runtime.operator_not_local` for an operator this runner does not hold,
+      and with `usage.options_conflict` beside `msg_id:` or `key:`.
+
+  `runner` is a handle, or the runner server's pid or name.
+  """
+  @spec send(result() | pid() | atom(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, Error.t()}
+  def send(runner, operator_id, message, channel, opts \\ []) do
+    fields = Flezha.SDK.Control.given(%{}, opts, [:msg_id, :key])
+
+    cond do
+      not Keyword.get(opts, :local, false) ->
+        args = [operator_id, message, channel | if(fields == %{}, do: [], else: [fields])]
+        Flezha.SDK.Control.call(runner, "Operator.send", args)
+
+      fields != %{} ->
+        other = Enum.find(["msg_id", "key"], &Map.has_key?(fields, &1))
+        {:error, Error.new("usage.options_conflict", option: "local", other: other)}
+
+      true ->
+        send_local(runner, operator_id, message, channel)
+    end
+  end
+
+  @doc """
+  The ids of the operator instances bound on this runner now, a partition
+  member by its member id, read without the controller.
+  """
+  @spec operators(result() | pid() | atom()) :: {:ok, [String.t()]} | {:error, Error.t()}
+  def operators(runner) do
+    with {:ok, server} <- server(runner), do: RunnerServer.operators(server)
+  end
+
+  # Enters where a frame off a data stream enters, `Flezha.SDK.DataStream`.
+  defp send_local(runner, operator_id, message, channel) do
+    with {:ok, server} <- server(runner),
+         {:ok, pid, topology} <- RunnerServer.local_target(server, operator_id),
+         :ok <- Flezha.SDK.Local.declared(topology, operator_id, channel, :entry) do
+      Flezha.SDK.Operator.Inbox.input(pid, channel, message, %{"channel" => channel})
+      {:ok, nil}
+    end
+  end
 
   @doc "Block until the runner terminates."
   @spec await_termination(result()) :: :ok | {:error, Error.t()}

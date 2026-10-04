@@ -10,46 +10,6 @@
   },
   "sites": ["wire.spawn", "wire.connect", "wire.commit", "wire.message"],
   "codes": {
-    "admin.args_not_array": {
-      "class": "invalid",
-      "message": "the arguments must be a JSON array",
-      "details": []
-    },
-    "admin.invalid_args_json": {
-      "class": "invalid",
-      "message": "the arguments are not valid JSON: {reason}",
-      "details": ["reason"]
-    },
-    "admin.no_control_plane": {
-      "class": "unavailable",
-      "message": "there is no control plane to administer over: the runner is closed or has no controller",
-      "details": []
-    },
-    "admin.timeout": {
-      "class": "unavailable",
-      "message": "the controller did not answer the administration call within {seconds}s",
-      "details": ["seconds"]
-    },
-    "admin.unknown_function": {
-      "class": "not_found",
-      "message": "no published function is named '{function}'",
-      "details": ["function"]
-    },
-    "admin.unknown_parameter": {
-      "class": "invalid",
-      "message": "unknown parameter '{parameter}'",
-      "details": ["parameter"]
-    },
-    "admin.unreadable_answer": {
-      "class": "internal",
-      "message": "the controller's answer to '{verb}' could not be read",
-      "details": ["verb"]
-    },
-    "admin.wrong_arity": {
-      "class": "invalid",
-      "message": "'{function}' takes no argument list of this length",
-      "details": ["function"]
-    },
     "audit.closed": {
       "class": "unavailable",
       "message": "the audit log writer is closed",
@@ -408,6 +368,46 @@
       "reasons": [
         {"tag": "record_not_durable", "args": ["cell", "seq"]}
       ]
+    },
+    "control.args_not_array": {
+      "class": "invalid",
+      "message": "the arguments must be a JSON array",
+      "details": []
+    },
+    "control.invalid_args_json": {
+      "class": "invalid",
+      "message": "the arguments are not valid JSON: {reason}",
+      "details": ["reason"]
+    },
+    "control.no_control_plane": {
+      "class": "unavailable",
+      "message": "there is no control plane to administer over: the runner is closed or has no controller",
+      "details": []
+    },
+    "control.timeout": {
+      "class": "unavailable",
+      "message": "the controller did not answer the administration call within {seconds}s",
+      "details": ["seconds"]
+    },
+    "control.unknown_function": {
+      "class": "not_found",
+      "message": "no published function is named '{function}'",
+      "details": ["function"]
+    },
+    "control.unknown_parameter": {
+      "class": "invalid",
+      "message": "unknown parameter '{parameter}'",
+      "details": ["parameter"]
+    },
+    "control.unreadable_answer": {
+      "class": "internal",
+      "message": "the controller's answer to '{verb}' could not be read",
+      "details": ["verb"]
+    },
+    "control.wrong_arity": {
+      "class": "invalid",
+      "message": "'{function}' takes no argument list of this length",
+      "details": ["function"]
     },
     "controller.peer_unreachable": {
       "class": "unavailable",
@@ -2378,6 +2378,12 @@
       "message": "no instance of operator '{operator}' runs on this runner",
       "details": ["operator"]
     },
+    "runtime.operator_not_local": {
+      "class": "not_found",
+      "message": "operator '{operator}' is not bound on this runner",
+      "hint": "send without the local option, through the controller",
+      "details": ["operator"]
+    },
     "runtime.operator_type_in_use": {
       "class": "conflict",
       "message": "factory '{factory_id}' has {live_instances} live operator instance(s); stop them before removing the type",
@@ -3298,6 +3304,11 @@
       "class": "invalid",
       "message": "{option} and {other} cannot be given together",
       "details": ["option", "other"]
+    },
+    "usage.not_text": {
+      "class": "invalid",
+      "message": "{option} must be text, not {value}",
+      "details": ["option", "value"]
     },
     "usage.text_only": {
       "class": "invalid",

@@ -108,9 +108,19 @@ defmodule Flezha.SDK.RunnerServer do
   def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
   def namespace(server), do: Call.control(server, :namespace, nil)
 
+  @doc "The ids of the operators this runner holds now, sorted."
+  def operators(server), do: Call.control(server, :operators, @busy)
+
+  @doc """
+  The process and topology of `operator_id` when this runner holds it, for a
+  local send; `runtime.operator_not_local` otherwise.
+  """
+  def local_target(server, operator_id),
+    do: Call.control(server, {:local_target, operator_id}, @busy)
+
   @doc """
   Run one administration verb against the controller's published consumer
-  surface, as the identity this connection proved (see `Flezha.SDK.Admin`).
+  surface, as the identity this connection proved (see `Flezha.SDK.Control`).
 
   A cast rather than a call: the controller may have to start an operator
   before it can answer, and the runner must keep serving while it does. The
@@ -127,7 +137,7 @@ defmodule Flezha.SDK.RunnerServer do
       {:reply_ack, ^ref, _result, %Flezha.SDK.Error{} = error} -> {:error, error}
       {:reply_ack, ^ref, result, nil} -> {:ok, result}
     after
-      timeout -> {:error, Error.new("admin.timeout", verb: verb, seconds: div(timeout, 1000))}
+      timeout -> {:error, Error.new("control.timeout", verb: verb, seconds: div(timeout, 1000))}
     end
   end
 
@@ -233,6 +243,19 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   def handle_call(:namespace, _from, %State{} = s), do: {:reply, s.namespace, s}
+
+  def handle_call(:operators, _from, %State{} = s),
+    do: {:reply, {:ok, s.operators |> Map.keys() |> Enum.sort()}, s}
+
+  def handle_call({:local_target, oid}, _from, %State{} = s) do
+    case Map.fetch(s.operators, oid) do
+      {:ok, {pid, factory_id}} ->
+        {:reply, {:ok, pid, Operators.flow_topology(Map.fetch!(s.topologies, factory_id))}, s}
+
+      :error ->
+        {:reply, {:error, Error.new("runtime.operator_not_local", operator: oid)}, s}
+    end
+  end
 
   # --- control commands ---
 
@@ -374,7 +397,7 @@ defmodule Flezha.SDK.RunnerServer do
         {:noreply, await_reply(s, reference_id, caller, ref, :reply_ack)}
 
       _refused ->
-        send(caller, {:reply_ack, ref, "", Error.new("admin.no_control_plane", verb: verb)})
+        send(caller, {:reply_ack, ref, "", Error.new("control.no_control_plane", verb: verb)})
         {:noreply, s}
     end
   end

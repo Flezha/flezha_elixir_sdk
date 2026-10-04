@@ -72,7 +72,38 @@ defmodule ElixirRunner.Application do
       )
     ]
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: ElixirRunner.Supervisor)
+    started =
+      Supervisor.start_link(children, strategy: :one_for_one, name: ElixirRunner.Supervisor)
+
+    local_sends(System.get_env("FLEZHA_LOCAL_SEND_SCRIPT"))
+    started
+  end
+
+  # The local-send drill: a JSON array of `{operator, channel, message, when}`
+  # sends this app's own code makes with `local: true`, each once the file
+  # `when` names exists, printing `local_send <operator> ok` or
+  # `local_send <operator> err <code>`.
+  defp local_sends(nil), do: :ok
+
+  defp local_sends(script) do
+    spawn(fn ->
+      for %{"operator" => operator, "channel" => channel, "message" => message, "when" => go} <-
+            Jason.decode!(script) do
+        await_file(go)
+
+        case Flezha.SDK.send(Flezha.SDK.RunnerServer, operator, message, channel, local: true) do
+          {:ok, _} -> IO.puts("local_send #{operator} ok")
+          {:error, %{code: code}} -> IO.puts("local_send #{operator} err #{code}")
+        end
+      end
+    end)
+  end
+
+  defp await_file(path) do
+    unless File.exists?(path) do
+      Process.sleep(50)
+      await_file(path)
+    end
   end
 
   # The classes this runner advertises: its whole fixture set, or the one

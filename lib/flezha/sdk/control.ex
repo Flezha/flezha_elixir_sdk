@@ -1,7 +1,8 @@
-defmodule Flezha.SDK.Admin do
+defmodule Flezha.SDK.Control do
   @moduledoc """
   Administering the namespace this runner's connection proved, from ordinary
-  application code.
+  application code. Sending to an operator is not here: it is
+  `Flezha.SDK.send/5`.
 
   No tasklet has to be running and the application holds no credential of its
   own: the controller judges every call as the identity the connection already
@@ -46,14 +47,6 @@ defmodule Flezha.SDK.Admin do
   @spec stop_operator(runner(), String.t()) :: {:ok, term()} | {:error, term()}
   def stop_operator(runner, operator_id),
     do: call(runner, "Operator.stop", [operator_id])
-
-  @doc """
-  Inject a message into an operator's input stream, blocking for the delivery
-  verdict. `channel` may be empty for none.
-  """
-  @spec send_to(runner(), String.t(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def send_to(runner, operator_id, message, channel \\ ""),
-    do: call(runner, "Operator.send", [operator_id, message, channel])
 
   @doc """
   Enable the plugin `name` in this namespace, of the provider `provider` (for
@@ -114,27 +107,27 @@ defmodule Flezha.SDK.Admin do
   """
   @spec call(runner(), String.t(), [term()]) :: {:ok, term()} | {:error, Error.t()}
   def call(runner, verb, args) when is_binary(verb) and is_list(args) do
-    with {:ok, server} <- server(runner),
+    with {:ok, server} <- Flezha.SDK.server(runner),
          {:ok, json} <- RunnerServer.admin_call(server, verb, Jason.encode!(args)) do
       case Jason.decode(json) do
         {:ok, answer} -> {:ok, answer}
-        {:error, _not_json} -> {:error, Error.new("admin.unreadable_answer", verb: verb)}
+        {:error, _not_json} -> {:error, Error.new("control.unreadable_answer", verb: verb)}
       end
     end
   end
-
-  defp server(server) when is_pid(server) or is_atom(server), do: {:ok, server}
-  defp server(runner), do: Flezha.SDK.server(runner)
 
   defp started(%{"id" => id, "outcome" => "started"}), do: {:ok, %{id: id, outcome: :started}}
 
   defp started(%{"id" => id, "outcome" => "already_running"}),
     do: {:ok, %{id: id, outcome: :already_running}}
 
-  defp started(_other), do: {:error, Error.new("admin.unreadable_answer", verb: "Operator.start")}
+  defp started(_other),
+    do: {:error, Error.new("control.unreadable_answer", verb: "Operator.start")}
 
-  # The `keys` set in `opts`, added to `fields` under their names.
-  defp given(fields, opts, keys) do
+  @doc false
+  # The `keys` set in `opts`, added to `fields` under their names; the
+  # runner's send reads its own options the same way.
+  def given(fields, opts, keys) do
     for key <- keys,
         (value = Keyword.get(opts, key)) != nil,
         into: fields,

@@ -169,7 +169,8 @@
       "spawn_requester",
       "spawn_hold_requester",
       "spawn_once_requester"
-    ]
+    ],
+    "local_send": ["bench_keyed_nopersist", "store_input", "tier_store", "sugar_steps_per_input"]
   },
   "docs": "docs/sdk/elixir_sdk.md"
 }

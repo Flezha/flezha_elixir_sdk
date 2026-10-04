@@ -206,14 +206,14 @@ defmodule Flezha.SDK.Local do
 
   @impl true
   def handle_call({:on_sink, channel, fun}, _from, s) do
-    case declared(s, channel, :sink) do
+    case declared(s.topology, s.id, channel, :sink) do
       :ok -> {:reply, :ok, put_in(s.sinks[channel], fun)}
       refusal -> {:reply, refusal, s}
     end
   end
 
   def handle_call({:feed, channel, payload}, _from, s) do
-    case declared(s, channel, :entry) do
+    case declared(s.topology, s.id, channel, :entry) do
       :ok ->
         Inbox.input(s.op, channel, payload, %{"channel" => channel})
         {:reply, :ok, s}
@@ -338,24 +338,48 @@ defmodule Flezha.SDK.Local do
   defp silent,
     do: Error.new("runtime.local_run_unanswered", budget_ms: Knob.get(:sdk_control_call_ms))
 
-  # The declared channel of that kind; the refusal names the channel and the
-  # operator, because a name nothing matches is otherwise a value that vanishes.
-  defp declared(s, channel, kind) do
-    names = channel_names(s.topology, kind)
+  @doc """
+  `:ok` when `topology` declares `channel` as a channel of `kind`; otherwise
+  the refusal, naming the channel and the operator, because a name nothing
+  matches is otherwise a value that vanishes. Shared with a runner's local send.
+  """
+  @spec declared(Topology.t(), String.t(), String.t(), :entry | :sink) ::
+          :ok | {:error, Error.t()}
+  def declared(topology, operator, channel, kind) do
+    names = channel_names(topology, kind)
 
-    if channel in names,
-      do: :ok,
-      else:
+    other =
+      Enum.find([:entry, :sink, :inter_task] -- [kind], &(channel in channel_names(topology, &1)))
+
+    cond do
+      channel in names ->
+        :ok
+
+      other ->
+        {:error,
+         Error.new("runtime.channel_wrong_kind",
+           operator: operator,
+           channel: channel,
+           declared: other,
+           kind: kind
+         )}
+
+      true ->
         {:error,
          Error.new("runtime.channel_undeclared",
-           operator: s.id,
+           operator: operator,
            channel: channel,
            kind: kind,
            channels: names
          )}
+    end
   end
 
   defp channel_names(%Topology{entries: entries}, :entry), do: Map.keys(entries)
+
+  # Each tasklet's output channel that no sink takes.
+  defp channel_names(%Topology{node_channel: outputs} = topology, :inter_task),
+    do: Enum.uniq(Map.values(outputs)) -- channel_names(topology, :sink)
 
   # A sink channel takes the producing tasklet's name unless `named/2` gave it
   # one; the compiled route already resolved which.

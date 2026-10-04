@@ -1,9 +1,9 @@
-defmodule Flezha.SDK.AdminTest do
+defmodule Flezha.SDK.ControlTest do
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.Admin
+  alias Flezha.SDK.Control
 
-  # A runner server that records each admin call's verb and arguments and
+  # A runner server that records each control call's verb and arguments and
   # answers every one with `null`.
   defp recording_server do
     test = self()
@@ -23,7 +23,7 @@ defmodule Flezha.SDK.AdminTest do
   test "a plugin is enabled by name, and bound and unbound by operator" do
     server = recording_server()
 
-    Admin.enable_plugin(server, "writer", "operator_file_sink", opts: %{"path" => "out.txt"})
+    Control.enable_plugin(server, "writer", "operator_file_sink", opts: %{"path" => "out.txt"})
 
     assert_received {:called, "PluginManager.enable",
                      [
@@ -31,7 +31,7 @@ defmodule Flezha.SDK.AdminTest do
                        %{"provider" => "operator_file_sink", "opts" => %{"path" => "out.txt"}}
                      ]}
 
-    Admin.enable_plugin(server, "feed", "operator_websocket",
+    Control.enable_plugin(server, "feed", "operator_websocket",
       single: true,
       operator_id: "my_echo",
       hooks: [["on_output", %{}]]
@@ -49,10 +49,10 @@ defmodule Flezha.SDK.AdminTest do
                        }
                      ]}
 
-    Admin.bind_plugin(server, "writer", "my_echo")
+    Control.bind_plugin(server, "writer", "my_echo")
     assert_received {:called, "PluginManager.bind", ["writer", %{"operator_id" => "my_echo"}]}
 
-    Admin.bind_plugin(server, "writer", "my_other", hooks: ["on_output"], channel: "in")
+    Control.bind_plugin(server, "writer", "my_other", hooks: ["on_output"], channel: "in")
 
     assert_received {:called, "PluginManager.bind",
                      [
@@ -60,13 +60,13 @@ defmodule Flezha.SDK.AdminTest do
                        %{"operator_id" => "my_other", "hooks" => ["on_output"], "channel" => "in"}
                      ]}
 
-    Admin.unbind_plugin(server, "writer", "my_echo")
+    Control.unbind_plugin(server, "writer", "my_echo")
     assert_received {:called, "PluginManager.unbind", ["writer", %{"operator_id" => "my_echo"}]}
 
-    Admin.disable_plugin(server, "writer")
+    Control.disable_plugin(server, "writer")
     assert_received {:called, "PluginManager.disable", ["writer", %{}]}
 
-    Admin.list_plugins(server)
+    Control.list_plugins(server)
     assert_received {:called, "PluginManager.list", []}
   end
 end

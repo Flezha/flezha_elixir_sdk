@@ -25,25 +25,27 @@ defmodule Echo.Application do
     {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 
     # Everything `flz operator` and `flz plugin` do is also a function in
-    # `Flezha.SDK.Admin`. The runner is connected once its child has started, so
+    # `Flezha.SDK.Control`, and `Flezha.SDK.send/5` hands a message to an
+    # operator. The runner is connected once its child has started, so
     # uncomment to drive this namespace from the application instead of from a
     # terminal:
     #
-    # alias Flezha.SDK.Admin
+    # alias Flezha.SDK.Control
     # runner = Flezha.SDK.RunnerServer
-    # {:ok, %{id: "my_echo"}} = Admin.start_operator(runner, "echo", id: "my_echo")
+    # {:ok, %{id: "my_echo"}} = Control.start_operator(runner, "echo", id: "my_echo")
     #
     # {:ok, _} =
-    #   Admin.enable_plugin(runner, "writer", "operator_file_sink",
+    #   Control.enable_plugin(runner, "writer", "operator_file_sink",
     #     opts: %{"path" => "echo-out.txt"}
     #   )
     #
-    # {:ok, _} = Admin.bind_plugin(runner, "writer", "my_echo", hooks: [["on_output", %{}]])
+    # {:ok, _} = Control.bind_plugin(runner, "writer", "my_echo", hooks: [["on_output", %{}]])
     #
-    # {:ok, _} = Admin.send_to(runner, "my_echo", "hello world", "in")
+    # {:ok, _} = Flezha.SDK.send(runner, "my_echo", "hello world", "in", msg_id: "hello-1")
     #
-    # docs/sdk/admin.md has the whole surface. An enforced controller refuses
-    # all of it until `flz role bind runner@default app default`.
+    # docs/topics/advanced/sending_from_runner_code.md covers sending. An
+    # enforced controller refuses all of it until
+    # `flz role bind runner@default app default`.
 
     {:ok, supervisor}
   end

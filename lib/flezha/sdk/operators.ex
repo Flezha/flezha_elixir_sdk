@@ -73,8 +73,9 @@ defmodule Flezha.SDK.Operators do
     end
   end
 
-  defp flow_topology(%Spec{topology: topology}), do: topology
-  defp flow_topology(topology), do: topology
+  @doc "The flow topology a class runs on: a steps operator's own, or the class itself."
+  def flow_topology(%Spec{topology: topology}), do: topology
+  def flow_topology(topology), do: topology
 
   @doc "Stop `oid` and forget it; an id this runner does not host changes nothing."
   @spec remove(map(), binary()) :: map()
