@@ -35,11 +35,11 @@ defmodule Agentdesk.Budget do
     %{spent | day: day, tokens: on(spent, day) + tokens}
   end
 
-  # The tokens an answer used.
+  # The tokens an answer used: count them.
   @impl true
   def run(%{tokens: tokens}, spent, ctx), do: {:ok, counted(spent, ctx, today(ctx), tokens)}
 
-  # A message to admit.
+  # A message to admit: hand on its verdict.
   def run(message, spent, ctx) do
     emit(ctx, %{message: message, spent: on(spent, today(ctx))})
     {:ok, spent}

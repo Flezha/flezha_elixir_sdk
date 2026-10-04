@@ -33,13 +33,20 @@ defmodule Tradedesk.TradeWatcher do
   @impl true
   def channels(c) do
     c
+    # JSON from the exchange
     |> input_with("trades", &Jason.decode/1)
+    # trade messages only
     |> filter(&(&1["channel"] == "trade"))
+    # a message into its trades
     |> flat_map(& &1["data"])
+    # market orders only
     |> filter(&(&1["ord_type"] == "market"))
+    # one cell per symbol
     |> key_by(& &1["symbol"])
     |> into(Tradedesk.TrackPrices)
+    # fed by the tasklet above
     |> into(Tradedesk.BuyAboveAverage)
+    # out to the file plugin
     |> sink("signals")
   end
 end

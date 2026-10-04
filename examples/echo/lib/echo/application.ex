@@ -16,6 +16,7 @@ defmodule Echo.Application do
     namespace = List.first(System.argv(), "default")
 
     children = [
+      # connects to the controller and serves these operators
       # `:uds` because this node is not the controller's. The default, `:native`,
       # is for code running inside the controller's own node.
       {Flezha.SDK, namespace: namespace, operators: [Echo.Operator], transport: :uds}

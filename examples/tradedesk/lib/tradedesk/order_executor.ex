@@ -18,6 +18,8 @@ defmodule Tradedesk.OrderExecutor do
   """
   use Flezha.SDK.Operator,
     factory_id: "order_executor",
+    # one instance per order; each step runs once
+    # a failed step undoes the finished ones
     run: {:steps, each: :once, on_failure: :undo_all}
 
   defmodule OrderTicket do
@@ -56,9 +58,13 @@ defmodule Tradedesk.OrderExecutor do
   @impl true
   def channels(c) do
     c
+    # the order to carry out
     |> input_with("order", &OrderTicket.decode/1)
+    # step one
     |> into(Tradedesk.ReserveFunds)
+    # step two, once step one is done
     |> into(Tradedesk.PlaceOrder)
+    # two arms, side by side
     |> branch([&into(&1, Tradedesk.ConfirmFill), &into(&1, Tradedesk.RecordOrder)])
   end
 end

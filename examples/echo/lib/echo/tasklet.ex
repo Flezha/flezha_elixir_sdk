@@ -8,13 +8,12 @@ defmodule Echo.Tasklet do
   that, so the graph can be rewired without touching this module.
   """
 
-  # `name` is the tasklet's stable identity. State is filed under it, so
-  # renaming it later declares a different tasklet rather than renaming this
-  # one.
+  # state is saved under this name, so choose it once
   use Flezha.SDK.Tasklet, name: "echo"
 
   @impl true
   def run(input, state, ctx) do
+    # where it goes is the operator's business
     emit(ctx, "echo: " <> input)
     {:ok, state}
   end

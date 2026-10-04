@@ -7,6 +7,7 @@ defmodule Agentdesk.Deliver do
 
   @impl true
   def run(answer, state, ctx) do
+    # The whole answer, to whoever called.
     emit(ctx, answer)
     {:ok, state}
   end

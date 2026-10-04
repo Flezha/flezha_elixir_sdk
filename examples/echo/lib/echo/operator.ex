@@ -8,12 +8,17 @@ defmodule Echo.Operator do
   cannot work is refused at startup.
   """
 
-  # `factory_id` is the operator's stable identity, and the name
-  # `flz operator start` takes.
+  # the name `flz operator start` takes
   use Flezha.SDK.Operator, factory_id: "echo"
 
   @impl true
   def channels(c) do
-    c |> input("in") |> into(Echo.Tasklet) |> sink("out")
+    c
+    # messages arrive on the entry channel "in"
+    |> input("in")
+    # each one runs through the echo tasklet
+    |> into(Echo.Tasklet)
+    # the result leaves on "out", for a plugin to pick up
+    |> sink("out")
   end
 end

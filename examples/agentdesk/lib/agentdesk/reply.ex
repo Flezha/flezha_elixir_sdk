@@ -22,6 +22,7 @@ defmodule Agentdesk.Reply do
 
   @impl true
   def run(message, conversation, ctx) do
+    # Each piece streams out as it is made; then the whole answer.
     with {:ok, answer} <- DemoModel.answer(conversation.messages, message, &part(ctx, &1)) do
       emit(ctx, answer)
       {:ok, said(conversation, ctx, message)}

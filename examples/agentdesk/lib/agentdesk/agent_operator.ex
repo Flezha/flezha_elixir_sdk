@@ -16,15 +16,16 @@ defmodule Agentdesk.AgentOperator do
   @impl true
   def channels(c) do
     c
+    # entry 1: `flz operator call`
     |> input("turn")
     |> into(Reply)
-    # to whoever listens
+    # to whoever listens; the chain goes on
     |> sink("answer")
     |> into(Deliver)
     # to whoever called
     |> response()
 
-    # from the gateway
+    # entry 2: the gateway, into the same Reply
     c
     |> input_with("message", &Jason.decode/1)
     |> map(& &1["text"])
