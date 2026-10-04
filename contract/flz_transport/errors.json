@@ -153,7 +153,7 @@
     },
     "authz.invalid_caller_context": {
       "class": "invalid",
-      "message": "the caller context is not valid: it needs a source of cli, ui, sdk or internal",
+      "message": "the caller context is not valid: it needs a source of cli, ui, sdk, http or internal",
       "details": [],
       "reasons": [
         {"tag": "invalid_caller_context"}
@@ -504,8 +504,8 @@
     },
     "http.busy": {
       "class": "unavailable",
-      "message": "operator '{operator}' already has {max_waiting} requests waiting for an answer; try again",
-      "details": ["operator", "max_waiting"]
+      "message": "plugin '{plugin}' already has {max_waiting} requests waiting for an answer; try again",
+      "details": ["plugin", "max_waiting"]
     },
     "http.length_required": {
       "class": "invalid",
@@ -514,16 +514,31 @@
     },
     "http.listen_failed": {
       "class": "unavailable",
-      "message": "the HTTP server of operator '{operator}' cannot listen on {address} port {port}: {reason}",
-      "details": ["operator", "address", "port", "reason"],
+      "message": "the HTTP server of plugin '{plugin}' cannot listen on {address} port {port}: {reason}",
+      "details": ["plugin", "address", "port", "reason"],
       "reasons": [
         {"tag": "http_listen_failed", "args": ["details"]}
       ]
+    },
+    "http.origin_refused": {
+      "class": "denied",
+      "message": "the request's Origin is not one of the HTTP API's allowed_origins",
+      "hint": "flz plugin help http_api",
+      "details": []
     },
     "http.streams_full": {
       "class": "unavailable",
       "message": "operator '{operator}' already has {max_streams} streams open; try again",
       "details": ["operator", "max_streams"]
+    },
+    "http.tls_required": {
+      "class": "invalid",
+      "message": "address '{address}' is not loopback, so the HTTP API needs tls_certfile and tls_keyfile, or plain_http set to true",
+      "hint": "flz plugin help http_api",
+      "details": ["address"],
+      "reasons": [
+        {"tag": "http_tls_required", "args": ["address"]}
+      ]
     },
     "http_push.exhausted": {
       "class": "unavailable",
@@ -1473,6 +1488,15 @@
       "details": ["entry"],
       "reasons": [
         {"tag": "native_code", "args": ["entry"]}
+      ]
+    },
+    "plugin.namespace_refused": {
+      "class": "invalid",
+      "message": "provider '{provider}' can be enabled only in namespace '{namespace}'",
+      "hint": "flz plugin enable <name> {provider} --namespace {namespace}",
+      "details": ["provider", "namespace"],
+      "reasons": [
+        {"tag": "plugin_namespace_refused", "args": ["provider", "namespace"]}
       ]
     },
     "plugin.not_bindable": {
