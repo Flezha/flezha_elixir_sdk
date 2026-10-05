@@ -11,8 +11,9 @@ defmodule Agentdesk.Admit do
   def run(verdict, state, ctx) do
     user = verdict.message.user
 
-    emit(
+    emit_keyed(
       ctx,
+      user,
       if Budget.admitted?(verdict) do
         %{status: 202, body: "sent to #{user}"}
       else

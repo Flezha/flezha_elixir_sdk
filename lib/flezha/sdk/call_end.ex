@@ -1,10 +1,10 @@
 defmodule Flezha.SDK.CallEnd do
   @moduledoc """
   The `call(...)` end's share of `Flezha.SDK.Topology`'s check, re-expressing
-  `flz_core`'s: a call closes only its own chain, as an edge does, and like a
-  `response()` it is a plugin end beside which no sink, response or other call
-  may stand; its deadline is positive, a factory call that may not create its
-  callee is keyed, and its Response channel feeds a tasklet.
+  `flz_core`'s: a call closes only its own chain, as an edge does, and it is a
+  plugin end beside which no sink or other call may stand; its deadline is
+  positive, a factory call that may not create its callee is keyed, and its
+  Response channel feeds a tasklet.
   """
 
   @issue_details %{
@@ -20,16 +20,15 @@ defmodule Flezha.SDK.CallEnd do
   def issue_details(tag), do: @issue_details[tag]
 
   @doc """
-  Close a chain of the channel `state` derives on `wire`, a response or a
-  call end; `key?` is whether the chain keys its values before it.
+  Close a chain of the channel `state` derives on `wire`, a call end; `key?`
+  is whether the chain keys its values before it.
   """
   @spec terminate(map(), map(), boolean()) :: map()
   def terminate(state, %{call: call} = wire, key?) do
     found =
       for {true, issue} <- [
-            {call != nil and call.deadline_ms == 0, {:CallDeadlineZero, state.name}},
-            {call != nil and call.factory? and not call.create and not key?,
-             {:CallWithoutKey, state.name}},
+            {call.deadline_ms == 0, {:CallDeadlineZero, state.name}},
+            {call.factory? and not call.create and not key?, {:CallWithoutKey, state.name}},
             {state.sinks != [], {:ChannelEndsTwice, state.name}}
           ],
           do: issue

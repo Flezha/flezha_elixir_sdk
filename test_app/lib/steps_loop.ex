@@ -476,7 +476,11 @@ defmodule ElixirRunner.StepsLoop do
     use Flezha.SDK.Relay, factory_id: "complete_flow"
 
     def channels(c),
-      do: c |> input("input") |> into(ElixirRunner.StepsLoop.CompleteFlow) |> sink("complete_flow_out")
+      do:
+        c
+        |> input("input")
+        |> into(ElixirRunner.StepsLoop.CompleteFlow)
+        |> sink("complete_flow_out")
   end
 
   # A durable chained loop: each pass prints `chained_pass <n>` and hands the

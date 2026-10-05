@@ -20,11 +20,11 @@ defmodule Flezha.SDK.Relay.Routing do
   @type stamp_with :: {binary(), map()} | nil
 
   @end_keys ~w(flz.reply_to flz.call flz.call_create flz.call_response flz.deadline_at
-               flz.call_channel flz.key)
+               flz.call_channel flz.call_answer_channel flz.key)
 
   @doc """
-  One plugin output's frame: its metadata (channel, the call a `response()`
-  output answers or a call end's stamps, then the identity stamps) and its bytes.
+  One plugin output's frame: its metadata (channel, the call a sink output
+  answers or a call end's stamps, then the identity stamps) and its bytes.
   """
   @spec sink_frame(map(), term(), map(), non_neg_integer(), stamp_with()) :: {map(), binary()}
   def sink_frame(route, value, emit, ordinal, stamp_with) do
@@ -43,21 +43,20 @@ defmodule Flezha.SDK.Relay.Routing do
   end
 
   @doc """
-  The keys an output's end stamps, and only that end: a `response()` output's
-  `flz.reply_to`, the call its input carried or an empty value when nobody
-  waits on it; a call end's callee, its Response channel, its deadline (wall
-  clock at the emit) and the chain's key. Every other output drops them.
+  The keys an output's end stamps, and only that end: a sink output's
+  `flz.reply_to`, the call its input carried, when one did; a call end's
+  callee, its Response channel, its deadline (wall clock at the emit), its
+  entry and answer channels and the chain's key. Every other output drops
+  them.
   """
   @spec answer(map(), map(), map(), term()) :: map()
-  def answer(metadata, route, emit, value) do
-    metadata = Map.drop(metadata, @end_keys)
+  def answer(metadata, %{call: %{} = call} = route, _emit, value),
+    do: metadata |> Map.drop(@end_keys) |> call_stamps(call, route.key_by && route.key_by.(value))
 
-    case route do
-      %{response: true} -> Map.put(metadata, "flz.reply_to", Map.get(emit, :call) || "")
-      %{call: %{} = call} -> call_stamps(metadata, call, route.key_by && route.key_by.(value))
-      _plain -> metadata
-    end
-  end
+  def answer(metadata, _sink, %{call: token}, _value) when is_binary(token),
+    do: metadata |> Map.drop(@end_keys) |> Map.put("flz.reply_to", token)
+
+  def answer(metadata, _sink, _emit, _value), do: Map.drop(metadata, @end_keys)
 
   defp call_stamps(metadata, call, key) do
     [
@@ -66,6 +65,7 @@ defmodule Flezha.SDK.Relay.Routing do
       {"flz.call_response", call.response},
       {"flz.deadline_at", Integer.to_string(System.system_time(:millisecond) + call.deadline_ms)},
       {"flz.call_channel", call.channel},
+      {"flz.call_answer_channel", call.answer_channel},
       {"flz.key", key}
     ]
     |> Enum.reject(&match?({_key, nil}, &1))

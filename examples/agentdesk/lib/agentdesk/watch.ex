@@ -9,8 +9,10 @@ defmodule Agentdesk.Watch do
 
   @impl true
   def run(request, state, ctx) do
-    emit(
+    # keyed by the user: a sink of an effectively-once relay needs a key
+    emit_keyed(
       ctx,
+      Request.user(request),
       if Request.listens?(request) do
         %{stream: Request.user(request)}
       else

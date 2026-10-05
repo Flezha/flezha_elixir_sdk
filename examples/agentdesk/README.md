@@ -21,7 +21,6 @@ the session's answer as it is written, and each user has a daily token budget.
 | `lib/agentdesk/application.ex` | the runner: this node joins the `agents` namespace and registers the `agent` and `gateway` factories |
 | `lib/agentdesk/agent_relay.ex` | a session, a steps relay: one turn per message, and a failed turn fails alone |
 | `lib/agentdesk/reply.ex` | answers a message with the demo model, sends the answer as it grows, and keeps the conversation |
-| `lib/agentdesk/deliver.ex` | hands the finished answer to whoever called |
 | `lib/agentdesk/demo_model.ex` | the demo model, and the `Answer` it gives |
 | `lib/agentdesk/gateway_relay.ex` | the HTTP side, a flow relay: it carries the HTTP plugin, answers every request, and calls the session a message is for |
 | `lib/agentdesk/request.ex` | one HTTP request, as the plugin hands it to the gateway, and the two routes the gateway knows |

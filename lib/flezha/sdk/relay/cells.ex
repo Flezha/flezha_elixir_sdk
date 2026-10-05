@@ -544,8 +544,7 @@ defmodule Flezha.SDK.Relay.Cells do
 
   # The facts the ctx refuses on: this node's channel name, whether an output
   # reaches a keyed sink, whether such a sink leaves a keyless Cell no key to
-  # fall back on, and the sink route a part previews (a `response()` or a call
-  # end is not one).
+  # fall back on, and the sink route a part previews (a call end is not one).
   defp ctx_opts(topo, node_ref, key) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
     keyed = for %{to: {:sink, _}, keyed: true} = r <- routes, do: r
@@ -554,7 +553,7 @@ defmodule Flezha.SDK.Relay.Cells do
       channel: topo.node_channel[node_ref],
       keyed_sink?: keyed != [],
       key_required?: key == nil and Enum.any?(keyed, &is_nil(&1.key_by)),
-      preview: Enum.find(routes, &match?(%{to: {:sink, _}, response: false, call: nil}, &1))
+      preview: Enum.find(routes, &match?(%{to: {:sink, _}, call: nil}, &1))
     ]
   end
 

@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`/`response`/`response_with`/`call`,
+  (`into`/`into_named`/`sink`/`sink_with`/`call`,
   `merge` with `from`, and `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
   identity on the plugin wire the handle reaches). Fan-out is handle reuse, or
@@ -41,7 +41,6 @@ defmodule Flezha.SDK.Channels do
           {:map | :filter | :flat_map | :key, (term() -> term())}
           | :keyed
           | {:sink, String.t(), (term() -> binary())}
-          | {:response, (term() -> binary())}
           | {:call, map(), (term() -> binary())}
           | {:into, reference()}
           | {:merge, reference(), non_neg_integer()}
@@ -228,34 +227,22 @@ defmodule Flezha.SDK.Channels do
   end
 
   @doc """
-  Terminate the channel on the answer to the outside call its input carried,
-  with default serialization (bytes/UTF-8/JSON): every value emitted on it is
-  handed to the caller waiting on that input, never to a plugin. It takes no
-  name; the channel keeps the one it would have without it. Returns the
-  handle, so consumers may be wired after it as after `sink/2`. A channel ends
-  in one sink or one response (`ChannelEndsTwice`).
-  """
-  def response(%Stream{} = s), do: response_with(s, &default_serialize/1)
-
-  @doc "`response/1` with a custom serializer."
-  def response_with(%Stream{} = s, serializer) when is_function(serializer, 1),
-    do: %{link(s, {:response, serializer}) | chain_id: nil}
-
-  @doc """
   End the chain in a call to another relay: every value reaching it, after
   the chain's transforms and key, is one request, written as `sink/2` writes
   (`serialize:`). `target` names an instance, or a partition group whose
   member the chain's key chooses; `factory:` instead names a factory whose
   instance the key names, started when absent unless `create: false`.
   `deadline_ms:` is required and positive; `channel:` names the callee's
-  entry channel the request enters on.
+  entry channel the request enters on, and `answer_channel:` the callee's
+  channel whose output answers (its first output for the request when
+  unset).
 
   Answers a handle on the Response channel, the entry channel
   `<channel>.response`, whose values are `%Flezha.SDK.Response{}`: the answer
   read by `decode:` as `input_with/3`'s parser reads (the raw bytes by
   default). A call is not an edge, so the Response channel may feed the
-  tasklet that made the call. A channel ends in one sink, one response or one
-  call (`ChannelEndsTwice`).
+  tasklet that made the call. A channel ends in one sink or one call
+  (`ChannelEndsTwice`).
 
       turns |> call("pricing", deadline_ms: 300) |> into(Price)
       turns |> key_by(& &1.session) |> call(factory: "agent", deadline_ms: 60_000, create: false)
@@ -287,6 +274,7 @@ defmodule Flezha.SDK.Channels do
       create: Keyword.get(opts, :create, true),
       deadline_ms: deadline_ms,
       channel: opts[:channel],
+      answer_channel: opts[:answer_channel],
       response: response
     }
   end

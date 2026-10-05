@@ -1,10 +1,10 @@
-defmodule Flezha.SDK.ResponseTest do
+defmodule Flezha.SDK.SinkAnswerTest do
   @moduledoc """
-  `response/1`: a plugin end whose outputs answer the outside call their input
-  carried. Declared, it derives as a sink does and never beside one; live,
-  every output carries `flz.reply_to` — the call a downstream tasklet's input
-  inherited from the input upstream of it, or an empty value — and a park names
-  the call waiting on the parked input.
+  A called input's sink outputs answer the call: every one carries
+  `flz.reply_to`, the call a downstream tasklet's input inherited from the
+  input upstream of it, and an output of an input nobody called carries none.
+  Under the tier such a sink is keyed like any other, and a park names the call
+  waiting on the parked input.
   """
   use ExUnit.Case, async: true
 
@@ -37,60 +37,41 @@ defmodule Flezha.SDK.ResponseTest do
     end
   end
 
-  defmodule Log do
-    @moduledoc false
-    use Flezha.SDK.Tasklet, name: "log"
-
-    @impl true
-    def run(_input, state, _ctx), do: {:ok, state}
-  end
-
   defmodule DownstreamOp do
-    use Flezha.SDK.Relay, factory_id: "response_downstream"
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
-  end
-
-  defmodule HybridOp do
-    use Flezha.SDK.Relay, factory_id: "response_hybrid"
-    def channels(c), do: c |> input("in") |> into(Parse) |> response() |> into(Log)
-  end
-
-  defmodule BesideSinkOp do
-    use Flezha.SDK.Relay, factory_id: "response_beside_sink"
-    def channels(c), do: c |> input("in") |> into(Parse) |> sink("out") |> response()
-  end
-
-  defmodule TwiceOp do
-    use Flezha.SDK.Relay, factory_id: "response_twice"
-    def channels(c), do: c |> input("in") |> into(Parse) |> response() |> response()
+    use Flezha.SDK.Relay, factory_id: "sink_answer_downstream"
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
   end
 
   defmodule UnkeyedTierOp do
-    use Flezha.SDK.Relay, factory_id: "response_unkeyed_tier"
+    use Flezha.SDK.Relay, factory_id: "sink_answer_unkeyed_tier"
     def run, do: {:flow, exactly: :effectively_once}
+    def channels(c), do: c |> input("in") |> into(Parse) |> sink("quotes")
+  end
 
-    def channels(c),
-      do: c |> input("in") |> into(Parse) |> response()
+  defmodule KeyedTierOp do
+    use Flezha.SDK.Relay, factory_id: "sink_answer_keyed_tier"
+    def run, do: {:flow, exactly: :effectively_once}
+    def channels(c), do: c |> input("in") |> into(Parse) |> keyed() |> sink("quotes")
   end
 
   # A two-stage turn: `parse` hands on, `answer` answers the pass's call.
   defmodule TurnLoop do
     @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
-    def factory_id, do: "response_turn"
+    def factory_id, do: "sink_answer_turn"
     def run, do: {:steps, each: :per_input}
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
   end
 
   defmodule QuietTurnLoop do
     @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
-    def factory_id, do: "response_quiet_turn"
+    def factory_id, do: "sink_answer_quiet_turn"
     def run, do: {:steps, each: :per_input}
     def durable, do: false
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
   end
 
   # This process as the controller end of a native stream the process `to`
@@ -135,43 +116,20 @@ defmodule Flezha.SDK.ResponseTest do
     end
   end
 
-  defp ends(topology, module) do
-    node = Enum.find_value(topology.node_modules, fn {ref, m} -> m == module && ref end)
-    for %{to: {:sink, _}} = route <- Map.get(topology.routes, {:node, node}, []), do: route
+  test "an unkeyed sink under the tier is refused, even when it answers calls" do
+    assert {:error, %Flezha.SDK.Error{code: "topology.unkeyed_channel_under_effectively_once"}} =
+             Topology.build(UnkeyedTierOp)
+
+    assert {:ok, _topology} = Topology.build(KeyedTierOp)
   end
 
-  describe "the declaration" do
-    test "a response is a plugin end with no name, alone or with a consumer behind it" do
-      {:ok, topology} = Topology.build(DownstreamOp)
-      assert [%{response: true, channel: "answer"}] = ends(topology, Answer)
-      assert ends(topology, Parse) == []
-
-      {:ok, hybrid} = Topology.build(HybridOp)
-      assert [%{response: true}] = ends(hybrid, Parse)
-    end
-
-    test "a sink beside a response, or two responses, end the channel twice" do
-      for module <- [BesideSinkOp, TwiceOp] do
-        assert {:error, %Flezha.SDK.Error{code: "topology.channel_ends_twice"}} =
-                 Topology.build(module)
-      end
-    end
-
-    test "an unkeyed response needs no key under the tier" do
-      assert {:ok, _topology} = Topology.build(UnkeyedTierOp)
-    end
-  end
-
-  test "only a response output carries the call, empty when nobody waits" do
-    route = %{channel: "ans", response: true, key_by: nil, serializer: & &1}
-    emit = %{meta: %{}, key: nil, origin: nil, call: "w:t"}
+  test "a sink output carries the call its input carried, and none without one" do
+    route = %{channel: "ans", call: nil, key_by: nil, serializer: & &1}
+    emit = %{meta: %{"flz.reply_to" => "forged"}, key: nil, origin: nil, call: "w:t"}
 
     assert {%{"flz.reply_to" => "w:t"}, "v"} = Routing.sink_frame(route, "v", emit, 0, nil)
 
-    assert {%{"flz.reply_to" => ""}, "v"} =
-             Routing.sink_frame(route, "v", %{emit | call: nil}, 0, nil)
-
-    {metadata, "v"} = Routing.sink_frame(%{route | response: false}, "v", emit, 0, nil)
+    {metadata, "v"} = Routing.sink_frame(route, "v", %{emit | call: nil}, 0, nil)
     refute Map.has_key?(metadata, "flz.reply_to")
   end
 
@@ -200,7 +158,8 @@ defmodule Flezha.SDK.ResponseTest do
       assert_receive {:flz_data, _, "answer-1", "re:hello", %{"flz.reply_to" => "w:tok"}}, 5_000
 
       Inbox.input(op, "in", "plain", %{})
-      assert_receive {:flz_data, _, "answer-1", "re:plain", %{"flz.reply_to" => ""}}, 5_000
+      assert_receive {:flz_data, _, "answer-1", "re:plain", metadata}, 5_000
+      refute Map.has_key?(metadata, "flz.reply_to")
     end
 
     test "a park names the call waiting on the parked input", %{op: op} do
@@ -217,7 +176,8 @@ defmodule Flezha.SDK.ResponseTest do
       assert_receive {:flz_data, _, "turn-1", "re:hello", %{"flz.reply_to" => "w:one"}}, 5_000
 
       Inbox.input(driver, "in", "plain", %{})
-      assert_receive {:flz_data, _, "turn-1", "re:plain", %{"flz.reply_to" => ""}}, 5_000
+      assert_receive {:flz_data, _, "turn-1", "re:plain", metadata}, 5_000
+      refute Map.has_key?(metadata, "flz.reply_to")
     end
 
     test "records the call on the last stage's output when it journals" do

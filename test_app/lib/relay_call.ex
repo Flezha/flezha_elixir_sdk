@@ -3,9 +3,10 @@ defmodule ElixirRunner.RelayCall do
   Relay call fixtures (`relay_call`): relays that call another
   relay from their graph and read the outcome as a `Flezha.SDK.Response`.
 
-    * `call_pricing`: a flow callee answering `price:<input>` through
-      `response/1`; an input starting `silent` is never answered.
-    * `call_orders`: a flow caller calling the instance `pricing`.
+    * `call_pricing`: a flow callee answering `price:<input>` on its sink
+      `quotes`; an input starting `silent` is never answered.
+    * `call_orders`: a flow caller calling the instance `pricing`, answered
+      from `quotes`.
     * `call_agent`: a durable `:per_input` `:keep_progress` session answering
       `answer:<turn>`; `boom` fails the turn, `slow` answers after 2 s.
     * `call_gateway`: an effectively-once caller calling `call_agent` by the
@@ -175,7 +176,7 @@ defmodule ElixirRunner.RelayCall do
     @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "call_pricing"
-    def channels(c), do: c |> input("in") |> into(PricingQuote) |> response()
+    def channels(c), do: c |> input("in") |> into(PricingQuote) |> sink("quotes")
   end
 
   defmodule OrdersOp do
@@ -190,7 +191,7 @@ defmodule ElixirRunner.RelayCall do
       |> input("in")
       |> into(OrderAsk)
       |> named("order")
-      |> call("pricing", deadline_ms: RelayCall.deadline_ms())
+      |> call("pricing", deadline_ms: RelayCall.deadline_ms(), answer_channel: "quotes")
       |> into(OrderPriced)
       |> sink("priced")
     end
@@ -204,7 +205,7 @@ defmodule ElixirRunner.RelayCall do
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
     def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("turn") |> into(AgentTurn) |> response()
+    def channels(c), do: c |> input("turn") |> into(AgentTurn) |> sink()
   end
 
   defmodule GatewayOp do

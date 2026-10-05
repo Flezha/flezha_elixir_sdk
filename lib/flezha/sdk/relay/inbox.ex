@@ -53,7 +53,7 @@ defmodule Flezha.SDK.Relay.Inbox do
   change seq the dispatch started at — what a keyed sink's stamps read — the
   durable offset of the input that produced them, which an inter-tasklet push
   inherits under the effectively-once tier, and the call waiting on that
-  input, which every push inherits and a `response()` output answers.
+  input, which every push inherits and a sink output answers.
 
   `report` is `{cell_pid, ref}` when the Cell is holding that invocation's
   effect record until every push lands, and nil when it owes nothing.

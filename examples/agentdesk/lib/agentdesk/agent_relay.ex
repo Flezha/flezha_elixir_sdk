@@ -11,7 +11,7 @@ defmodule Agentdesk.AgentRelay do
     # an idle session sleeps after 10 s
     durable: {:local, sleep_after: 10_000}
 
-  alias Agentdesk.{Deliver, Reply}
+  alias Agentdesk.Reply
 
   @impl true
   def channels(c) do
@@ -19,11 +19,8 @@ defmodule Agentdesk.AgentRelay do
     # entry 1: `flz relay call`
     |> input("turn")
     |> into(Reply)
-    # to whoever listens; the chain goes on
+    # to whoever called, and whoever listens
     |> sink("answer")
-    |> into(Deliver)
-    # to whoever called
-    |> response()
 
     # entry 2: the gateway, into the same Reply
     c

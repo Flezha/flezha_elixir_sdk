@@ -21,8 +21,9 @@ defmodule Agentdesk.GatewayRelay do
     http
     |> filter(&(not Request.sends?(&1)))
     |> into(Watch)
+    |> keyed()
     # a stream, or 404
-    |> response()
+    |> sink()
 
     # route 2: POST .../messages is checked against the user's budget
     verdicts =
@@ -37,8 +38,9 @@ defmodule Agentdesk.GatewayRelay do
     # use 1: answer the POST
     verdicts
     |> into(Admit)
+    |> keyed()
     # 202, or 429 over the budget
-    |> response()
+    |> sink()
 
     # use 2: pass an admitted message on to the user's session
     verdicts

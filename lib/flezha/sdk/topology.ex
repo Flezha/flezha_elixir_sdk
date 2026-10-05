@@ -324,11 +324,6 @@ defmodule Flezha.SDK.Topology do
      %{walk | wired?: true, closed?: true}}
   end
 
-  defp walk_link(_acc, _chain, {:response, serializer}, {state, steps, walk}) do
-    wire = plugin_end(nil, serializer, steps, false, :response)
-    {Flezha.SDK.CallEnd.terminate(state, wire, walk.key?), steps, %{walk | closed?: true}}
-  end
-
   defp walk_link(_acc, _chain, {:call, call, serializer}, {state, steps, walk}) do
     wire = plugin_end(nil, serializer, steps, false, call)
     {Flezha.SDK.CallEnd.terminate(state, wire, walk.key?), steps, %{walk | closed?: true}}
@@ -366,19 +361,19 @@ defmodule Flezha.SDK.Topology do
   # identical routes with every value delivered twice.
   defp terminate_sink(state, plugin, serializer, steps, keyed?) do
     cond do
-      Enum.any?(state.sinks, &(&1.response or &1.call != nil)) ->
+      Enum.any?(state.sinks, &(&1.call != nil)) ->
         issue(state, {:ChannelEndsTwice, state.name})
 
       Enum.any?(state.sinks, &(&1.keyed == keyed?)) ->
         issue(state, {:DuplicatePluginSink, state.name, plugin})
 
       true ->
-        %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, :sink) | state.sinks]}
+        %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, nil) | state.sinks]}
     end
   end
 
-  # `ends` is `:sink`, `:response` or the call end a `call` link carries.
-  defp plugin_end(plugin, serializer, steps, keyed?, ends) do
+  # A sink's wire, or with `call` the call end a `call` link carries.
+  defp plugin_end(plugin, serializer, steps, keyed?, call) do
     {transform, key_by} = Channels.fuse(Enum.reverse(steps))
 
     %{
@@ -387,8 +382,7 @@ defmodule Flezha.SDK.Topology do
       transform: transform,
       key_by: key_by,
       keyed: keyed?,
-      response: ends == :response,
-      call: if(is_map(ends), do: ends)
+      call: call
     }
   end
 
@@ -455,7 +449,6 @@ defmodule Flezha.SDK.Topology do
             key_by: wire.key_by,
             serializer: wire.serializer,
             keyed: wire.keyed,
-            response: wire.response,
             call: wire.call,
             # The channel a frame off this route is named by: a static
             # property of the route's source, resolved once here.
@@ -669,9 +662,10 @@ defmodule Flezha.SDK.Topology do
     |> Enum.reverse()
   end
 
-  # An answer or a call is identified by its call, so neither end needs a key.
+  # A request is identified by its call, so a call end needs no key; a sink
+  # does, its answers to calls included.
   defp check_wires_under_tier(is, channel, true) do
-    for %{keyed: false, response: false, call: nil} <- channel.sinks,
+    for %{keyed: false, call: nil} <- channel.sinks,
         reduce: is,
         do: (is -> [{:UnkeyedChannelUnderEffectivelyOnce, channel.name} | is])
   end

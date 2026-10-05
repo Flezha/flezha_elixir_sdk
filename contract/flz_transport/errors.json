@@ -2833,7 +2833,7 @@
     },
     "topology.channel_ends_twice": {
       "class": "invalid",
-      "message": "channel '{channel}' declares two plugin ends; a channel ends in one sink, one response() or one call, so route the value through a pass-through tasklet to give it both",
+      "message": "channel '{channel}' declares two plugin ends; a channel ends in one sink or one call, so route the value through a second tasklet to give it both",
       "details": ["channel"]
     },
     "topology.channel_name_too_long": {

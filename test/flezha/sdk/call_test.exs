@@ -57,7 +57,13 @@ defmodule Flezha.SDK.CallTest do
       |> filter(&(&1 != "drop"))
       |> map(&("req:" <> &1))
       |> key_by(fn "req:" <> rest -> rest |> String.split(":") |> hd() end)
-      |> call(factory: "agent", deadline_ms: 60_000, create: false, channel: "turn")
+      |> call(
+        factory: "agent",
+        deadline_ms: 60_000,
+        create: false,
+        channel: "turn",
+        answer_channel: "reply"
+      )
       |> into(Log)
     end
   end
@@ -96,13 +102,13 @@ defmodule Flezha.SDK.CallTest do
     end
   end
 
-  defmodule CallThenResponseOp do
-    use Flezha.SDK.Relay, factory_id: "call_beside_response"
+  defmodule CallThenSinkOp do
+    use Flezha.SDK.Relay, factory_id: "sink_beside_call"
 
     def channels(c) do
       asked = c |> input("in") |> into(Ask)
       asked |> call("pricing", deadline_ms: 500) |> into(Log)
-      asked |> response()
+      asked |> sink("out")
     end
   end
 
@@ -197,7 +203,7 @@ defmodule Flezha.SDK.CallTest do
   describe "the declaration" do
     test "a call is a plugin end with no sink, its Response an entry fed back into the caller" do
       {:ok, topology} = Topology.build(BackIntoCallerOp)
-      assert [%{call: call, channel: "quote", response: false}] = ends(topology, Ask)
+      assert [%{call: call, channel: "quote"}] = ends(topology, Ask)
 
       assert call == %{
                target: "id:pricing",
@@ -205,6 +211,7 @@ defmodule Flezha.SDK.CallTest do
                create: true,
                deadline_ms: 500,
                channel: nil,
+               answer_channel: nil,
                response: "quote.response"
              }
 
@@ -216,7 +223,10 @@ defmodule Flezha.SDK.CallTest do
     test "a factory call carries the chain's transforms, key, create and channel" do
       {:ok, topology} = Topology.build(FactoryOp)
       assert [%{call: call} = route] = ends(topology, Ask)
-      assert %{target: "factory:agent", create: false, channel: "turn"} = call
+
+      assert %{target: "factory:agent", create: false, channel: "turn", answer_channel: "reply"} =
+               call
+
       assert route.transform.("drop") == []
       assert route.transform.("s1:hi") == ["req:s1:hi"]
       assert route.key_by.("req:s1:hi") == "s1"
@@ -239,8 +249,8 @@ defmodule Flezha.SDK.CallTest do
   end
 
   describe "the refusals" do
-    test "a call beside a sink or a response ends the channel twice" do
-      for module <- [SinkThenCallOp, CallThenResponseOp] do
+    test "a call beside a sink, in either order, ends the channel twice" do
+      for module <- [SinkThenCallOp, CallThenSinkOp] do
         assert {:error, %Error{code: "topology.channel_ends_twice"}} = Topology.build(module)
       end
     end
@@ -279,11 +289,11 @@ defmodule Flezha.SDK.CallTest do
       create: false,
       deadline_ms: 1_000,
       channel: "turn",
+      answer_channel: "quotes",
       response: "ask.response"
     }
     @route %{
       channel: "ask",
-      response: false,
       call: @call,
       key_by: &String.upcase/1,
       serializer: &Function.identity/1
@@ -307,6 +317,7 @@ defmodule Flezha.SDK.CallTest do
                "flz.call_create" => "false",
                "flz.call_response" => "ask.response",
                "flz.call_channel" => "turn",
+               "flz.call_answer_channel" => "quotes",
                "flz.key" => "V"
              } = metadata
 
@@ -316,7 +327,15 @@ defmodule Flezha.SDK.CallTest do
     end
 
     test "a creating, unkeyed call on the callee's first channel stamps only what it has" do
-      call = %{@call | target: "id:pricing", factory?: false, create: true, channel: nil}
+      call = %{
+        @call
+        | target: "id:pricing",
+          factory?: false,
+          create: true,
+          channel: nil,
+          answer_channel: nil
+      }
+
       route = %{@route | call: call, key_by: nil}
       {metadata, _} = Routing.sink_frame(route, "v", %{meta: %{}, key: nil, origin: nil}, 0, nil)
 
@@ -328,19 +347,19 @@ defmodule Flezha.SDK.CallTest do
       stamped =
         Map.new(
           ~w(flz.call flz.call_create flz.call_response flz.deadline_at
-                           flz.call_channel flz.key flz.reply_to),
+                           flz.call_channel flz.call_answer_channel flz.key flz.reply_to),
           &{&1, "x"}
         )
 
       emit = %{meta: Map.put(stamped, "user", "u"), key: nil, origin: nil}
-      route = %{channel: "out", response: false, key_by: nil, serializer: & &1}
+      route = %{channel: "out", call: nil, key_by: nil, serializer: & &1}
 
       assert {%{"channel" => "out", "user" => "u"} = metadata, "v"} =
                Routing.sink_frame(route, "v", emit, 0, nil)
 
       assert map_size(metadata) == 2
-      {answer, _} = Routing.sink_frame(%{route | response: true}, "v", emit, 0, nil)
-      assert answer == %{"channel" => "out", "user" => "u", "flz.reply_to" => ""}
+      {answer, _} = Routing.sink_frame(route, "v", Map.put(emit, :call, "w:t"), 0, nil)
+      assert answer == %{"channel" => "out", "user" => "u", "flz.reply_to" => "w:t"}
     end
   end
 
@@ -351,7 +370,14 @@ defmodule Flezha.SDK.CallTest do
       Inbox.input(op, "in", "s1:hi", %{"flz.reply_to" => "w:tok"})
 
       assert_receive {:flz_data, _, "caller-1", "req:s1:hi", metadata}, 5_000
-      assert %{"channel" => "ask", "flz.call" => "factory:agent", "flz.key" => "s1"} = metadata
+
+      assert %{
+               "channel" => "ask",
+               "flz.call" => "factory:agent",
+               "flz.call_answer_channel" => "reply",
+               "flz.key" => "s1"
+             } = metadata
+
       refute Map.has_key?(metadata, "flz.reply_to")
       refute_received {:flz_data, _, "caller-1", "req:drop", _}
     end

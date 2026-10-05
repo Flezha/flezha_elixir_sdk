@@ -88,7 +88,7 @@ defmodule Flezha.SDK.Steps.Driver do
       origin: nil,
       # the input-log offset of the input this pass consumed, `nil` for none
       consumed_offset: nil,
-      # the outside call that input carried, which every `response()` output
+      # the outside call that input carried, which every sink output
       # of the pass answers; `nil` for a timer- or carry-fed pass
       pass_call: nil,
       iter: 0,

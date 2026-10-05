@@ -3,8 +3,8 @@ defmodule Flezha.SDK.PartTest do
   `part/2`: a preview of an invocation's output, sent from inside `run/3` on
   the node's sink route. Parts are numbered per attempt from `0`, carry the
   attempt, the Cell and its key, leave before `run/3` returns, and are refused
-  on a channel with no sink (a `response()` or a `call` end included) and through a ctx
-  whose invocation has returned. The frames match the shared fixture the core
+  on a channel with no sink (a `call` end included) and through a ctx whose
+  invocation has returned. The frames match the shared fixture the core
   produces.
   """
   use ExUnit.Case, async: false
@@ -111,11 +111,6 @@ defmodule Flezha.SDK.PartTest do
     def channels(c), do: c |> input("in") |> into(Refused) |> into(Log)
   end
 
-  defmodule ResponseOp do
-    use Flezha.SDK.Relay, factory_id: "part_response"
-    def channels(c), do: c |> input("in") |> into(Refused) |> response()
-  end
-
   defmodule CallOp do
     use Flezha.SDK.Relay, factory_id: "part_call"
 
@@ -208,16 +203,14 @@ defmodule Flezha.SDK.PartTest do
     assert_receive {:flz_data, _, "part_hold", "late", _}, 5_000
   end
 
-  test "a channel that ends in no sink, or in a response, refuses a part" do
-    for {module, id} <- [{EdgeOp, "part_edge_op"}, {ResponseOp, "part_resp"}] do
-      op = start(module, id)
-      Inbox.input(op, "in", "x", %{})
-      assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
-      assert error.details["tasklet"] == "refused"
-      assert error.details["relay"] == id
-      assert error.details["channel"] not in [nil, ""]
-      refute_received {:flz_data, _, "output_part", _, _}
-    end
+  test "a channel that ends in no sink refuses a part" do
+    op = start(EdgeOp, "part_edge_op")
+    Inbox.input(op, "in", "x", %{})
+    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
+    assert error.details["tasklet"] == "refused"
+    assert error.details["relay"] == "part_edge_op"
+    assert error.details["channel"] not in [nil, ""]
+    refute_received {:flz_data, _, "output_part", _, _}
   end
 
   test "a channel that ends in a call refuses a part: only a sink end satisfies one" do
