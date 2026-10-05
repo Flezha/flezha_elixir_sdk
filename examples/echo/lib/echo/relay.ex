@@ -19,6 +19,6 @@ defmodule Echo.Relay do
     # each one runs through the echo tasklet
     |> into(Echo.Tasklet)
     # the result leaves on "out", for a plugin to pick up
-    |> sink("out")
+    |> output("out")
   end
 end

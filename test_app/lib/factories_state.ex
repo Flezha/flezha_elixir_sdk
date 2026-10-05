@@ -51,7 +51,7 @@ defmodule ElixirRunner.StoreInputOp do
     c
     |> input("input")
     |> into(ElixirRunner.StoreInputTask)
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -148,7 +148,7 @@ end
 # -- sleeping_counter -------------------------------------------------------
 
 # A flow relay that sleeps when idle: `key:delta` inputs fold into one total per
-# key, and every input emits `key=total` on the `totals` sink.
+# key, and every input emits `key=total` on the `totals` output.
 defmodule ElixirRunner.SleepingCounterTask do
   @moduledoc false
   use Flezha.SDK.Tasklet, name: "sleeping_counter_tasklet"
@@ -184,7 +184,7 @@ defmodule ElixirRunner.SleepingCounterOp do
     |> input("input")
     |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(ElixirRunner.SleepingCounterTask)
-    |> sink("totals")
+    |> output("totals")
   end
 end
 
@@ -279,7 +279,7 @@ defmodule ElixirRunner.ResumeProbeOp do
     c
     |> input("input")
     |> into(ElixirRunner.ResumeProbeTask)
-    |> sink("total")
+    |> output("total")
   end
 end
 
@@ -352,7 +352,7 @@ defmodule ElixirRunner.SchemaEvolutionV1Op do
     c
     |> input("input")
     |> into(ElixirRunner.EvolvingCartV1Task)
-    |> sink("total")
+    |> output("total")
   end
 end
 
@@ -367,7 +367,7 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
     c
     |> input("input")
     |> into(ElixirRunner.EvolvingCartV2Task)
-    |> sink("total")
+    |> output("total")
   end
 end
 
@@ -431,7 +431,7 @@ defmodule ElixirRunner.SessionTimeoutOp do
     c
     |> input("input")
     |> into(ElixirRunner.SessionTimeoutTask)
-    |> sink("kafka")
+    |> output("kafka")
   end
 end
 
@@ -546,7 +546,7 @@ defmodule ElixirRunner.TierChainOp do
     |> retry_max(1_000)
     |> into(ElixirRunner.TierTallyTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -563,7 +563,7 @@ defmodule ElixirRunner.CheckpointStoreOp do
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -585,7 +585,7 @@ defmodule ElixirRunner.CheckpointBatchedOp do
     |> input("input")
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -658,7 +658,7 @@ defmodule ElixirRunner.CandleOp do
     |> input("input")
     |> into(ElixirRunner.CandleTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 

@@ -23,7 +23,7 @@ defmodule Flezha.SDK.Steps.Stage do
   Hand `batch` — `{value, key}` pairs, the key the edge gave each value — to
   the stage's Cells and queue one barrier behind each Cell that received one.
   Each item carries `call`, the outside call the pass answers, so a Cell that
-  records its own outputs stamps its sink ones. Answers the keys of those
+  records its own outputs stamps its output ones. Answers the keys of those
   Cells in the order they were first reached, the `{ref, {node_ref, cell_pid}}`
   pairs the driver waits on, and the Cell set.
   """

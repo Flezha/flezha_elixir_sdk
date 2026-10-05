@@ -5,7 +5,7 @@ defmodule Flezha.SDK.LocalTest do
   `WordCount` below are the worked example in `docs/quickstart.md`, copied
   verbatim so the documented graph is the one that runs here.
   """
-  # async: false: the process-wide notice and unhandled-sink counters.
+  # async: false: the process-wide notice and unhandled-output counters.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO, only: [with_io: 2]
@@ -43,7 +43,7 @@ defmodule Flezha.SDK.LocalTest do
         c
         |> Channels.input_with("in", &{:ok, String.to_integer(&1)})
         |> Channels.into(CounterTask)
-        |> Channels.sink("c")
+        |> Channels.output("c")
   end
 
   defmodule Spawner do
@@ -65,7 +65,7 @@ defmodule Flezha.SDK.LocalTest do
     def factory_id, do: "spawner"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Spawner) |> Channels.sink("out")
+      do: c |> Channels.input("in") |> Channels.into(Spawner) |> Channels.output("out")
   end
 
   # --- the moduledoc's worked example ---
@@ -115,7 +115,7 @@ defmodule Flezha.SDK.LocalTest do
       |> Channels.into(Tally)
       |> Channels.named("counts")
       |> Channels.keyed()
-      |> Channels.sink()
+      |> Channels.output()
     end
   end
 
@@ -132,7 +132,7 @@ defmodule Flezha.SDK.LocalTest do
       |> Channels.into(Normalise)
       |> Channels.named("out")
       |> Channels.keyed()
-      |> Channels.sink()
+      |> Channels.output()
     end
   end
 
@@ -164,7 +164,7 @@ defmodule Flezha.SDK.LocalTest do
     def factory_id, do: "local_closer"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Closer) |> Channels.sink("out")
+      do: c |> Channels.input("in") |> Channels.into(Closer) |> Channels.output("out")
   end
 
   defmodule StrictOp do
@@ -176,7 +176,7 @@ defmodule Flezha.SDK.LocalTest do
       |> Channels.input_with("lines", fn _bytes -> {:error, "unreadable"} end)
       |> Channels.into(Normalise)
       |> Channels.named("out")
-      |> Channels.sink()
+      |> Channels.output()
     end
   end
 
@@ -207,7 +207,7 @@ defmodule Flezha.SDK.LocalTest do
       |> Channels.input("in")
       |> Channels.into(Held)
       |> Channels.named("out")
-      |> Channels.sink()
+      |> Channels.output()
     end
   end
 
@@ -264,7 +264,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defp collect(run, channel) do
     reader = self()
-    :ok = Local.on_sink(run, channel, fn output -> send(reader, {:sink, output}) end)
+    :ok = Local.on_output(run, channel, fn output -> send(reader, {:sink, output}) end)
   end
 
   defp drained(acc \\ []) do
@@ -358,7 +358,7 @@ defmodule Flezha.SDK.LocalTest do
     assert Enum.sort(payloads()) == ["one 1", "two 1"]
   end
 
-  test "a keyed sink carries the identity a deployed run would stamp" do
+  test "a keyed output carries the identity a deployed run would stamp" do
     run = start_run(WordCount)
     collect(run, "counts")
 
@@ -371,19 +371,19 @@ defmodule Flezha.SDK.LocalTest do
     assert metadata["flz.seq"] =~ ~r/^\d+\.\d+$/
   end
 
-  test "a record frame is discarded at the outbound edge, never taken for sink output" do
+  test "a record frame is discarded at the outbound edge, never taken for output" do
     run = start_run(CounterOp)
     collect(run, "c")
-    unhandled = Local.unhandled_sink_outputs()
+    unhandled = Local.unhandled_outputs()
 
     :ok = Local.feed(run, "in", "2")
     :ok = Local.feed(run, "in", "3")
     assert :ok = Local.run_until_idle(run, 5_000)
 
     # A changeful tasklet: two dispatches wrote two change records onto the
-    # same stream the sink rides. Only the two sink values reach the callback.
+    # same stream the output rides. Only the two output values reach the callback.
     assert payloads() == ~w(2 5)
-    assert Local.unhandled_sink_outputs() == unhandled
+    assert Local.unhandled_outputs() == unhandled
   end
 
   # --- what local mode refuses ---
@@ -397,7 +397,7 @@ defmodule Flezha.SDK.LocalTest do
     assert entry =~ "lynes" and entry =~ "word_count-local" and entry =~ "lines"
 
     assert {:error, %{code: "runtime.channel_undeclared", message: sink}} =
-             Local.on_sink(run, "totals", fn _output -> :ok end)
+             Local.on_output(run, "totals", fn _output -> :ok end)
 
     assert sink =~ "totals" and sink =~ "word_count-local" and sink =~ "counts"
   end
@@ -414,9 +414,9 @@ defmodule Flezha.SDK.LocalTest do
     assert steps =~ "run: :steps" and steps =~ "requires a controller"
   end
 
-  test "a value released on a sink with no callback is reported by name and counted" do
+  test "a value released on an output with no callback is reported by name and counted" do
     run = start_run(WordCount)
-    before = Local.unhandled_sink_outputs()
+    before = Local.unhandled_outputs()
 
     log =
       capture_log(fn ->
@@ -424,8 +424,8 @@ defmodule Flezha.SDK.LocalTest do
         assert :ok = Local.run_until_idle(run, 5_000)
       end)
 
-    assert log =~ "released on sink `counts`"
-    assert Local.unhandled_sink_outputs() == before + 1
+    assert log =~ "released on output `counts`"
+    assert Local.unhandled_outputs() == before + 1
   end
 
   test "an entry the channel's parser refuses is parked and named" do

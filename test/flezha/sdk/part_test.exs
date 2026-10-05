@@ -1,9 +1,9 @@
 defmodule Flezha.SDK.PartTest do
   @moduledoc """
   `part/2`: a preview of an invocation's output, sent from inside `run/3` on
-  the node's sink route. Parts are numbered per attempt from `0`, carry the
+  the node's output route. Parts are numbered per attempt from `0`, carry the
   attempt, the Cell and its key, leave before `run/3` returns, and are refused
-  on a channel with no sink (a `call` end included) and through a ctx whose
+  on a channel with no output (a `call` end included) and through a ctx whose
   invocation has returned. The frames match the shared fixture the core
   produces.
   """
@@ -96,14 +96,14 @@ defmodule Flezha.SDK.PartTest do
     use Flezha.SDK.Relay, factory_id: "part_sink"
 
     def channels(c),
-      do: c |> input("in") |> retry_backoff_ms(1) |> into(P0) |> sink("answer")
+      do: c |> input("in") |> retry_backoff_ms(1) |> into(P0) |> output("answer")
   end
 
   defmodule KeyedOp do
     use Flezha.SDK.Relay, factory_id: "part_keyed"
 
     def channels(c),
-      do: c |> input("in") |> key_by(fn _ -> "s-7" end) |> into(P0) |> sink("answer")
+      do: c |> input("in") |> key_by(fn _ -> "s-7" end) |> into(P0) |> output("answer")
   end
 
   defmodule EdgeOp do
@@ -120,7 +120,7 @@ defmodule Flezha.SDK.PartTest do
 
   defmodule KeepOp do
     use Flezha.SDK.Relay, factory_id: "part_keep"
-    def channels(c), do: c |> input("in") |> into(Refused) |> sink("answer")
+    def channels(c), do: c |> input("in") |> into(Refused) |> output("answer")
   end
 
   defmodule TurnLoop do
@@ -130,7 +130,7 @@ defmodule Flezha.SDK.PartTest do
     def run, do: {:steps, each: :per_input}
     def durable, do: false
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("in") |> into(P0) |> sink("answer")
+    def channels(c), do: c |> input("in") |> into(P0) |> output("answer")
   end
 
   setup do
@@ -203,20 +203,20 @@ defmodule Flezha.SDK.PartTest do
     assert_receive {:flz_data, _, "part_hold", "late", _}, 5_000
   end
 
-  test "a channel that ends in no sink refuses a part" do
+  test "a channel that ends in no output refuses a part" do
     op = start(EdgeOp, "part_edge_op")
     Inbox.input(op, "in", "x", %{})
-    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
+    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_output"} = error}}, 5_000
     assert error.details["tasklet"] == "refused"
     assert error.details["relay"] == "part_edge_op"
     assert error.details["channel"] not in [nil, ""]
     refute_received {:flz_data, _, "output_part", _, _}
   end
 
-  test "a channel that ends in a call refuses a part: only a sink end satisfies one" do
+  test "a channel that ends in a call refuses a part: only an output end satisfies one" do
     op = start(CallOp, "part_call_op")
     Inbox.input(op, "in", "x", %{})
-    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
+    assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_output"} = error}}, 5_000
     assert error.details["channel"] == "refused"
     refute_received {:flz_data, _, "output_part", _, _}
   end

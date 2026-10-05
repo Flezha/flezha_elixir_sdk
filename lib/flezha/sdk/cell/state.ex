@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Cell.State do
     },
     # One field again, for the same reason: whether the Cell writes effect
     # records (the effectively-once tier, or a durable steps relay), its
-    # checkpoint policy, the node's sink routes the Cell captures its outputs
+    # checkpoint policy, the node's output routes the Cell captures its outputs
     # through, whether it has an inter-tasklet edge, whether it is a steps relay
     # stage's Cell and the records it wrote since its stage's last barrier, the
     # open interval, the consumed floor, the armed deadline, the records owed

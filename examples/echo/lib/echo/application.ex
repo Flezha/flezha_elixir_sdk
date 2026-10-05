@@ -35,7 +35,7 @@ defmodule Echo.Application do
     # {:ok, %{id: "my_echo"}} = Control.start_relay(runner, "echo", id: "my_echo")
     #
     # {:ok, _} =
-    #   Control.enable_plugin(runner, "writer", "relay_file_sink",
+    #   Control.enable_plugin(runner, "writer", "relay_file_output",
     #     opts: %{"path" => "echo-out.txt"}
     #   )
     #

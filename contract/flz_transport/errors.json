@@ -1087,10 +1087,10 @@
         {"tag": "overwatch_unavailable", "args": ["reason"]}
       ]
     },
-    "part.no_sink": {
+    "part.no_output": {
       "class": "invalid",
-      "message": "tasklet '{tasklet}' of relay '{relay}' sent a part, but its output channel '{channel}' has no sink",
-      "hint": "declare a sink on the tasklet's channel",
+      "message": "tasklet '{tasklet}' of relay '{relay}' sent a part, but its output channel '{channel}' has no output",
+      "hint": "declare an output on the tasklet's channel",
       "details": ["tasklet", "relay", "channel"]
     },
     "part.outside_invocation": {
@@ -1783,12 +1783,12 @@
         {"tag": "signature_required"}
       ]
     },
-    "plugin.single_sink": {
+    "plugin.single_output": {
       "class": "invalid",
       "message": "plugin '{plugin}' runs as one copy in the cluster, so it takes no on_output hook",
       "details": ["plugin"],
       "reasons": [
-        {"tag": "plugin_single_sink", "args": ["plugin"]}
+        {"tag": "plugin_single_output", "args": ["plugin"]}
       ]
     },
     "plugin.source_unsupported": {
@@ -2823,7 +2823,7 @@
     },
     "topology.chained_loop_terminal_without_handoff": {
       "class": "invalid",
-      "message": "a durable handoff-chained loop's terminal tasklet '{tasklet}' releases no inter-tasklet handoff; iteration N+1 is seeded from iteration N's terminal batch, and a tasklet that owns no output channel, or whose only output is plugin-bound, has nothing the journal carries. Take the sink off the terminal's own channel, or declare the loop per_input; wiring another tasklet behind the sink only moves the rule onto that one",
+      "message": "a durable handoff-chained loop's terminal tasklet '{tasklet}' releases no inter-tasklet handoff; iteration N+1 is seeded from iteration N's terminal batch, and a tasklet that owns no output channel, or whose only output is plugin-bound, has nothing the journal carries. Take the output off the terminal's own channel, or declare the loop per_input; wiring another tasklet behind the output only moves the rule onto that one",
       "details": ["tasklet"]
     },
     "topology.change_without_state": {
@@ -2833,7 +2833,7 @@
     },
     "topology.channel_ends_twice": {
       "class": "invalid",
-      "message": "channel '{channel}' declares two plugin ends; a channel ends in one sink or one call, so route the value through a second tasklet to give it both",
+      "message": "channel '{channel}' declares two plugin ends; a channel ends in one output or one call, so route the value through a second tasklet to give it both",
       "details": ["channel"]
     },
     "topology.channel_name_too_long": {
@@ -2843,8 +2843,8 @@
     },
     "topology.channel_named_twice": {
       "class": "invalid",
-      "message": "channel '{channel}' is named twice: named('{named}') and sink('{sink}') both name it. A sink names the channel it terminates, so write the name once: sink('{named}') to keep the channel's name, or named('{named}') with a sink that takes no name",
-      "details": ["channel", "named", "sink"]
+      "message": "channel '{channel}' is named twice: named('{named}') and output('{output}') both name it. An output names the channel it terminates, so write the name once: output('{named}') to keep the channel's name, or named('{named}') with an output that takes no name",
+      "details": ["channel", "named", "output"]
     },
     "topology.checkpoint_every_zero": {
       "class": "invalid",
@@ -2931,14 +2931,14 @@
       "message": "tasklet '{tasklet}' journals changes and is wired as more than one node; a changeful tasklet may appear once per class",
       "details": ["tasklet"]
     },
-    "topology.duplicate_plugin_sink": {
+    "topology.duplicate_plugin_output": {
       "class": "invalid",
-      "message": "channel '{channel}' was declared with sink more than once; only one plugin sink per channel is allowed",
+      "message": "channel '{channel}' was declared with output more than once; only one output per channel is allowed",
       "details": ["channel"]
     },
-    "topology.duplicate_sink_name": {
+    "topology.duplicate_output_name": {
       "class": "invalid",
-      "message": "channel '{channel}' is named by two plugin sinks; a sink names the channel it terminates, so two channels cannot name one sink. Give each its own name; a plugin still reaches both by attaching to the relay with no channel filter",
+      "message": "channel '{channel}' is named by two outputs; an output names the channel it terminates, so two channels cannot name one output. Give each its own name; a plugin still reaches both by attaching to the relay with no channel filter",
       "details": ["channel"]
     },
     "topology.edge_already_wired": {
@@ -2988,7 +2988,7 @@
     },
     "topology.keyed_channel_without_plugin_wire": {
       "class": "invalid",
-      "message": "channel '{channel}' is declared keyed but has no plugin wire; output identity stamps only exist on plugin-bound frames, so add a sink",
+      "message": "channel '{channel}' is declared keyed but has no plugin wire; output identity stamps only exist on plugin-bound frames, so add an output",
       "details": ["channel"]
     },
     "topology.keyed_on_entry": {
@@ -3129,7 +3129,7 @@
     },
     "topology.short_form_field_on_full_form": {
       "class": "invalid",
-      "message": "relay '{factory_id}' declares {fields} beside its channels body; a full form wires entry channels, codecs and sinks in channels and declares each tasklet's fields on the tasklet",
+      "message": "relay '{factory_id}' declares {fields} beside its channels body; a full form wires entry channels, codecs and outputs in channels and declares each tasklet's fields on the tasklet",
       "details": ["factory_id", "fields"]
     },
     "topology.short_form_name_mismatch": {
@@ -3147,14 +3147,14 @@
       "message": "relay '{factory_id}' is a single-tasklet short form and also declares a channels body; declare one or the other",
       "details": ["factory_id"]
     },
-    "topology.sink_on_entry": {
+    "topology.output_on_entry": {
       "class": "invalid",
-      "message": "entry channel '{channel}' is given a plugin sink, and a sink is fed by a tasklet; wire the entry channel into one first",
+      "message": "entry channel '{channel}' is given an output, and an output is fed by a tasklet; wire the entry channel into one first",
       "details": ["channel"]
     },
-    "topology.sink_without_output": {
+    "topology.output_without_type": {
       "class": "invalid",
-      "message": "relay '{factory_id}' names a sink, and its tasklet declares no output to feed it",
+      "message": "relay '{factory_id}' names an output, and its tasklet produces no value to feed it",
       "details": ["factory_id"]
     },
     "topology.state_not_constructible": {
@@ -3189,7 +3189,7 @@
     },
     "topology.transform_after_terminal": {
       "class": "invalid",
-      "message": "channel '{channel}' declares a transform or key_by after a plugin sink; the sink serializes the channel's own value, so nothing downstream of it can be reshaped",
+      "message": "channel '{channel}' declares a transform or key_by after an output; the output serializes the channel's own value, so nothing downstream of it can be reshaped",
       "details": ["channel"]
     },
     "topology.two_clocks": {

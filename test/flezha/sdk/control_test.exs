@@ -23,12 +23,12 @@ defmodule Flezha.SDK.ControlTest do
   test "a plugin is enabled by name, and bound and unbound by relay" do
     server = recording_server()
 
-    Control.enable_plugin(server, "writer", "relay_file_sink", opts: %{"path" => "out.txt"})
+    Control.enable_plugin(server, "writer", "relay_file_output", opts: %{"path" => "out.txt"})
 
     assert_received {:called, "PluginManager.enable",
                      [
                        "writer",
-                       %{"provider" => "relay_file_sink", "opts" => %{"path" => "out.txt"}}
+                       %{"provider" => "relay_file_output", "opts" => %{"path" => "out.txt"}}
                      ]}
 
     Control.enable_plugin(server, "feed", "relay_websocket",

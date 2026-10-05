@@ -47,6 +47,6 @@ defmodule Tradedesk.TradeWatcher do
     # fed by the tasklet above
     |> into(Tradedesk.BuyAboveAverage)
     # out to the file plugin
-    |> sink("signals")
+    |> output("signals")
   end
 end

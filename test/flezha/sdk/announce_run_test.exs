@@ -57,7 +57,7 @@ defmodule Flezha.SDK.AnnounceRunTest do
     @moduledoc false
     use Flezha.SDK.Relay,
       factory_id: "announce_late",
-      sink: "out",
+      output: "out",
       run: :steps,
       description: "the late class"
 

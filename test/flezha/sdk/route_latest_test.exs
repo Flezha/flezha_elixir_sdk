@@ -20,7 +20,7 @@ defmodule Flezha.SDK.RouteLatestTest do
 
       c
       |> Channels.route_latest(documents, trades, &(&1 |> String.split(":") |> hd()))
-      |> Channels.sink_with("routed", fn {key, document} -> "#{key}=#{document}" end)
+      |> Channels.output_with("routed", fn {key, document} -> "#{key}=#{document}" end)
     end
   end
 
@@ -34,7 +34,7 @@ defmodule Flezha.SDK.RouteLatestTest do
 
       c
       |> Channels.route_latest_named(documents, trades, & &1, "thresholds_router")
-      |> Channels.sink()
+      |> Channels.output()
     end
   end
 
@@ -43,7 +43,7 @@ defmodule Flezha.SDK.RouteLatestTest do
     on_exit(fn -> Local.stop(run) end)
 
     reader = self()
-    :ok = Local.on_sink(run, "routed", &send(reader, {:routed, &1.payload}))
+    :ok = Local.on_output(run, "routed", &send(reader, {:routed, &1.payload}))
 
     feed(run, "thresholds", "v1")
     feed(run, "trades", "A:1")

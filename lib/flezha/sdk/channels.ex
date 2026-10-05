@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Channels do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
-  (`into`/`into_named`/`sink`/`sink_with`/`call`,
+  (`into`/`into_named`/`output`/`output_with`/`call`,
   `merge` with `from`, and `route_latest`/`route_latest_named`), per-edge knobs
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
   identity on the plugin wire the handle reaches). Fan-out is handle reuse, or
@@ -10,7 +10,7 @@ defmodule Flezha.SDK.Channels do
   (`Flezha.SDK.Relay`), not a builder call.
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
-  to the chain its handle carries — a transform, a key, a plugin sink, an edge
+  to the chain its handle carries — a transform, a key, a plugin output, an edge
   into a tasklet, a merge source closing on one — and the record is kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
   builder's `pending`).
@@ -210,17 +210,17 @@ defmodule Flezha.SDK.Channels do
   @doc """
   Terminate the channel on the plugin layer with default serialization
   (bytes/UTF-8/JSON), naming it. The string written here IS the channel's name
-  everywhere one appears; `sink/1` leaves it derived as it would be without a
-  sink at all. Returns the handle.
+  everywhere one appears; `output/1` leaves it derived as it would be without an
+  output at all. Returns the handle.
   """
-  def sink(%Stream{} = s, plugin \\ nil) when is_nil(plugin) or is_binary(plugin),
-    do: sink_with(s, plugin, &default_serialize/1)
+  def output(%Stream{} = s, plugin \\ nil) when is_nil(plugin) or is_binary(plugin),
+    do: output_with(s, plugin, &default_serialize/1)
 
   @doc """
-  `sink/2` with a custom serializer. Returns the handle, so a channel carrying
-  a sink AND a consumer (the hybrid shape) is one pipeline.
+  `output/2` with a custom serializer. Returns the handle, so a channel carrying
+  an output AND a consumer (the hybrid shape) is one pipeline.
   """
-  def sink_with(%Stream{} = s, plugin \\ nil, serializer)
+  def output_with(%Stream{} = s, plugin \\ nil, serializer)
       when (is_nil(plugin) or is_binary(plugin)) and is_function(serializer, 1) do
     s = name_from_sink(s, plugin)
     %{link(s, {:sink, plugin, serializer}) | chain_id: nil}
@@ -228,7 +228,7 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   End the chain in a call to another relay: every value reaching it, after
-  the chain's transforms and key, is one request, written as `sink/2` writes
+  the chain's transforms and key, is one request, written as `output/2` writes
   (`serialize:`). `target` names an instance, or a partition group whose
   member the chain's key chooses; `factory:` instead names a factory whose
   instance the key names, started when absent unless `create: false`.
@@ -241,7 +241,7 @@ defmodule Flezha.SDK.Channels do
   `<channel>.response`, whose values are `%Flezha.SDK.Response{}`: the answer
   read by `decode:` as `input_with/3`'s parser reads (the raw bytes by
   default). A call is not an edge, so the Response channel may feed the
-  tasklet that made the call. A channel ends in one sink or one call
+  tasklet that made the call. A channel ends in one output or one call
   (`ChannelEndsTwice`).
 
       turns |> call("pricing", deadline_ms: 300) |> into(Price)
@@ -251,7 +251,7 @@ defmodule Flezha.SDK.Channels do
   def call(stream, target \\ nil, opts)
 
   def call(%Stream{source: {:entry, name}} = s, _target, _opts),
-    do: refuse(s, {:SinkOnEntry, name})
+    do: refuse(s, {:OutputOnEntry, name})
 
   def call(%Stream{builder: ref} = s, target, opts) when is_list(opts) do
     name = channel_name(Process.get(acc_key(ref)), s.source) <> ".response"
@@ -279,7 +279,7 @@ defmodule Flezha.SDK.Channels do
     }
   end
 
-  # A sink that names the channel records the name where `named/2` records its
+  # An output that names the channel records the name where `named/2` records its
   # own, so one rule answers what a channel is called and the check can see a
   # channel named twice.
   defp name_from_sink(%Stream{} = s, nil), do: s
@@ -299,7 +299,7 @@ defmodule Flezha.SDK.Channels do
   Declare output identity on the plugin wire this handle reaches — the
   reference's `keyed()`: its frames carry `flz.cell`, `flz.seq` and
   `flz.key`. Refused on an entry handle, which has no output of its own to
-  stamp; a chain declared keyed that reaches no `sink` is refused by the check
+  stamp; a chain declared keyed that reaches no `output` is refused by the check
   as `KeyedChannelWithoutPluginWire`.
   """
   def keyed(%Stream{source: {:entry, name}} = s), do: refuse(s, {:KeyedOnEntry, name})
@@ -361,7 +361,7 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The channel a source is named by on the wire: an entry's own name, a node's
-  `named/2` name, the name its `sink` declared, else its tasklet's. One rule,
+  `named/2` name, the name its `output` declared, else its tasklet's. One rule,
   read by the check's refusals and by the compiled routes, so the override is
   applied once for every terminator the channel carries.
   """
@@ -371,9 +371,9 @@ defmodule Flezha.SDK.Channels do
   def channel_name(acc, {:node, ref}), do: node_channel_name(Map.fetch!(acc.nodes, ref))
 
   # The names a node's record declares for its channel, in the order they win:
-  # `named/2`'s name, then the names its sinks wrote. The one reader of a node's
+  # `named/2`'s name, then the names its outputs wrote. The one reader of a node's
   # naming declarations — the wire name, the refusal two of them raise, and
-  # whether a sink supplied the name all come off this list, so they cannot be
+  # whether an output supplied the name all come off this list, so they cannot be
   # read from different fields.
   @doc false
   def naming_declarations(%{name: nil, sink_names: sinks}), do: Enum.uniq(sinks)
@@ -386,7 +386,7 @@ defmodule Flezha.SDK.Channels do
   def node_channel_name(%{module: module} = node),
     do: List.first(naming_declarations(node)) || module.name()
 
-  # Whether a node's channel took its name from the node's own `sink`, rather
+  # Whether a node's channel took its name from the node's own `output`, rather
   # than from `named/2` or from its tasklet.
   @doc false
   def named_by_sink?(%{name: name, sink_names: sinks}), do: is_nil(name) and sinks != []

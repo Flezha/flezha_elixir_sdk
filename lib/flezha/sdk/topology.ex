@@ -11,7 +11,7 @@ defmodule Flezha.SDK.Topology do
   and inherits nothing from `flz_core`:
 
     1. the chain rules, per channel and left to right — a link after a plugin
-       sink, a transform after a key, a second key, a chain nothing closes, a
+       output, a transform after a key, a second key, a chain nothing closes, a
        repeated plugin wire, an edge re-declared where either side carries a
        link, a merge over fewer than two distinct sources or over one source
        twice, a branch of fewer than two arms;
@@ -111,7 +111,7 @@ defmodule Flezha.SDK.Topology do
     CellsForMissing: [:name],
     ChannelNameTooLong: [:channel, :len, :max],
     ChannelEndsTwice: [:channel],
-    ChannelNamedTwice: [:channel, :named, :sink],
+    ChannelNamedTwice: [:channel, :named, :output],
     CheckpointEveryZero: [],
     CheckpointMaxDelayZero: [],
     CorrectionWindowZero: [],
@@ -124,8 +124,8 @@ defmodule Flezha.SDK.Topology do
     DuplicateKeyBy: [:channel],
     DuplicateMergeSource: [:channel],
     DuplicatePersistentTasklet: [:tasklet],
-    DuplicatePluginSink: [:channel, :plugin],
-    DuplicateSinkName: [:channel],
+    DuplicatePluginOutput: [:channel, :plugin],
+    DuplicateOutputName: [:channel],
     EdgeAlreadyWired: [:channel, :tasklet],
     EffectivelyOnceWithoutPersistence: [],
     InvalidSetting: [:declaration, :setting, :value, :expected],
@@ -280,7 +280,7 @@ defmodule Flezha.SDK.Topology do
   defp dangling(state, _walk), do: state
 
   # Output identity stamps only exist on plugin-bound frames, so a chain that
-  # declares `keyed()` and reaches no `sink(...)` asked for a stamp nothing can
+  # declares `keyed()` and reaches no `output(...)` asked for a stamp nothing can
   # carry — whether it closed on a tasklet or closed on nothing at all.
   defp unwired_identity(state, %{keyed?: true, wired?: false}),
     do: issue(state, {:KeyedChannelWithoutPluginWire, state.name})
@@ -356,7 +356,7 @@ defmodule Flezha.SDK.Topology do
 
   # A channel may still carry more than one plugin wire — the keyed wire beside
   # the plain one, which stamps and does not. What it may not carry is two
-  # wires nothing tells apart: since a sink names the CHANNEL, the stamping
+  # wires nothing tells apart: since an output names the CHANNEL, the stamping
   # mode is the whole of a wire's identity, and two wires sharing it are two
   # identical routes with every value delivered twice.
   defp terminate_sink(state, plugin, serializer, steps, keyed?) do
@@ -365,14 +365,14 @@ defmodule Flezha.SDK.Topology do
         issue(state, {:ChannelEndsTwice, state.name})
 
       Enum.any?(state.sinks, &(&1.keyed == keyed?)) ->
-        issue(state, {:DuplicatePluginSink, state.name, plugin})
+        issue(state, {:DuplicatePluginOutput, state.name, plugin})
 
       true ->
         %{state | sinks: [plugin_end(plugin, serializer, steps, keyed?, nil) | state.sinks]}
     end
   end
 
-  # A sink's wire, or with `call` the call end a `call` link carries.
+  # An output's wire, or with `call` the call end a `call` link carries.
   defp plugin_end(plugin, serializer, steps, keyed?, call) do
     {transform, key_by} = Channels.fuse(Enum.reverse(steps))
 
@@ -518,7 +518,7 @@ defmodule Flezha.SDK.Topology do
   defp names(acc, channels) do
     channel_names = acc.entry_order ++ for(%{source: {:node, _}} = c <- channels, do: c.name)
     node_ids = for {_ref, node} <- nodes_in_order(acc), do: node.name || node.module.name()
-    # Per name, how many nodes took their channel name from their own `sink`:
+    # Per name, how many nodes took their channel name from their own `output`:
     # two of those is a shape that looks nothing like a naming collision to the
     # author who wrote it, so it is refused under its own name.
     from_sink =
@@ -536,13 +536,13 @@ defmodule Flezha.SDK.Topology do
 
   defp channel_collision(name, from_sink) do
     if Map.get(from_sink, name, 0) >= 2,
-      do: {:DuplicateSinkName, name},
+      do: {:DuplicateOutputName, name},
       else: {:DuplicateChannel, name}
   end
 
-  # A channel is named once. `named/2` beside a `sink(name)` is two
+  # A channel is named once. `named/2` beside an `output(name)` is two
   # declarations even when they agree — permitting the agreeing case would
-  # leave a redundant pair with a rule nobody can remember. Two sinks spelling
+  # leave a redundant pair with a rule nobody can remember. Two outputs spelling
   # ONE name are the duplicate wire instead, which `terminate_sink` refuses.
   defp named_twice(acc) do
     for {_ref, node} <- nodes_in_order(acc),
@@ -662,7 +662,7 @@ defmodule Flezha.SDK.Topology do
     |> Enum.reverse()
   end
 
-  # A request is identified by its call, so a call end needs no key; a sink
+  # A request is identified by its call, so a call end needs no key; an output
   # does, its answers to calls included.
   defp check_wires_under_tier(is, channel, true) do
     for %{keyed: false, call: nil} <- channel.sinks,
@@ -800,7 +800,7 @@ defmodule Flezha.SDK.Topology do
   end
 
   @doc false
-  # The producer -> consumer pairs among nodes; a route into a sink is not one.
+  # The producer -> consumer pairs among nodes; a route into an output is not one.
   def node_edges(routes) do
     for {{:node, from}, rs} <- routes, %{to: {:node, to}} <- rs, do: {from, to}
   end

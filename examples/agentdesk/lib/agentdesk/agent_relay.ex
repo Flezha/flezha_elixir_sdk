@@ -20,7 +20,7 @@ defmodule Agentdesk.AgentRelay do
     |> input("turn")
     |> into(Reply)
     # to whoever called, and whoever listens
-    |> sink("answer")
+    |> output("answer")
 
     # entry 2: the gateway, into the same Reply
     c

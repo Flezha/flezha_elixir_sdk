@@ -1,7 +1,7 @@
 defmodule ElixirRunner.Call do
   @moduledoc """
   Call fixtures (`call_response`): relays an outside caller calls and whose
-  sink output answers it — from the first tasklet, from a downstream one, from
+  output answers it — from the first tasklet, from a downstream one, from
   whichever of two filtered paths the input took, and from a durable steps
   turn.
   """
@@ -90,7 +90,7 @@ defmodule ElixirRunner.Call do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> into(ElixirRunner.Call.Echo) |> sink()
+      c |> input("in") |> into(ElixirRunner.Call.Echo) |> output()
     end
   end
 
@@ -106,7 +106,7 @@ defmodule ElixirRunner.Call do
       |> input("in")
       |> into(ElixirRunner.Call.Parse)
       |> into(ElixirRunner.Call.Answer)
-      |> sink()
+      |> output()
     end
   end
 
@@ -124,12 +124,12 @@ defmodule ElixirRunner.Call do
       admitted
       |> filter(&(not String.starts_with?(&1, "no")))
       |> into(ElixirRunner.Call.Accept)
-      |> sink()
+      |> output()
 
       admitted
       |> filter(&String.starts_with?(&1, "no"))
       |> into(ElixirRunner.Call.Refuse)
-      |> sink()
+      |> output()
     end
   end
 
@@ -143,7 +143,7 @@ defmodule ElixirRunner.Call do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> into(ElixirRunner.Call.Turn) |> sink()
+      c |> input("in") |> into(ElixirRunner.Call.Turn) |> output()
     end
   end
 

@@ -97,7 +97,7 @@ defmodule Flezha.SDK.CallTest do
     use Flezha.SDK.Relay, factory_id: "call_beside_sink"
 
     def channels(c) do
-      asked = c |> input("in") |> into(Ask) |> sink("out")
+      asked = c |> input("in") |> into(Ask) |> output("out")
       asked |> call("pricing", deadline_ms: 500) |> into(Log)
     end
   end
@@ -108,7 +108,7 @@ defmodule Flezha.SDK.CallTest do
     def channels(c) do
       asked = c |> input("in") |> into(Ask)
       asked |> call("pricing", deadline_ms: 500) |> into(Log)
-      asked |> sink("out")
+      asked |> output("out")
     end
   end
 
@@ -201,7 +201,7 @@ defmodule Flezha.SDK.CallTest do
     do: Jason.encode!(%{call: "c1", target: target, created: true, request: "", value: value})
 
   describe "the declaration" do
-    test "a call is a plugin end with no sink, its Response an entry fed back into the caller" do
+    test "a call is a plugin end with no output, its Response an entry fed back into the caller" do
       {:ok, topology} = Topology.build(BackIntoCallerOp)
       assert [%{call: call, channel: "quote"}] = ends(topology, Ask)
 
@@ -249,7 +249,7 @@ defmodule Flezha.SDK.CallTest do
   end
 
   describe "the refusals" do
-    test "a call beside a sink, in either order, ends the channel twice" do
+    test "a call beside an output, in either order, ends the channel twice" do
       for module <- [SinkThenCallOp, CallThenSinkOp] do
         assert {:error, %Error{code: "topology.channel_ends_twice"}} = Topology.build(module)
       end
@@ -268,8 +268,8 @@ defmodule Flezha.SDK.CallTest do
       assert error.details["response"] == "ask.response"
     end
 
-    test "a call on an entry channel is refused as a sink on it would be" do
-      assert {:error, %Error{code: "topology.sink_on_entry"}} = Topology.build(OnEntryOp)
+    test "a call on an entry channel is refused as an output on it would be" do
+      assert {:error, %Error{code: "topology.output_on_entry"}} = Topology.build(OnEntryOp)
     end
 
     test "only a per-input loop may call" do

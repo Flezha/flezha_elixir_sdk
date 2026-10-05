@@ -25,7 +25,7 @@ defmodule Flezha.SDK.Cell do
   compaction (the snapshot after its records), a live read and a state apply,
   each in mailbox order so no dispatch interleaves. With the class's persistence off the seq advances and nothing
   ships. Its outputs reach the Relay with their metadata, their keys and
-  the seq the dispatch started at — what a keyed sink's stamps read.
+  the seq the dispatch started at — what a keyed output's stamps read.
 
   Its timers fire through the same queue and ladder as its inputs, with
   `on_timer/4` in place of `run/3`: a processing-time timer is one
@@ -318,7 +318,7 @@ defmodule Flezha.SDK.Cell do
 
   # Off the tier a record stream exists only to carry changes, so a changeless
   # tasklet writes none. Under the tier the record carries the OUTPUTS and
-  # the consumed offset as well — and the router delivers no sink for a tier
+  # the consumed offset as well — and the router delivers no output for a tier
   # class — so a changeless one writes them too. The class's own opt-out
   # silences both: the seq advances and the frames are discarded.
   defp persists?(changeful?, tier, opts),

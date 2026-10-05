@@ -38,7 +38,7 @@ defmodule Flezha.SDK.SendTest do
         |> Channels.input("in")
         |> Channels.into(Echo)
         |> Channels.into(Forward)
-        |> Channels.sink("out")
+        |> Channels.output("out")
   end
 
   # A runner server that records each control call and holds one relay,

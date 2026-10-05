@@ -1,9 +1,9 @@
-defmodule Flezha.SDK.SinkAnswerTest do
+defmodule Flezha.SDK.OutputAnswerTest do
   @moduledoc """
-  A called input's sink outputs answer the call: every one carries
+  A called input's outputs answer the call: every one carries
   `flz.reply_to`, the call a downstream tasklet's input inherited from the
   input upstream of it, and an output of an input nobody called carries none.
-  Under the tier such a sink is keyed like any other, and a park names the call
+  Under the tier such an output is keyed like any other, and a park names the call
   waiting on the parked input.
   """
   use ExUnit.Case, async: true
@@ -39,19 +39,19 @@ defmodule Flezha.SDK.SinkAnswerTest do
 
   defmodule DownstreamOp do
     use Flezha.SDK.Relay, factory_id: "sink_answer_downstream"
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> output()
   end
 
   defmodule UnkeyedTierOp do
     use Flezha.SDK.Relay, factory_id: "sink_answer_unkeyed_tier"
     def run, do: {:flow, exactly: :effectively_once}
-    def channels(c), do: c |> input("in") |> into(Parse) |> sink("quotes")
+    def channels(c), do: c |> input("in") |> into(Parse) |> output("quotes")
   end
 
   defmodule KeyedTierOp do
     use Flezha.SDK.Relay, factory_id: "sink_answer_keyed_tier"
     def run, do: {:flow, exactly: :effectively_once}
-    def channels(c), do: c |> input("in") |> into(Parse) |> keyed() |> sink("quotes")
+    def channels(c), do: c |> input("in") |> into(Parse) |> keyed() |> output("quotes")
   end
 
   # A two-stage turn: `parse` hands on, `answer` answers the pass's call.
@@ -61,7 +61,7 @@ defmodule Flezha.SDK.SinkAnswerTest do
     def factory_id, do: "sink_answer_turn"
     def run, do: {:steps, each: :per_input}
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> output()
   end
 
   defmodule QuietTurnLoop do
@@ -71,7 +71,7 @@ defmodule Flezha.SDK.SinkAnswerTest do
     def run, do: {:steps, each: :per_input}
     def durable, do: false
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> sink()
+    def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> output()
   end
 
   # This process as the controller end of a native stream the process `to`
@@ -116,14 +116,14 @@ defmodule Flezha.SDK.SinkAnswerTest do
     end
   end
 
-  test "an unkeyed sink under the tier is refused, even when it answers calls" do
+  test "an unkeyed output under the tier is refused, even when it answers calls" do
     assert {:error, %Flezha.SDK.Error{code: "topology.unkeyed_channel_under_effectively_once"}} =
              Topology.build(UnkeyedTierOp)
 
     assert {:ok, _topology} = Topology.build(KeyedTierOp)
   end
 
-  test "a sink output carries the call its input carried, and none without one" do
+  test "an output output carries the call its input carried, and none without one" do
     route = %{channel: "ans", call: nil, key_by: nil, serializer: & &1}
     emit = %{meta: %{"flz.reply_to" => "forged"}, key: nil, origin: nil, call: "w:t"}
 

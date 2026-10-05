@@ -9,7 +9,7 @@ defmodule Agentdesk.Watch do
 
   @impl true
   def run(request, state, ctx) do
-    # keyed by the user: a sink of an effectively-once relay needs a key
+    # keyed by the user: an output of an effectively-once relay needs a key
     emit_keyed(
       ctx,
       Request.user(request),

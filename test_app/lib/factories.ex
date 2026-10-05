@@ -37,7 +37,7 @@ defmodule ElixirRunner.CompareFilterOp do
     c
     |> input("input")
     |> into(ElixirRunner.CompareFilterTask)
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -88,7 +88,7 @@ defmodule ElixirRunner.StaticCellOp do
     |> into(ElixirRunner.StaticEntryTask)
     |> named("hop")
     |> into(ElixirRunner.StaticDownstreamTask)
-    |> sink("kafka")
+    |> output("kafka")
   end
 end
 
@@ -119,7 +119,7 @@ defmodule ElixirRunner.SugarStaticCellOp do
   @behaviour Flezha.SDK.Relay
   def factory_id, do: "sugar_static_cell"
 
-  # The Rust `relay!` pipeline leaves the hop unnamed and lets the sink
+  # The Rust `relay!` pipeline leaves the hop unnamed and lets the output
   # name the producing channel.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -128,7 +128,7 @@ defmodule ElixirRunner.SugarStaticCellOp do
     |> input("input")
     |> into(ElixirRunner.MacroStaticEntryTask)
     |> into(ElixirRunner.MacroStaticDownstreamTask)
-    |> sink("test_kafka")
+    |> output("test_kafka")
   end
 end
 
@@ -171,7 +171,7 @@ defmodule ElixirRunner.MixedOp do
     |> into(ElixirRunner.MixedMacroEntryTask)
     |> named("hop")
     |> into(ElixirRunner.MixedHandDownstreamTask)
-    |> sink("kafka")
+    |> output("kafka")
   end
 end
 
@@ -185,7 +185,7 @@ defmodule ElixirRunner.SugarDoNothing do
   @moduledoc false
   use Flezha.SDK.Relay,
     factory_id: "sugar_do_nothing",
-    sink: "sugar_do_nothing_echo"
+    output: "sugar_do_nothing_echo"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -197,7 +197,7 @@ defmodule ElixirRunner.SugarStoreInput do
   @moduledoc false
   use Flezha.SDK.Relay,
     factory_id: "sugar_store_input",
-    sink: "sugar_store_sink"
+    output: "sugar_store_sink"
 
   state do
     field(:text_inputs, :list, default: [])
@@ -217,7 +217,7 @@ defmodule ElixirRunner.SugarNamedInput do
   @moduledoc false
   use Flezha.SDK.Relay,
     factory_id: "sugar_named_input",
-    sink: "sugar_named_input_sink",
+    output: "sugar_named_input_sink",
     input: "prices"
 
   def run(input, state, ctx) do
@@ -230,7 +230,7 @@ defmodule ElixirRunner.SugarSteps do
   @moduledoc false
   use Flezha.SDK.Relay,
     factory_id: "sugar_steps",
-    sink: "sugar_steps_placed",
+    output: "sugar_steps_placed",
     input: "order",
     run: :steps
 
@@ -249,7 +249,7 @@ defmodule ElixirRunner.SugarStepsPerInput do
   @moduledoc false
   use Flezha.SDK.Relay,
     factory_id: "sugar_steps_per_input",
-    sink: "sugar_steps_per_input_out",
+    output: "sugar_steps_per_input_out",
     run: {:steps, each: :per_input}
 
   @impl true
@@ -261,7 +261,7 @@ defmodule ElixirRunner.SugarStepsPerInput do
   end
 end
 
-# The short form with no sink: `ticks` feeds a tasklet that only keeps state.
+# The short form with no output: `ticks` feeds a tasklet that only keeps state.
 defmodule ElixirRunner.SugarStateOnly do
   @moduledoc false
   use Flezha.SDK.Relay, factory_id: "sugar_state_only", input: "ticks"
@@ -321,7 +321,7 @@ defmodule ElixirRunner.HybridChannelOp do
     c
     |> input("input")
     |> into(ElixirRunner.HybridProducerTask)
-    |> sink_with("hybrid_indicator", &__MODULE__.serialize/1)
+    |> output_with("hybrid_indicator", &__MODULE__.serialize/1)
     |> into(ElixirRunner.HybridConsumerTask)
   end
 
@@ -364,7 +364,7 @@ defmodule ElixirRunner.MergedInputOp do
     |> key_by(& &1.symbol)
     |> into(ElixirRunner.MergeLabelTask)
     |> keyed()
-    |> sink("merged")
+    |> output("merged")
   end
 
   defp tagged(source, payload), do: %{source: source, symbol: prefix(payload), payload: payload}
@@ -401,7 +401,7 @@ defmodule ElixirRunner.TransformChainOp do
     |> key_by(&ElixirRunner.MergedInputOp.prefix/1)
     |> into(ElixirRunner.TransformLabelTask)
     |> keyed()
-    |> sink("transformed")
+    |> output("transformed")
   end
 end
 
@@ -438,7 +438,7 @@ defmodule ElixirRunner.PoisonProbeOp do
     |> input("input")
     |> retry_backoff_ms(25)
     |> into(ElixirRunner.PoisonProbeTask)
-    |> sink("out")
+    |> output("out")
   end
 end
 
@@ -485,7 +485,7 @@ defmodule ElixirRunner.WedgeProbeOp do
     c
     |> input("input")
     |> into(ElixirRunner.WedgeProbeTask)
-    |> sink("out")
+    |> output("out")
   end
 end
 
@@ -539,7 +539,7 @@ defmodule ElixirRunner.BoundedMailboxDropNothingOp do
     |> input("drop_nothing_input")
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.DropNothingTestTask)
-    |> sink("drop_nothing_echo")
+    |> output("drop_nothing_echo")
   end
 end
 
@@ -555,7 +555,7 @@ defmodule ElixirRunner.BoundedMailboxDropNewestOp do
     |> input("drop_newest_input")
     |> on_full(:drop_newest)
     |> into(ElixirRunner.DropNewestTestTask)
-    |> sink("drop_newest_echo")
+    |> output("drop_newest_echo")
   end
 end
 
@@ -571,7 +571,7 @@ defmodule ElixirRunner.BoundedMailboxDropOldestOp do
     |> input("drop_oldest_input")
     |> on_full(:drop_oldest)
     |> into(ElixirRunner.DropOldestTestTask)
-    |> sink("drop_oldest_echo")
+    |> output("drop_oldest_echo")
   end
 end
 
@@ -619,7 +619,7 @@ defmodule ElixirRunner.PartitionPassOp do
     |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(ElixirRunner.PartitionPassTask)
     |> keyed()
-    |> sink("input")
+    |> output("input")
   end
 end
 
@@ -701,7 +701,7 @@ defmodule ElixirRunner.SpawnHoldRequesterOp do
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.SpawnHoldRequesterTask)
     |> keyed()
-    |> sink("out")
+    |> output("out")
   end
 end
 

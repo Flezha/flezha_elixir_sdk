@@ -514,7 +514,7 @@ defmodule Flezha.SDK.Relay.Cells do
 
   # What a Cell of this node needs to know about its records: whether it
   # writes effect records (the tier, or a durable steps relay, whose stage commit
-  # names them), the checkpoint policy, the sink routes it captures its own
+  # names them), the checkpoint policy, the output routes it captures its own
   # outputs through (the router delivers such a class's emits to nodes only),
   # whether a record waits for an inter-tasklet edge (a steps relay's edge value
   # waits on its driver instead) and whether it is a steps stage's Cell.
@@ -543,8 +543,8 @@ defmodule Flezha.SDK.Relay.Cells do
   end
 
   # The facts the ctx refuses on: this node's channel name, whether an output
-  # reaches a keyed sink, whether such a sink leaves a keyless Cell no key to
-  # fall back on, and the sink route a part previews (a call end is not one).
+  # reaches a keyed output, whether such an output leaves a keyless Cell no key to
+  # fall back on, and the output route a part previews (a call end is not one).
   defp ctx_opts(topo, node_ref, key) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])
     keyed = for %{to: {:sink, _}, keyed: true} = r <- routes, do: r

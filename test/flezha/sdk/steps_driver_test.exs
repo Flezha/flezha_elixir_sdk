@@ -1087,7 +1087,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
       |> Channels.input("in")
       |> Channels.into(Tagger)
       |> Channels.named("mid")
-      |> Channels.sink_with(fn v -> "a-out:" <> v end)
+      |> Channels.output_with(fn v -> "a-out:" <> v end)
       |> Channels.into(Join)
     end
   end
@@ -1099,7 +1099,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     assert [%{channels: ["mid"], first_seq: seq, seq: seq}] = producer.cells_ran
     assert is_integer(seq)
 
-    # The consumer still receives the value itself, not the sink's bytes: one
+    # The consumer still receives the value itself, not the output's bytes: one
     # release reaches both the plugin and the next tasklet.
     assert consumer.handoff |> hd() |> Map.get(:payload) |> Resume.decode() == "j:a:go"
     assert [%{channels: []}] = consumer.cells_ran

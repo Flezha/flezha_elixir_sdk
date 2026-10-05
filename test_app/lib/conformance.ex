@@ -116,7 +116,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupFlow do
   @moduledoc false
-  use Flezha.SDK.Relay, factory_id: "plain", sink: "out"
+  use Flezha.SDK.Relay, factory_id: "plain", output: "out"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -126,7 +126,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupSteps do
   @moduledoc false
-  use Flezha.SDK.Relay, factory_id: "plain", sink: "twin_sink", run: :steps
+  use Flezha.SDK.Relay, factory_id: "plain", output: "twin_sink", run: :steps
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -421,7 +421,7 @@ defmodule ElixirRunner.Conformance do
       "kind" => kind,
       "producer" => producer,
       "consumers" => consumers,
-      # A sink names the channel it terminates, so the descriptor has no name
+      # An output names the channel it terminates, so the descriptor has no name
       # of its own: presence is what the routes carry, and the name is the
       # channel's.
       "sink" => if(sinks == [], do: nil, else: name)
@@ -537,8 +537,8 @@ defmodule ElixirRunner.Conformance do
   defp stream_link("key", _, stream), do: Channels.key_by(stream, & &1)
   defp stream_link("keyed", _, stream), do: Channels.keyed(stream)
   defp stream_link("named", name, stream), do: Channels.named(stream, name)
-  defp stream_link("sink", "", stream), do: Channels.sink(stream)
-  defp stream_link("sink", name, stream), do: Channels.sink(stream, name)
+  defp stream_link("output", "", stream), do: Channels.output(stream)
+  defp stream_link("output", name, stream), do: Channels.output(stream, name)
   defp stream_link("retry_max", n, stream), do: Channels.retry_max(stream, integer(n))
   defp stream_link("on_full", policy, stream), do: Channels.on_full(stream, overflow(policy))
 

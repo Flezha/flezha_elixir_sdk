@@ -4,11 +4,11 @@ defmodule Flezha.SDK.Relay.Server do
   supervision. An input on an entry channel (parsed, a parse failure riding the
   entry ladder) fans out along that entry's routes; a value a Cell emits fans
   out along its node's routes. Each route applies at most one fused transform and
-  one key, then delivers to the owning Cell (Single/Static/Dynamic) or a sink.
+  one key, then delivers to the owning Cell (Single/Static/Dynamic) or an output.
   The partition guard admits a dynamic key before any Cell state exists and
-  filters static keys by ownership. Sink outputs and park frames leave on the
-  runner's secondary streams; a sink frame is named by its producing node's
-  channel and, on a sink declared keyed, stamped with the Cell's identity,
+  filters static keys by ownership. Output outputs and park frames leave on the
+  runner's secondary streams; an output frame is named by its producing node's
+  channel and, on an output declared keyed, stamped with the Cell's identity,
   the seq its dispatch started at with the emit ordinal, and the key. Routing
   is serialized here (per-Cell ordering); Cells dispatch concurrently.
 
@@ -433,7 +433,7 @@ defmodule Flezha.SDK.Relay.Server do
     end)
   end
 
-  # Under the effectively-once tier a sink output IS the Cell's effect
+  # Under the effectively-once tier an output IS the Cell's effect
   # record: it never reaches the wire from here, and the ordinal advances as
   # it would have.
   defp deliver(
@@ -446,8 +446,8 @@ defmodule Flezha.SDK.Relay.Server do
        ),
        do: {s, ordinal + 1}
 
-  # A sink frame: the producing node's channel name over the user's metadata,
-  # then — on a keyed sink — the identity stamps, which nothing can clobber.
+  # An output frame: the producing node's channel name over the user's metadata,
+  # then — on a keyed output — the identity stamps, which nothing can clobber.
   # Every plugin output advances the ordinal, stamped or not.
   defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
     stamp_with = if route.keyed, do: {s.relay_id, s.topology.node_modules}

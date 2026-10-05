@@ -173,7 +173,7 @@ defmodule Flezha.SDK.Tasklet do
 
   # The §5 short form's options, taken by the relay macro beside the
   # tasklet's own. A tasklet refuses them.
-  @short_form_options [:sink, :input]
+  @short_form_options [:output, :input]
   # Everything a short form takes beyond `factory_id` and the class settings:
   # its own options and its tasklet's.
   @short_form_only @short_form_options ++ @use_options
@@ -225,7 +225,7 @@ defmodule Flezha.SDK.Tasklet do
   writes only `run/3`. `apply_change/2` is not written by hand here:
   `defchange` generates it.
 
-  `sink` and `input` describe a relay, not a tasklet, and are a
+  `output` and `input` describe a relay, not a tasklet, and are a
   `CompileError` naming the relay macro: the §5 short form is written
   with `use Flezha.SDK.Relay`.
 
@@ -233,7 +233,7 @@ defmodule Flezha.SDK.Tasklet do
 
   A tasklet nested inside a relay module inherits that module's imports
   lexically, so `use` writes `import Flezha.SDK.Channels, only: []` to take
-  `input/2` and `sink/2` back — a nested tasklet defining its own `input/0`
+  `input/2` and `output/2` back — a nested tasklet defining its own `input/0`
   would otherwise clash. A nested tasklet must be written **before** the
   `channels/1` that names it, which is how Elixir aliases resolve.
   """
@@ -459,7 +459,7 @@ defmodule Flezha.SDK.Tasklet do
   # factory id, taking the tasklet options written and delegating every
   # tasklet callback the declaring module defines (a `state` block's
   # `init_state/1` is overridable, which `Module.defines?/2` does not report),
-  # and the topology body wiring the entry channel into it and, with a `sink`,
+  # and the topology body wiring the entry channel into it and, with an `output`,
   # it to that plugin channel.
   defp short_form(module, factory_id, options) do
     tasklet = Module.concat(module, Tasklet)
@@ -487,8 +487,8 @@ defmodule Flezha.SDK.Tasklet do
       end
 
     topology =
-      case Keyword.fetch(options, :sink) do
-        {:ok, sink} -> quote(do: Flezha.SDK.Channels.sink(unquote(wired), unquote(sink)))
+      case Keyword.fetch(options, :output) do
+        {:ok, output} -> quote(do: Flezha.SDK.Channels.output(unquote(wired), unquote(output)))
         :error -> wired
       end
 

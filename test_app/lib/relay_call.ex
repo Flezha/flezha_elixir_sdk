@@ -3,7 +3,7 @@ defmodule ElixirRunner.RelayCall do
   Relay call fixtures (`relay_call`): relays that call another
   relay from their graph and read the outcome as a `Flezha.SDK.Response`.
 
-    * `call_pricing`: a flow callee answering `price:<input>` on its sink
+    * `call_pricing`: a flow callee answering `price:<input>` on its output
       `quotes`; an input starting `silent` is never answered.
     * `call_orders`: a flow caller calling the instance `pricing`, answered
       from `quotes`.
@@ -16,7 +16,7 @@ defmodule ElixirRunner.RelayCall do
     * `call_tool_session`: a durable `:per_input` session calling `pricing`
       from a turn and reading the outcome as its next turn.
 
-  Every outcome is written to a sink as one line,
+  Every outcome is written to an output as one line,
   `<request>=ok:<answer>@<target>/<created>` or
   `<request>=error:<code>@<target>/<created>`.
   """
@@ -25,7 +25,7 @@ defmodule ElixirRunner.RelayCall do
 
   @deadline_ms 30_000
   # The prefix a caller's tasklet puts on an outcome line, which no request
-  # carries, so one output channel can feed both the call and the sink.
+  # carries, so one output channel can feed both the call and the output.
   @outcome "response "
   # The prefix of a turn resuming a session that must already run: its call
   # may not create the callee.
@@ -176,7 +176,7 @@ defmodule ElixirRunner.RelayCall do
     @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "call_pricing"
-    def channels(c), do: c |> input("in") |> into(PricingQuote) |> sink("quotes")
+    def channels(c), do: c |> input("in") |> into(PricingQuote) |> output("quotes")
   end
 
   defmodule OrdersOp do
@@ -193,7 +193,7 @@ defmodule ElixirRunner.RelayCall do
       |> named("order")
       |> call("pricing", deadline_ms: RelayCall.deadline_ms(), answer_channel: "quotes")
       |> into(OrderPriced)
-      |> sink("priced")
+      |> output("priced")
     end
   end
 
@@ -205,7 +205,7 @@ defmodule ElixirRunner.RelayCall do
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
     def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("turn") |> into(AgentTurn) |> sink()
+    def channels(c), do: c |> input("turn") |> into(AgentTurn) |> output()
   end
 
   defmodule GatewayOp do
@@ -238,7 +238,7 @@ defmodule ElixirRunner.RelayCall do
       |> key_by(&RelayCall.session/1)
       |> into(GatewayLog)
       |> keyed()
-      |> sink("gateway_out")
+      |> output("gateway_out")
     end
   end
 
@@ -260,7 +260,7 @@ defmodule ElixirRunner.RelayCall do
       |> call("pricing", deadline_ms: RelayCall.deadline_ms())
       |> into(ToolTurn)
 
-      turn |> filter(&RelayCall.outcome?/1) |> into(ToolLog) |> sink("tool_out")
+      turn |> filter(&RelayCall.outcome?/1) |> into(ToolLog) |> output("tool_out")
     end
   end
 

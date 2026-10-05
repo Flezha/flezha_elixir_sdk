@@ -14,7 +14,7 @@ defmodule Flezha.SDK.Steps.Resume do
   The journal codec is `:erlang.term_to_binary/1`, read back with `:safe`.
   It has to round-trip faithfully — a resumed batch that came back as a
   different term would hand the next tasklet something the live run never
-  produced — and the class's own sink encoders, not this, decide the bytes
+  produced — and the class's own output encoders, not this, decide the bytes
   that reach a plugin.
   """
 

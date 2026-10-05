@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Local do
   local-mode callback, no second declaration. Cell lifecycle, key resolution,
   routing, mailboxes, overflow and the retry ladder are the deployed ones —
   `feed/3` enters through the same `Flezha.SDK.Relay.Inbox.input/4` a frame
-  off a bound data stream enters, and `on_sink/3` takes output where production
+  off a bound data stream enters, and `on_output/3` takes output where production
   frames it, stamps and metadata included.
 
   What a local run has not got: durability of any kind (record frames are
@@ -20,14 +20,14 @@ defmodule Flezha.SDK.Local do
   ## Running a graph
 
       {:ok, run} = Flezha.SDK.Local.start(WordCount)
-      :ok = Flezha.SDK.Local.on_sink(run, "counts", &IO.puts(&1.payload))
+      :ok = Flezha.SDK.Local.on_output(run, "counts", &IO.puts(&1.payload))
       :ok = Flezha.SDK.Local.feed(run, "lines", "The quick brown fox")
       :ok = Flezha.SDK.Local.feed(run, "lines", "the lazy dog")
       :ok = Flezha.SDK.Local.run_until_idle(run, 5_000)
       :ok = Flezha.SDK.Local.stop(run)
 
   A complete two-tasklet `WordCount` — the entry chain, both tasklets and
-  the keyed sink — is in `docs/quickstart.md`.
+  the keyed output — is in `docs/quickstart.md`.
   """
 
   use GenServer
@@ -71,9 +71,9 @@ defmodule Flezha.SDK.Local do
 
   defmodule Output do
     @moduledoc """
-    One value a graph released on a declared sink, carrying the bytes the sink's
+    One value a graph released on a declared output, carrying the bytes the output's
     serializer produced and the metadata a deployed run would have put on the
-    wire — the channel name, and on a `keyed/1` sink the `flz.cell`, `flz.seq`
+    wire — the channel name, and on a `keyed/1` output the `flz.cell`, `flz.seq`
     and `flz.key` stamps.
     """
 
@@ -101,12 +101,12 @@ defmodule Flezha.SDK.Local do
   end
 
   @doc """
-  Deliver every value released on the sink `channel` to `fun`, in release order.
-  Refuses a name the declaration does not carry as a sink.
+  Deliver every value released on the output `channel` to `fun`, in release order.
+  Refuses a name the declaration does not carry as an output.
   """
-  @spec on_sink(pid(), String.t(), (Output.t() -> any())) :: :ok | {:error, Error.t()}
-  def on_sink(run, channel, fun) when is_function(fun, 1),
-    do: Call.control(run, {:on_sink, channel, fun}, {:error, silent()})
+  @spec on_output(pid(), String.t(), (Output.t() -> any())) :: :ok | {:error, Error.t()}
+  def on_output(run, channel, fun) when is_function(fun, 1),
+    do: Call.control(run, {:on_output, channel, fun}, {:error, silent()})
 
   @doc """
   Feed one value to a declared entry channel — the bytes a controller would
@@ -162,11 +162,11 @@ defmodule Flezha.SDK.Local do
   def notices_emitted, do: counter_get(counters(), :notices)
 
   @doc """
-  Values released on a sink no callback claimed. Each is reported as it happens;
+  Values released on an output no callback claimed. Each is reported as it happens;
   the count is what a run can assert on afterwards.
   """
-  @spec unhandled_sink_outputs() :: non_neg_integer()
-  def unhandled_sink_outputs, do: counter_get(counters(), :unhandled)
+  @spec unhandled_outputs() :: non_neg_integer()
+  def unhandled_outputs, do: counter_get(counters(), :unhandled)
 
   # --- server ---
 
@@ -205,7 +205,7 @@ defmodule Flezha.SDK.Local do
   end
 
   @impl true
-  def handle_call({:on_sink, channel, fun}, _from, s) do
+  def handle_call({:on_output, channel, fun}, _from, s) do
     case declared(s.topology, s.id, channel, :sink) do
       :ok -> {:reply, :ok, put_in(s.sinks[channel], fun)}
       refusal -> {:reply, refusal, s}
@@ -224,7 +224,7 @@ defmodule Flezha.SDK.Local do
   end
 
   # Answered between inbound frames, so a caller polling it cannot see "idle"
-  # while a sink output this run has yet to deliver sits behind the question.
+  # while an output this run has yet to deliver sits behind the question.
   # The completed-dispatch total rides along: a probe walks several processes
   # in turn and one of them can finish behind the walk, which the caller then
   # sees as a total that moved.
@@ -261,7 +261,7 @@ defmodule Flezha.SDK.Local do
   def handle_cast({:notify, _command}, s), do: {:noreply, s}
 
   @impl true
-  # A sink output: the router writes it under the relay's own payload id.
+  # An output: the router writes it under the relay's own payload id.
   def handle_info({:flz_data, _stream, id, payload, metadata}, %{id: id} = s) do
     channel = Map.get(metadata, "channel", id)
 
@@ -273,7 +273,7 @@ defmodule Flezha.SDK.Local do
         counter_bump(counters(), :unhandled)
 
         Logger.warning(
-          "[flezha] local mode: a value was released on sink `#{channel}`, " <>
+          "[flezha] local mode: a value was released on output `#{channel}`, " <>
             "which has no registered callback"
         )
     end
@@ -377,11 +377,11 @@ defmodule Flezha.SDK.Local do
 
   defp channel_names(%Topology{entries: entries}, :entry), do: Map.keys(entries)
 
-  # Each tasklet's output channel that no sink takes.
+  # Each tasklet's output channel that no output takes.
   defp channel_names(%Topology{node_channel: outputs} = topology, :inter_task),
     do: Enum.uniq(Map.values(outputs)) -- channel_names(topology, :sink)
 
-  # A sink channel takes the producing tasklet's name unless `named/2` gave it
+  # An output channel takes the producing tasklet's name unless `named/2` gave it
   # one; the compiled route already resolved which.
   defp channel_names(%Topology{routes: routes}, :sink),
     do: for({_source, rs} <- routes, %{to: {:sink, _}, channel: c} <- rs, uniq: true, do: c)

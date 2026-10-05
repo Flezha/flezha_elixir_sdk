@@ -162,7 +162,7 @@ defmodule ElixirRunner.StepsLoop do
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReply)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -201,7 +201,7 @@ defmodule ElixirRunner.StepsLoop do
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.BlockingReply)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -242,7 +242,7 @@ defmodule ElixirRunner.StepsLoop do
       |> input("trades")
       |> key_by(&ElixirRunner.Key.prefix/1)
       |> into(ElixirRunner.StepsLoop.KeyedLoopCount)
-      |> sink("keyed_loop_steps_out")
+      |> output("keyed_loop_steps_out")
     end
   end
 
@@ -264,13 +264,13 @@ defmodule ElixirRunner.StepsLoop do
       c
       |> input("in")
       |> into(ElixirRunner.StepsLoop.ChatReply)
-      |> sink("out")
+      |> output("out")
     end
   end
 
   # `failing_turn_loop_steps`: a session whose turn can fail after `note`
   # committed. `note` records each message and its undo moves the latest one
-  # to `undone`; `answer` replies `re:<message>` on the sink `answer`, and
+  # to `undone`; `answer` replies `re:<message>` on the output `answer`, and
   # fails every attempt on `boom`, on `boom-once` while the release env is
   # unset (the first runner of a crash drill), and on `boom-until-healed`
   # until a `heal` turn set its state.
@@ -369,7 +369,7 @@ defmodule ElixirRunner.StepsLoop do
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReplyUndoable)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -390,7 +390,7 @@ defmodule ElixirRunner.StepsLoop do
       |> into(ElixirRunner.StepsLoop.BenchTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReply)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -407,7 +407,7 @@ defmodule ElixirRunner.StepsLoop do
     |> Enum.reduce(c |> input("in") |> into(first), fn step, s ->
       s |> named("edge_" <> step.name()) |> into(step)
     end)
-    |> sink("out")
+    |> output("out")
   end
 
   @doc false
@@ -480,7 +480,7 @@ defmodule ElixirRunner.StepsLoop do
         c
         |> input("input")
         |> into(ElixirRunner.StepsLoop.CompleteFlow)
-        |> sink("complete_flow_out")
+        |> output("complete_flow_out")
   end
 
   # A durable chained loop: each pass prints `chained_pass <n>` and hands the
@@ -539,6 +539,6 @@ defmodule ElixirRunner.StepsLoop do
     |> into(ElixirRunner.StepsLoop.Note)
     |> named("noted")
     |> into(ElixirRunner.StepsLoop.Answer)
-    |> sink("answer")
+    |> output("answer")
   end
 end

@@ -1,8 +1,8 @@
 defmodule Flezha.SDK.Relay.Routing do
   @moduledoc """
-  The sink half of the routing seam: what one plugin output looks like, shared
+  The output half of the routing seam: what one plugin output looks like, shared
   by the two callers that build one. The router builds a frame for the wire
-  (`sink_frame/5`, with the identity stamps on a keyed sink); a Cell under
+  (`sink_frame/5`, with the identity stamps on a keyed output); a Cell under
   the effectively-once tier builds the same output into its effect record and
   never stamps — the controller derives the stamps at flush.
 
@@ -16,14 +16,14 @@ defmodule Flezha.SDK.Relay.Routing do
   is on the route the topology compiled.
   """
 
-  @typedoc "The identity facts a keyed sink stamps with, or nil for a capture that never stamps."
+  @typedoc "The identity facts a keyed output stamps with, or nil for a capture that never stamps."
   @type stamp_with :: {binary(), map()} | nil
 
   @end_keys ~w(flz.reply_to flz.call flz.call_create flz.call_response flz.deadline_at
                flz.call_channel flz.call_answer_channel flz.key)
 
   @doc """
-  One plugin output's frame: its metadata (channel, the call a sink output
+  One plugin output's frame: its metadata (channel, the call an output
   answers or a call end's stamps, then the identity stamps) and its bytes.
   """
   @spec sink_frame(map(), term(), map(), non_neg_integer(), stamp_with()) :: {map(), binary()}
@@ -43,7 +43,7 @@ defmodule Flezha.SDK.Relay.Routing do
   end
 
   @doc """
-  The keys an output's end stamps, and only that end: a sink output's
+  The keys an output's end stamps, and only that end: an output's
   `flz.reply_to`, the call its input carried, when one did; a call end's
   callee, its Response channel, its deadline (wall clock at the emit), its
   entry and answer channels and the chain's key. Every other output drops
@@ -73,7 +73,7 @@ defmodule Flezha.SDK.Relay.Routing do
   end
 
   @doc """
-  The emit's own key, else the sink route's `key_by`, else the emitting
+  The emit's own key, else the output route's `key_by`, else the emitting
   Cell's — the reference's `emit_keyed` and then the cell-key default. A call
   end's key is its chain's alone, or none.
   """

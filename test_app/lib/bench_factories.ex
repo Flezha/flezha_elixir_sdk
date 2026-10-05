@@ -1,9 +1,9 @@
 # The Elixir bench factories, mirroring test/apps/rust_runner/src/main.rs
 # under the same factory ids and topologies so `mix bench --runtime elixir`
 # measures the same shapes:
-#   do_nothing     — regression: input → echo → sink
-#   cell_stress  — cell:     A(8 keys) → B → C → D → sink (fan-out then fan-in)
-#   dynamic_cell — dynamic:    filter + key_by(prefix) → keyed Cell → sink
+#   do_nothing     — regression: input → echo → output
+#   cell_stress  — cell:     A(8 keys) → B → C → D → output (fan-out then fan-in)
+#   dynamic_cell — dynamic:    filter + key_by(prefix) → keyed Cell → output
 # plus the `mix bench.roundtrip` twins:
 #   bench_echo            — do_nothing with a declared Block on the entry mailbox
 #   bench_keyed           — "key:value" upsert, emits "key=value" (Single Cell), persisted
@@ -33,7 +33,7 @@ defmodule Flezha.Bench.DoNothing do
 
   def channels(c) do
     import Flezha.SDK.Channels
-    c |> input("input") |> into(Flezha.Bench.EchoTask) |> sink("echo")
+    c |> input("input") |> into(Flezha.Bench.EchoTask) |> output("echo")
   end
 end
 
@@ -126,7 +126,7 @@ defmodule Flezha.Bench.CellStress do
     |> into(Flezha.Bench.StressC)
     |> named("c_to_d")
     |> into(Flezha.Bench.StressD)
-    |> sink("echo")
+    |> output("echo")
   end
 end
 
@@ -177,7 +177,7 @@ defmodule Flezha.Bench.DynamicCell do
     |> filter(fn s -> s != "drop" end)
     |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(Flezha.Bench.DynamicTask)
-    |> sink("kafka")
+    |> output("kafka")
   end
 end
 
@@ -193,7 +193,7 @@ defmodule Flezha.Bench.BenchEcho do
     |> input("input")
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.EchoTask)
-    |> sink("echo")
+    |> output("echo")
   end
 end
 
@@ -208,7 +208,7 @@ defmodule Flezha.Bench.TierStoreTask do
     Map.put(values, key, value)
   end
 
-  # Emits `key=value` under `key`, as the reference does: the bench sinks are
+  # Emits `key=value` under `key`, as the reference does: the bench outputs are
   # keyed, so the durable path pays for its stamps here as it does there.
   @impl true
   def run(input, values, ctx) do
@@ -247,7 +247,7 @@ defmodule Flezha.Bench.BenchKeyed do
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.TierStoreTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -283,7 +283,7 @@ defmodule Flezha.Bench.TierStore do
     |> retry_backoff_ms(300)
     |> into(Flezha.Bench.TierStoreTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 end
 
@@ -350,7 +350,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.BenchCheckpointTask)
     |> keyed()
-    |> sink("sink")
+    |> output("sink")
   end
 
   # The bench harness hands a spawned runner these variables; the defaults are

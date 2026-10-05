@@ -52,7 +52,7 @@ defmodule Tradedesk.OrderExecutor do
   not book the order again. A step that fails ends the order, which is why a
   refusal of the fill unwinds the steps before it.
 
-  Nothing ends on a sink: the last step ends the instance with its result,
+  Nothing ends on an output: the last step ends the instance with its result,
   which `flz relay info` shows.
   """
   @impl true

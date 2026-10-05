@@ -95,7 +95,7 @@ defmodule Flezha.SDK.Relay do
 
       @impl true
       def channels(c) do
-        c |> input("trades") |> into(Candle) |> sink("candles")
+        c |> input("trades") |> into(Candle) |> output("candles")
       end
 
   `factory_id` is required; `description`, `max_duration_ms`, `run` and
@@ -113,7 +113,7 @@ defmodule Flezha.SDK.Relay do
   A module that writes its one tasklet's `run/3` instead of `channels/1` is
   a whole single-tasklet relay:
 
-      use Flezha.SDK.Relay, factory_id: "upcase", sink: "out", input: "words"
+      use Flezha.SDK.Relay, factory_id: "upcase", output: "out", input: "words"
 
       def run(input, state, ctx) do
         emit(ctx, String.upcase(input))
@@ -123,7 +123,7 @@ defmodule Flezha.SDK.Relay do
   It generates the tasklet module `Upcase.Tasklet`, whose `name/0` is the
   factory id and which delegates to this module's tasklet callbacks, and a
   `channels/1` wiring the entry channel (`input:`, `"input"` when absent) into
-  it and, with `sink:`, it to that plugin channel. With no `sink:` nothing
+  it and, with `output:`, it to that plugin channel. With no `output:` nothing
   leaves the tasklet but its state. `run/3` is written as in a tasklet, with
   the ctx functions and a `state do ... end` block available; the options
   `use Flezha.SDK.Tasklet` takes (`max_cells:`, `logical_clock:`, ...) apply

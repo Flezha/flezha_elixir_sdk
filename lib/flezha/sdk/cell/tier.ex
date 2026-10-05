@@ -138,7 +138,7 @@ defmodule Flezha.SDK.Cell.Tier do
     }
 
     # An invocation whose emits reach another tasklet holds its record until
-    # the router reports every push admitted; one that reaches only sinks has
+    # the router reports every push admitted; one that reaches only outputs has
     # its outputs IN the record and ships at once.
     hold_ref = if s.tier.on? and s.tier.edges? and facts.emits != [], do: make_ref()
     s = s |> Records.settle(effects, nil, hold_ref) |> arm_deadline()

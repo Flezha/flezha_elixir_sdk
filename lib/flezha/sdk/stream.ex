@@ -3,7 +3,7 @@ defmodule Flezha.SDK.Stream do
   A builder-scoped stream handle. Carries the channel it flows from and the
   chain it is currently appending links to; the links themselves live in the
   builder's record, so the handle is a cursor and nothing more. Immutable:
-  reusing a handle in two `into`/`sink` calls fans out, and a handle with no
+  reusing a handle in two `into`/`output` calls fans out, and a handle with no
   chain yet opens a fresh one. Valid only inside `channels/1`.
   """
 

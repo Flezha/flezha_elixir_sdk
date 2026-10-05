@@ -9,7 +9,7 @@
 #     own process, which is what makes the crash window deterministic without
 #     a timer — and `Process.sleep` would trip the `sleeps` ratchet as well as
 #     freezing a scheduler for nothing.
-#   * a bare `sink(name)` already ships a binary as its own bytes here, so the
+#   * a bare `output(name)` already ships a binary as its own bytes here, so the
 #     fixtures that name an encoder do it to REWRITE the value, never to
 #     correct a default.
 
@@ -233,7 +233,7 @@ defmodule ElixirRunner.Steps do
     end
   end
 
-  # The sibling leaf of the branch tree: emits straight to the sink, and its
+  # The sibling leaf of the branch tree: emits straight to the output, and its
   # undo does too.
   defmodule BranchC do
     @moduledoc false
@@ -359,12 +359,12 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.Echo)
-      |> sink("out")
+      |> output("out")
     end
   end
 
   # `typed_once_steps`: a `once` class whose entry channel `order` decodes
-  # a JSON ticket; its one tasklet prints the text, emits it to its sink and
+  # a JSON ticket; its one tasklet prints the text, emits it to its output and
   # completes with it, so the pass runs on the payload it was spawned with.
   defmodule OncePlaced do
     @moduledoc false
@@ -392,7 +392,7 @@ defmodule ElixirRunner.Steps do
       c
       |> input_with("order", &Jason.decode/1)
       |> into(ElixirRunner.Steps.OncePlaced)
-      |> sink("placed")
+      |> output("placed")
     end
   end
 
@@ -445,13 +445,13 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.CommitA)
-      |> sink_with("mid", fn s -> "a-ran:" <> s end)
+      |> output_with("mid", fn s -> "a-ran:" <> s end)
       |> into(ElixirRunner.Steps.BlockB)
     end
   end
 
   # The hybrid mid-chain shape the conformance fixture's `commit_block_chain`
-  # twin is transcribed from: A's channel reaches a plugin sink and feeds B.
+  # twin is transcribed from: A's channel reaches a plugin output and feeds B.
   defmodule TierCommitBlockSteps do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
@@ -465,7 +465,7 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.TierCommitA)
-      |> sink_with("mid", & &1)
+      |> output_with("mid", & &1)
       |> into(ElixirRunner.Steps.BlockB)
     end
   end
@@ -536,7 +536,7 @@ defmodule ElixirRunner.Steps do
 
   # A steps output's identity: `commit_a` commits durable state AND emits
   # once, keyed `k` with one metadata pair, on a keyed hybrid channel; the
-  # output rides its Cell's record and reaches the sink once the stage commits.
+  # output rides its Cell's record and reaches the output once the stage commits.
   defmodule OutboxA do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "commit_a"
@@ -564,7 +564,7 @@ defmodule ElixirRunner.Steps do
       |> input("in")
       |> into(ElixirRunner.Steps.OutboxA)
       |> keyed()
-      |> sink_with("mid", fn s -> "a-out:" <> s end)
+      |> output_with("mid", fn s -> "a-out:" <> s end)
       |> into(ElixirRunner.Steps.BlockB)
     end
   end
@@ -582,7 +582,7 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.UndoOutboxA)
-      |> sink_with("mid", fn s -> "out:" <> s end)
+      |> output_with("mid", fn s -> "out:" <> s end)
       |> into(ElixirRunner.Steps.UndoC)
     end
   end
@@ -617,7 +617,7 @@ defmodule ElixirRunner.Steps do
       |> input("in")
       |> into(ElixirRunner.Steps.KeySplit)
       |> into(ElixirRunner.Steps.FailedStage)
-      |> sink_with("mid", fn s -> "lost:" <> s end)
+      |> output_with("mid", fn s -> "lost:" <> s end)
     end
   end
 
@@ -637,20 +637,20 @@ defmodule ElixirRunner.Steps do
         c
         |> input("in")
         |> into(ElixirRunner.Steps.BranchA)
-        |> sink_with("mid", fn s -> "a:" <> s end)
+        |> output_with("mid", fn s -> "a:" <> s end)
 
       # Fail fast: the compensation scenario is about the rollback order, not
       # the ladder before it.
       mid
       |> into(ElixirRunner.Steps.BranchB)
-      |> sink_with("bmid", fn s -> "b:" <> s end)
+      |> output_with("bmid", fn s -> "b:" <> s end)
       |> retry_max(1)
       |> into(ElixirRunner.Steps.BranchD)
-      |> sink("d_out")
+      |> output("d_out")
 
       mid
       |> into(ElixirRunner.Steps.BranchC)
-      |> sink("c_out")
+      |> output("c_out")
     end
   end
 
@@ -670,20 +670,20 @@ defmodule ElixirRunner.Steps do
         c
         |> input("in")
         |> into(ElixirRunner.Steps.DiamA)
-        |> sink_with("dfan", fn s -> "a:" <> s end)
+        |> output_with("dfan", fn s -> "a:" <> s end)
 
       fan
       |> into(ElixirRunner.Steps.DiamB1)
       |> named("db1")
       |> into(ElixirRunner.Steps.DiamB2)
-      |> sink_with("db2", & &1)
+      |> output_with("db2", & &1)
       |> into(ElixirRunner.Steps.DiamJoin)
 
       fan
       |> into(ElixirRunner.Steps.DiamC)
-      |> sink_with("dc", & &1)
+      |> output_with("dc", & &1)
       |> into(ElixirRunner.Steps.DiamJoin)
-      |> sink("j_out")
+      |> output("j_out")
     end
   end
 
@@ -700,9 +700,9 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.RetryA)
-      |> sink_with("mid", fn s -> "res:" <> s end)
+      |> output_with("mid", fn s -> "res:" <> s end)
       |> into(ElixirRunner.Steps.RetryFlaky)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -771,7 +771,7 @@ defmodule ElixirRunner.Steps do
       |> into(ElixirRunner.Steps.Tick)
       |> named("ticked")
       |> into(ElixirRunner.Steps.Tock)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -815,7 +815,7 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.EventTick)
-      |> sink("out")
+      |> output("out")
     end
   end
 
@@ -849,7 +849,7 @@ defmodule ElixirRunner.Steps do
       c
       |> input("in")
       |> into(ElixirRunner.Steps.StaticCellStep)
-      |> sink("out")
+      |> output("out")
     end
   end
 

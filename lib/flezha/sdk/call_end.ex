@@ -2,7 +2,7 @@ defmodule Flezha.SDK.CallEnd do
   @moduledoc """
   The `call(...)` end's share of `Flezha.SDK.Topology`'s check, re-expressing
   `flz_core`'s: a call closes only its own chain, as an edge does, and it is a
-  plugin end beside which no sink or other call may stand; its deadline is
+  plugin end beside which no output or other call may stand; its deadline is
   positive, a factory call that may not create its callee is keyed, and its
   Response channel feeds a tasklet.
   """
@@ -12,7 +12,7 @@ defmodule Flezha.SDK.CallEnd do
     CallOutsidePerInputLoop: [:channel],
     CallResponseUnread: [:channel, :response],
     CallWithoutKey: [:channel],
-    SinkOnEntry: [:channel]
+    OutputOnEntry: [:channel]
   }
 
   @doc "The detail keys of a call issue's positional fields; `nil` for another issue."

@@ -180,7 +180,7 @@ defmodule Flezha.SDK.CallBoundsTest do
       {:runner_namespace, fn -> RunnerServer.namespace(w) end},
       {:relay_lookup, fn -> Relay.Server.lookup(w, "p", "k") end},
       {:relay_cells, fn -> Relay.Server.cells(w) end},
-      {:local_on_sink, fn -> Local.on_sink(w, "c", & &1) end},
+      {:local_on_sink, fn -> Local.on_output(w, "c", & &1) end},
       {:local_feed, fn -> Local.feed(w, "c", "v") end},
       {:local_relay, fn -> Local.relay(w) end},
       {:local_until_idle, fn -> Local.run_until_idle(w, 50) end},

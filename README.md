@@ -54,8 +54,8 @@ the wrong parent does not compile. `Flezha.SDK.Relay` documents the tree.
 
 ## Answering a caller, calling a relay
 
-A called relay answers with its outputs: the first output an input causes on a
-sink answers the call that input came from, and still reaches the sink's
+A called relay answers with its outputs: the first output an input causes on an
+output answers the call that input came from, and still reaches the output's
 plugins and listeners. A channel can also end in `call/3`, which sends each
 value to another relay and hands the outcome back on a new entry channel,
 `<channel>.response`:

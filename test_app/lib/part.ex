@@ -1,7 +1,7 @@
 defmodule ElixirRunner.Part do
   @moduledoc """
   Part fixtures (`parts`): for an input `n` the tasklet sends the parts `1` to
-  `n` and then emits `done:<n>` on its sink `answer`; for `retry:<n>` it sends
+  `n` and then emits `done:<n>` on its output `answer`; for `retry:<n>` it sends
   the same parts and fails its first attempt retryably, then sends them again
   and succeeds. `part_echo` runs as a flow, `part_echo_steps` a `per_input`
   steps relay doing the same per message.
@@ -64,7 +64,7 @@ defmodule ElixirRunner.Part do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> retry_backoff_ms(25) |> into(ElixirRunner.Part.Echo) |> sink("answer")
+      c |> input("in") |> retry_backoff_ms(25) |> into(ElixirRunner.Part.Echo) |> output("answer")
     end
   end
 
@@ -83,7 +83,7 @@ defmodule ElixirRunner.Part do
       |> input("in")
       |> retry_backoff_ms(25)
       |> into(ElixirRunner.Part.EchoTurn)
-      |> sink("answer")
+      |> output("answer")
     end
   end
 

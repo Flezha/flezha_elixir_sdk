@@ -85,7 +85,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      c |> input("in") |> into(Nested) |> sink("out")
+      c |> input("in") |> into(Nested) |> output("out")
     end
   end
 
@@ -129,7 +129,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      c |> Channels.input("in") |> Channels.into(HandWritten) |> Channels.sink("out")
+      c |> Channels.input("in") |> Channels.into(HandWritten) |> Channels.output("out")
     end
   end
 
@@ -162,7 +162,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      c |> input("in") |> into(Stateless) |> sink("out")
+      c |> input("in") |> into(Stateless) |> output("out")
     end
   end
 
@@ -266,7 +266,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       |> from(quotes, &{:quote, &1})
       |> key_by(fn _ -> "k" end)
       |> into(Stateless)
-      |> sink("merged")
+      |> output("merged")
     end
   end
 
@@ -288,7 +288,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       |> Channels.from(quotes, &{:quote, &1})
       |> Channels.key_by(fn _ -> "k" end)
       |> Channels.into(Stateless)
-      |> Channels.sink("merged")
+      |> Channels.output("merged")
     end
   end
 
@@ -494,7 +494,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Upcase do
     @moduledoc false
-    use Flezha.SDK.Relay, factory_id: "upcase", sink: "out"
+    use Flezha.SDK.Relay, factory_id: "upcase", output: "out"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -517,12 +517,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     use Flezha.SDK.Relay, factory_id: "upcase_twin"
 
     @impl true
-    def channels(c), do: c |> input("input") |> into(UpcaseTwin) |> sink("out")
+    def channels(c), do: c |> input("input") |> into(UpcaseTwin) |> output("out")
   end
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.Relay, factory_id: "place", sink: "placed", input: "order", run: :steps
+    use Flezha.SDK.Relay, factory_id: "place", output: "placed", input: "order", run: :steps
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -532,7 +532,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Chat do
     @moduledoc false
-    use Flezha.SDK.Relay, factory_id: "chat", sink: "replies", run: {:steps, each: :per_input}
+    use Flezha.SDK.Relay, factory_id: "chat", output: "replies", run: {:steps, each: :per_input}
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -606,7 +606,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {[], nil} = journal(Upcase.Tasklet, "hi")
   end
 
-  test "a short form with no sink wires its entry channel into the tasklet alone" do
+  test "a short form with no output wires its entry channel into the tasklet alone" do
     assert {:ok, topo} = Topology.build(Counter)
     assert entry_names(Counter) == ["ticks"]
     assert sink_names(topo) == []
@@ -702,7 +702,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "a run body beside a topology body does not compile" do
     error =
       refused("""
-      use Flezha.SDK.Relay, factory_id: "x", sink: "out"
+      use Flezha.SDK.Relay, factory_id: "x", output: "out"
       def run(_i, s, _c), do: {:ok, s}
       def channels(c), do: c
       """)
@@ -717,7 +717,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a relay option on a tasklet does not compile, naming the relay macro" do
-    for option <- [~s|sink: "out"|, ~s|input: "ticks"|] do
+    for option <- [~s|output: "out"|, ~s|input: "ticks"|] do
       error =
         refused("""
         use Flezha.SDK.Tasklet, name: "p", #{option}
@@ -735,7 +735,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(CappedShort)
     assert %{each: :chained, max_duration_ms: 5_000, durable: :memory} = spec.settings
 
-    for option <- [~s|sink: "out"|, "max_cells: 10"] do
+    for option <- [~s|output: "out"|, "max_cells: 10"] do
       stray =
         refused("""
         use Flezha.SDK.Relay, factory_id: "x", #{option}
@@ -778,7 +778,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defp collect(run, channel) do
     reader = self()
-    :ok = Local.on_sink(run, channel, fn output -> send(reader, {:sink, output}) end)
+    :ok = Local.on_output(run, channel, fn output -> send(reader, {:sink, output}) end)
   end
 
   defp drained(acc \\ []) do

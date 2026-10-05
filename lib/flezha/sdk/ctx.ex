@@ -18,8 +18,8 @@ defmodule Flezha.SDK.Ctx do
   and are taken by the Cell only when `run/3` returns `{:ok, _}` — a failing
   invocation discards both. Reserved `flz.`-prefixed metadata keys are refused.
 
-  A key rides an emit only where the node's sink is declared `keyed/1`, and a
-  keyless emit from a Cell with no key of its own on such a sink is refused
+  A key rides an emit only where the node's output is declared `keyed/1`, and a
+  keyless emit from a Cell with no key of its own on such an output is refused
   here, at the call — the reference's `KeyRequiredOnKeyedChannel` — from two
   topology facts the Cell hands `new/4`.
 
@@ -42,7 +42,7 @@ defmodule Flezha.SDK.Ctx do
   replay-stable id derived from the Cell's wire identity, the change seq the
   invocation started at and a per-invocation ordinal.
 
-  `part/2` sends a preview of the invocation's output at once, on the sink
+  `part/2` sends a preview of the invocation's output at once, on the output
   route of the node's channel (`preview`), through the Cell's stream seam
   (`hold`), which never holds one; its number rides the dictionary under the ref, opened by
   the Cell for the attempt (`attempt`) and cleared by `discard/1`, which is
@@ -94,7 +94,7 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   A fresh ctx for one invocation of `module`. `now_ms` is captured once here;
-  `opts` carries the node's channel name, whether its sink is keyed
+  `opts` carries the node's channel name, whether its output is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
   (`key_required?`), the Cell's pending timers (`timers`, empty by default,
   `:unavailable` inside a steps relay),
@@ -166,7 +166,7 @@ defmodule Flezha.SDK.Ctx do
   def emit_with_meta(%__MODULE__{} = ctx, value, meta) when is_map(meta),
     do: put_emit(ctx, value, meta, nil)
 
-  @doc "Emit under the output's natural key — the sink must be declared `keyed/1`."
+  @doc "Emit under the output's natural key — the output must be declared `keyed/1`."
   @spec emit_keyed(t(), String.t(), term()) :: :ok | {:error, Error.t()}
   def emit_keyed(%__MODULE__{} = ctx, key, value), do: emit_keyed_with_meta(ctx, key, value, %{})
 
@@ -282,7 +282,7 @@ defmodule Flezha.SDK.Ctx do
     :ok
   end
 
-  # Read by a runner in any language, so unlike a sink's default this never
+  # Read by a runner in any language, so unlike an output's default this never
   # falls back to Erlang terms: a term with no JSON form raises.
   defp plain_payload(v) when is_binary(v), do: v
   defp plain_payload(v), do: Jason.encode!(v)
@@ -377,14 +377,14 @@ defmodule Flezha.SDK.Ctx do
   emit of `value` would be. It never waits: a part the wire cannot take at once
   is dropped and counted, and an invocation of a replayed input sends none.
 
-  `:ok`, or `{:error, %Error{}}`: `part.no_sink` when the node's channel does
-  not end in a sink (a `call` end is not one), `part.outside_invocation`
+  `:ok`, or `{:error, %Error{}}`: `part.no_output` when the node's channel does
+  not end in an output (a `call` end is not one), `part.outside_invocation`
   through a ctx whose invocation has returned.
   """
   @spec part(t(), term()) :: :ok | {:error, Error.t()}
   def part(%__MODULE__{preview: nil} = ctx, _value) do
     {:error,
-     Error.new("part.no_sink",
+     Error.new("part.no_output",
        tasklet: ctx.module.name(),
        relay: ctx.relay_id,
        channel: ctx.channel
