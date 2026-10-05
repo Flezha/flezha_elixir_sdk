@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Operator.Routing do
+defmodule Flezha.SDK.Relay.Routing do
   @moduledoc """
   The sink half of the routing seam: what one plugin output looks like, shared
   by the two callers that build one. The router builds a frame for the wire

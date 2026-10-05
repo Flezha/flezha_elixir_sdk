@@ -4,7 +4,7 @@ defmodule Flezha.SDK.CallBoundsTest do
   caller.
 
   The target here is suspended with `:sys.suspend/1` — alive, holding the
-  message, never replying, which is what a wedged Cell or Operator looks
+  message, never replying, which is what a wedged Cell or Relay looks
   like from the outside. Each client function is exercised in a process of its
   own, all at once, so the clause costs one bound rather than one per site: a
   caller that survives with a refusal passes, a caller the target exits fails,
@@ -18,7 +18,7 @@ defmodule Flezha.SDK.CallBoundsTest do
 
   import ExUnit.CaptureLog
 
-  alias Flezha.SDK.{Commands, Credit, Cell, Local, Operator, RunnerServer}
+  alias Flezha.SDK.{Commands, Credit, Cell, Local, Relay, RunnerServer}
   alias Flezha.SDK.Wire
 
   # Longer than the widest bound under test — the restore fold — so a site that
@@ -39,7 +39,7 @@ defmodule Flezha.SDK.CallBoundsTest do
     def init(:ok), do: {:ok, :ok}
   end
 
-  # Answers a lookup, as an operator, and a restore, as the Cell it found,
+  # Answers a lookup, as a relay, and a restore, as the Cell it found,
   # and nothing else: the call that counts a landed restore is made only
   # after both, so the one site that needs a half-wedged target gets one.
   defmodule LookupOnly do
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.CallBoundsTest do
       assert answers == %{
                commands_landed:
                  {:answered,
-                  {"error", [Flezha.SDK.Error.new("runtime.operator_busy", operator: "op-1")]}},
+                  {"error", [Flezha.SDK.Error.new("runtime.relay_busy", relay: "op-1")]}},
                credit_session: {:answered, nil},
                cell_apply_state: {:answered, {:error, "cell_busy: the Cell did not answer"}},
                cell_evict: {:answered, :busy},
@@ -100,12 +100,12 @@ defmodule Flezha.SDK.CallBoundsTest do
                cell_restore: {:answered, {:error, "cell_busy: the Cell did not answer"}},
                local_feed: {:answered, silent},
                local_on_sink: {:answered, silent},
-               local_operator: {:answered, nil},
+               local_relay: {:answered, nil},
                local_until_idle:
                  {:answered,
                   {:error, Flezha.SDK.Error.new("runtime.local_run_unanswered", budget_ms: 50)}},
-               operator_cells: {:answered, {:error, :operator_busy}},
-               operator_lookup: {:answered, {:error, :operator_busy}},
+               relay_cells: {:answered, {:error, :relay_busy}},
+               relay_lookup: {:answered, {:error, :relay_busy}},
                runner_define: {:answered, {:error, :runner_busy}},
                runner_namespace: {:answered, nil},
                runner_remove: {:answered, {:error, :runner_busy}}
@@ -178,11 +178,11 @@ defmodule Flezha.SDK.CallBoundsTest do
       {:runner_define, fn -> RunnerServer.define(w, __MODULE__, %{}) end},
       {:runner_remove, fn -> RunnerServer.remove(w, __MODULE__) end},
       {:runner_namespace, fn -> RunnerServer.namespace(w) end},
-      {:operator_lookup, fn -> Operator.Server.lookup(w, "p", "k") end},
-      {:operator_cells, fn -> Operator.Server.cells(w) end},
+      {:relay_lookup, fn -> Relay.Server.lookup(w, "p", "k") end},
+      {:relay_cells, fn -> Relay.Server.cells(w) end},
       {:local_on_sink, fn -> Local.on_sink(w, "c", & &1) end},
       {:local_feed, fn -> Local.feed(w, "c", "v") end},
-      {:local_operator, fn -> Local.operator(w) end},
+      {:local_relay, fn -> Local.relay(w) end},
       {:local_until_idle, fn -> Local.run_until_idle(w, 50) end},
       {:cell_restore, fn -> Cell.restore(w, <<>>, <<>>, <<>>, 0) end},
       {:cell_read, fn -> Cell.read(w, 100) end},
@@ -219,7 +219,7 @@ defmodule Flezha.SDK.CallBoundsTest do
     }
 
     respond = fn status, errors, _raw, _meta -> send(me, {:responded, status, errors}) end
-    Commands.dispatch(:restore_init_state, cmd, respond, %{operators: %{"op-1" => {op, "f"}}})
+    Commands.dispatch(:restore_init_state, cmd, respond, %{relays: %{"op-1" => {op, "f"}}})
 
     receive do
       {:responded, status, errors} -> {status, errors}

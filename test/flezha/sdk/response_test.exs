@@ -8,9 +8,9 @@ defmodule Flezha.SDK.ResponseTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Counters, LocalStream, Operator, Topology, Wire}
+  alias Flezha.SDK.{Counters, LocalStream, Relay, Topology, Wire}
   alias Flezha.SDK.Steps.{Driver, Spec}
-  alias Flezha.SDK.Operator.{Inbox, Routing}
+  alias Flezha.SDK.Relay.{Inbox, Routing}
   alias Flezha.SDK.Test.StubRunner
 
   defmodule Parse do
@@ -46,27 +46,27 @@ defmodule Flezha.SDK.ResponseTest do
   end
 
   defmodule DownstreamOp do
-    use Flezha.SDK.Operator, factory_id: "response_downstream"
+    use Flezha.SDK.Relay, factory_id: "response_downstream"
     def channels(c), do: c |> input("in") |> into(Parse) |> into(Answer) |> response()
   end
 
   defmodule HybridOp do
-    use Flezha.SDK.Operator, factory_id: "response_hybrid"
+    use Flezha.SDK.Relay, factory_id: "response_hybrid"
     def channels(c), do: c |> input("in") |> into(Parse) |> response() |> into(Log)
   end
 
   defmodule BesideSinkOp do
-    use Flezha.SDK.Operator, factory_id: "response_beside_sink"
+    use Flezha.SDK.Relay, factory_id: "response_beside_sink"
     def channels(c), do: c |> input("in") |> into(Parse) |> sink("out") |> response()
   end
 
   defmodule TwiceOp do
-    use Flezha.SDK.Operator, factory_id: "response_twice"
+    use Flezha.SDK.Relay, factory_id: "response_twice"
     def channels(c), do: c |> input("in") |> into(Parse) |> response() |> response()
   end
 
   defmodule UnkeyedTierOp do
-    use Flezha.SDK.Operator, factory_id: "response_unkeyed_tier"
+    use Flezha.SDK.Relay, factory_id: "response_unkeyed_tier"
     def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c),
@@ -75,7 +75,7 @@ defmodule Flezha.SDK.ResponseTest do
 
   # A two-stage turn: `parse` hands on, `answer` answers the pass's call.
   defmodule TurnLoop do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "response_turn"
     def run, do: {:steps, each: :per_input}
@@ -84,7 +84,7 @@ defmodule Flezha.SDK.ResponseTest do
   end
 
   defmodule QuietTurnLoop do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "response_quiet_turn"
     def run, do: {:steps, each: :per_input}
@@ -108,7 +108,7 @@ defmodule Flezha.SDK.ResponseTest do
 
     {:ok, driver} =
       Driver.start_link(
-        operator_id: "turn-1",
+        relay_id: "turn-1",
         counters: Counters.new(),
         spec: spec,
         runner: runner
@@ -175,19 +175,19 @@ defmodule Flezha.SDK.ResponseTest do
     refute Map.has_key?(metadata, "flz.reply_to")
   end
 
-  describe "a live operator" do
+  describe "a live relay" do
     setup do
       {:ok, topology} = Topology.build(DownstreamOp)
       {:ok, runner} = StubRunner.start_link(test: self())
 
       opts = [
-        operator_id: "answer-1",
+        relay_id: "answer-1",
         topology: topology,
         counters: Counters.new(),
         runner: runner
       ]
 
-      {:ok, op} = Operator.Server.start_link(opts)
+      {:ok, op} = Relay.Server.start_link(opts)
       {sdk_side, controller_side} = LocalStream.open()
       :ok = LocalStream.controlling_process(controller_side, self())
       :ok = LocalStream.set_active(controller_side)

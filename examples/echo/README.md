@@ -14,7 +14,7 @@ Three files, one for each part the guides describe:
 | File | Part | What it does |
 |---|---|---|
 | `lib/echo/tasklet.ex` | the tasklet | the processing stage: prefixes each message |
-| `lib/echo/operator.ex` | the operator | the graph: `in` feeds the tasklet, output lands on `out` |
+| `lib/echo/relay.ex` | the relay | the graph: `in` feeds the tasklet, output lands on `out` |
 | `lib/echo/application.ex` | the runner | this node: registers the echo factory and waits |
 
 ## Run it
@@ -31,8 +31,8 @@ mix run --no-halt
 Then, from another terminal:
 
 ```sh
-flz operator start echo --id my_echo
-flz operator send my_echo --text 'hello world' --await 2000
+flz relay start echo --id my_echo
+flz relay send my_echo --text 'hello world' --await 2000
 ```
 
 ```

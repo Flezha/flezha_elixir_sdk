@@ -144,7 +144,7 @@ defmodule Flezha.SDK.TimersTest do
   end
 
   describe "the ctx" do
-    # A steps stage hands its Cells `timers: :unavailable`; a flow operator's Cell
+    # A steps stage hands its Cells `timers: :unavailable`; a flow relay's Cell
     # hands its pending set.
     test "with timers unavailable every timer call is refused and nothing is armed" do
       ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy, timers: :unavailable)
@@ -158,7 +158,7 @@ defmodule Flezha.SDK.TimersTest do
       assert Timers.empty?(pending)
     end
 
-    test "a flow operator's ctx still arms the same call" do
+    test "a flow relay's ctx still arms the same call" do
       ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy)
 
       assert Ctx.timer_after(ctx, 1_000) == {:ok, 2_000}

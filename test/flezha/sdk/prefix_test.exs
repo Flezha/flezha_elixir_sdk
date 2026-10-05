@@ -1,5 +1,5 @@
 defmodule Flezha.SDK.PrefixTest do
-  @moduledoc "The processed-prefix ledger an Operator and its Cells share."
+  @moduledoc "The processed-prefix ledger a Relay and its Cells share."
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.Prefix
@@ -74,7 +74,7 @@ defmodule Flezha.SDK.PrefixTest do
     assert take(ledger) == 6
   end
 
-  test "a Cell with no ledger, or one whose Operator stopped, holds nothing" do
+  test "a Cell with no ledger, or one whose Relay stopped, holds nothing" do
     assert Prefix.release(nil, 3) == :ok
     assert Prefix.restored(nil) == :ok
     assert Prefix.freeze(nil) == :ok

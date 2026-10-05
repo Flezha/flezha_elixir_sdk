@@ -28,7 +28,7 @@ end
 
 defmodule ElixirRunner.CompareFilterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "compare_filter"
 
   def channels(c) do
@@ -41,7 +41,7 @@ defmodule ElixirRunner.CompareFilterOp do
   end
 end
 
-# -- static_cell / sugar_static_cell / mixed_operator ------------------
+# -- static_cell / sugar_static_cell / mixed_relay ------------------
 
 defmodule ElixirRunner.StaticEntryTask do
   @moduledoc false
@@ -77,7 +77,7 @@ end
 
 defmodule ElixirRunner.StaticCellOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "static_cell"
 
   def channels(c) do
@@ -116,10 +116,10 @@ end
 
 defmodule ElixirRunner.SugarStaticCellOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "sugar_static_cell"
 
-  # The Rust `operator!` pipeline leaves the hop unnamed and lets the sink
+  # The Rust `relay!` pipeline leaves the hop unnamed and lets the sink
   # name the producing channel.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -160,8 +160,8 @@ end
 
 defmodule ElixirRunner.MixedOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
-  def factory_id, do: "mixed_operator"
+  @behaviour Flezha.SDK.Relay
+  def factory_id, do: "mixed_relay"
 
   def channels(c) do
     import Flezha.SDK.Channels
@@ -177,13 +177,13 @@ end
 
 # -- the §5 short forms -----------------------------------------------------
 #
-# One `use` each: an operator module whose `run/3` is its one tasklet's
-# body, listed under `operators:` in `application.ex`. No hand-written
-# operator stands beside them.
+# One `use` each: a relay module whose `run/3` is its one tasklet's
+# body, listed under `relays:` in `application.ex`. No hand-written
+# relay stands beside them.
 
 defmodule ElixirRunner.SugarDoNothing do
   @moduledoc false
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "sugar_do_nothing",
     sink: "sugar_do_nothing_echo"
 
@@ -195,7 +195,7 @@ end
 
 defmodule ElixirRunner.SugarStoreInput do
   @moduledoc false
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "sugar_store_input",
     sink: "sugar_store_sink"
 
@@ -215,7 +215,7 @@ end
 
 defmodule ElixirRunner.SugarNamedInput do
   @moduledoc false
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "sugar_named_input",
     sink: "sugar_named_input_sink",
     input: "prices"
@@ -228,7 +228,7 @@ end
 
 defmodule ElixirRunner.SugarSteps do
   @moduledoc false
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "sugar_steps",
     sink: "sugar_steps_placed",
     input: "order",
@@ -247,7 +247,7 @@ end
 # instance stays after each.
 defmodule ElixirRunner.SugarStepsPerInput do
   @moduledoc false
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "sugar_steps_per_input",
     sink: "sugar_steps_per_input_out",
     run: {:steps, each: :per_input}
@@ -264,7 +264,7 @@ end
 # The short form with no sink: `ticks` feeds a tasklet that only keeps state.
 defmodule ElixirRunner.SugarStateOnly do
   @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "sugar_state_only", input: "ticks"
+  use Flezha.SDK.Relay, factory_id: "sugar_state_only", input: "ticks"
 
   state do
     field(:seen, :list, default: [])
@@ -309,11 +309,11 @@ end
 
 defmodule ElixirRunner.HybridChannelOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "hybrid_channel"
 
   # The sunk handle fans out to the consumer as well. Unlike Rust, the SDK does
-  # not isolate a serializer raise: the sentinel takes the Operator down
+  # not isolate a serializer raise: the sentinel takes the Relay down
   # instead of being logged by the producer.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -346,7 +346,7 @@ end
 
 defmodule ElixirRunner.MergedInputOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "merged_input"
 
   # Each source's mapping tags the value with the channel it came from, and the
@@ -385,7 +385,7 @@ end
 
 defmodule ElixirRunner.TransformChainOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "transform_chain"
 
   # Every value transform on one edge: `drop` is filtered out, a comma list fans
@@ -428,7 +428,7 @@ end
 
 defmodule ElixirRunner.PoisonProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "poison_probe"
 
   def channels(c) do
@@ -476,7 +476,7 @@ end
 
 defmodule ElixirRunner.WedgeProbeOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "wedge_probe"
 
   def channels(c) do
@@ -529,7 +529,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropNothingOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bounded_mailbox_drop_nothing"
 
   def channels(c) do
@@ -545,7 +545,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropNewestOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bounded_mailbox_drop_newest"
 
   def channels(c) do
@@ -561,7 +561,7 @@ end
 
 defmodule ElixirRunner.BoundedMailboxDropOldestOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bounded_mailbox_drop_oldest"
 
   def channels(c) do
@@ -575,11 +575,11 @@ defmodule ElixirRunner.BoundedMailboxDropOldestOp do
   end
 end
 
-# -- partition_relay --------------------------------------------------------
+# -- partition_pass --------------------------------------------------------
 
-defmodule ElixirRunner.PartitionRelayTask do
+defmodule ElixirRunner.PartitionPassTask do
   @moduledoc false
-  use Flezha.SDK.Tasklet, name: "partition_relay_tasklet"
+  use Flezha.SDK.Tasklet, name: "partition_pass_tasklet"
 
   @impl true
   def init_state(_), do: %{seen: []}
@@ -602,14 +602,14 @@ defmodule ElixirRunner.PartitionRelayTask do
   end
 end
 
-defmodule ElixirRunner.PartitionRelayOp do
+defmodule ElixirRunner.PartitionPassOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
-  def factory_id, do: "partition_relay"
+  @behaviour Flezha.SDK.Relay
+  def factory_id, do: "partition_pass"
 
   # The plugin channel is named `input` because a forwarded frame keeps its
   # producing channel's name in metadata, and that is what selects the
-  # receiving operator's entry channel — the downstream fixture's `input`.
+  # receiving relay's entry channel — the downstream fixture's `input`.
   # The entry here is `in` so the two names cannot collide inside this class.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -617,7 +617,7 @@ defmodule ElixirRunner.PartitionRelayOp do
     c
     |> input("in")
     |> key_by(&ElixirRunner.Key.prefix/1)
-    |> into(ElixirRunner.PartitionRelayTask)
+    |> into(ElixirRunner.PartitionPassTask)
     |> keyed()
     |> sink("input")
   end
@@ -654,7 +654,7 @@ end
 
 defmodule ElixirRunner.SpawnRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "spawn_requester"
 
   def channels(c) do
@@ -689,7 +689,7 @@ end
 
 defmodule ElixirRunner.SpawnHoldRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "spawn_hold_requester"
   def run, do: {:flow, exactly: :effectively_once}
 
@@ -713,7 +713,7 @@ defmodule ElixirRunner.SpawnOnceRequesterTask do
 
   alias Flezha.SDK.Spawn
 
-  # Spawns the `once` steps operator with the input as its JSON ticket and prints the
+  # Spawns the `once` steps relay with the input as its JSON ticket and prints the
   # handle's answer; the spawned pass proves itself on stdout too.
   @impl true
   def run(input, s, ctx) do
@@ -725,7 +725,7 @@ end
 
 defmodule ElixirRunner.SpawnOnceRequesterOp do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "spawn_once_requester"
 
   def channels(c) do
@@ -738,7 +738,7 @@ defmodule ElixirRunner.SpawnOnceRequesterOp do
 end
 
 defmodule ElixirRunner.Factories do
-  @moduledoc "The e2e factory operators this standalone runner advertises."
+  @moduledoc "The e2e factory relays this standalone runner advertises."
 
   def all do
     [
@@ -754,7 +754,7 @@ defmodule ElixirRunner.Factories do
       ElixirRunner.BoundedMailboxDropNothingOp,
       ElixirRunner.BoundedMailboxDropNewestOp,
       ElixirRunner.BoundedMailboxDropOldestOp,
-      ElixirRunner.PartitionRelayOp,
+      ElixirRunner.PartitionPassOp,
       ElixirRunner.SpawnRequesterOp,
       ElixirRunner.SpawnHoldRequesterOp,
       ElixirRunner.SpawnOnceRequesterOp
@@ -762,7 +762,7 @@ defmodule ElixirRunner.Factories do
   end
 
   @doc """
-  The §5 short forms this app advertises: each is an operator module whose
+  The §5 short forms this app advertises: each is a relay module whose
   `run/3` is its one tasklet's body.
   """
   def shorthand do

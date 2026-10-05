@@ -19,7 +19,7 @@ defmodule Flezha.SDK.Topology do
        order, the plugin wire, the channel's `named/2` name applied once for
        every terminator;
     3. the topology and class facts over the derived shape, the class's
-       settings tree (`Flezha.SDK.Operator`) included.
+       settings tree (`Flezha.SDK.Relay`) included.
 
   `test/fixtures/reference_topologies.txt` is the contract both this and the
   core are measured against.
@@ -31,7 +31,7 @@ defmodule Flezha.SDK.Topology do
   Static; a keyed incoming route into a keyless tasklet → Dynamic; else Single.
   """
 
-  alias Flezha.SDK.{Channels, Error, Graph, Knob, Operator, Tasklet}
+  alias Flezha.SDK.{Channels, Error, Graph, Knob, Relay, Tasklet}
 
   @enforce_keys [:factory_id]
   defstruct factory_id: nil,
@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Topology do
             routes: %{},
             order: [],
             keyless?: false,
-            settings: %Operator{},
+            settings: %Relay{},
             durable?: true,
             sleep_after_ms: nil,
             compact_after_bytes: nil,
@@ -72,29 +72,29 @@ defmodule Flezha.SDK.Topology do
   authors its graph there on the same builder, so it compiles through the same
   function, and the tree decides which class facts apply.
   """
-  @spec build(module(), Operator.t() | nil) :: {:ok, t()} | {:error, Error.t()}
+  @spec build(module(), Relay.t() | nil) :: {:ok, t()} | {:error, Error.t()}
   def build(module, settings \\ nil) do
     judged = with {:ok, settings} <- settings_of(module, settings), do: judge(module, settings)
     with {:issues, issues} <- judged, do: {:error, refusal(issues)}
   end
 
-  defp settings_of(_module, %Operator{} = settings), do: {:ok, settings}
+  defp settings_of(_module, %Relay{} = settings), do: {:ok, settings}
 
   defp settings_of(module, nil) do
-    with {:error, issue} <- Operator.settings(module), do: {:issues, [issue]}
+    with {:error, issue} <- Relay.settings(module), do: {:issues, [issue]}
   end
 
   @doc """
   `build/2` before its refusal is rendered: the topology, or the issues found,
   which a steps class's own shape issues join.
   """
-  @spec judge(module(), Operator.t()) :: {:ok, t()} | {:issues, [tuple()]}
-  def judge(module, %Operator{} = settings) do
+  @spec judge(module(), Relay.t()) :: {:ok, t()} | {:issues, [tuple()]}
+  def judge(module, %Relay{} = settings) do
     c = Channels.new()
 
     case declare_on(module, c) do
       :ok ->
-        compile(module, settings, c |> Channels.take() |> Map.put(:tier, Operator.tier(settings)))
+        compile(module, settings, c |> Channels.take() |> Map.put(:tier, Relay.tier(settings)))
 
       {:deferred, message} ->
         _ = Channels.take(c)
@@ -518,7 +518,7 @@ defmodule Flezha.SDK.Topology do
       changeful_identity(acc) ++ Flezha.SDK.CallEnd.unread(shape.channels)
   end
 
-  # One namespace per operator for channels and one for node identities: a
+  # One namespace per relay for channels and one for node identities: a
   # derived name, a `named/2` override and an entry name all collide here. A
   # name also has to fit the frame it rides, and this is where the author can
   # still be told.
@@ -699,9 +699,9 @@ defmodule Flezha.SDK.Topology do
 
   # What the settings tree refuses beyond its shape: the tier without a disk,
   # and the tier's value checks. A steps class carries no tier.
-  defp class_facts(%Operator{run: :steps}, _acc), do: []
+  defp class_facts(%Relay{run: :steps}, _acc), do: []
 
-  defp class_facts(%Operator{} = settings, acc) do
+  defp class_facts(%Relay{} = settings, acc) do
     memory =
       if acc.tier.effectively_once and settings.durable == :memory,
         do: [{:EffectivelyOnceWithoutPersistence}],
@@ -789,7 +789,7 @@ defmodule Flezha.SDK.Topology do
 
   @doc """
   The retry ladder a node's Cells climb: what the edges into it declare, the
-  shared defaults where they are silent. A flow operator's Cells and a steps operator
+  shared defaults where they are silent. A flow relay's Cells and a steps relay
   stage's both read it here, so the two runs cannot climb different ladders.
   """
   @spec retry_ladder(t(), reference()) :: %{

@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Tasklet do
   @moduledoc """
-  A tasklet: one processing stage of an operator's graph, run once per
+  A tasklet: one processing stage of a relay's graph, run once per
   input and declared with `use`.
 
       defmodule Echo do
@@ -29,7 +29,7 @@ defmodule Flezha.SDK.Tasklet do
   `max_cells/0` (100_000 — the cap on a dynamic node's live Cells; at it
   a new key's input is dropped and counted), `idle_ttl_seconds/0` (nil — a
   dynamic Cell idle past that many whole seconds is evicted destructively by
-  its Operator's sweep; nil never evicts). Dynamic typing collapses the Rust
+  its Relay's sweep; nil never evicts). Dynamic typing collapses the Rust
   type tokens — Input/Output/State are plain terms.
 
   Persistence: a tasklet that exports `apply_change/2` is changeful — its
@@ -62,7 +62,7 @@ defmodule Flezha.SDK.Tasklet do
   into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set.
 
   Saga: `compensate/3` (the outputs the Cell released, the state, a ctx) is
-  the undo a steps operator runs, in reverse completion order, when it
+  the undo a steps relay runs, in reverse completion order, when it
   unwinds after partial progress. A tasklet declaring none has nothing to
   undo. A crash-resumed unwind reconstructs completed stages with EMPTY
   outputs — a tasklet's collected output was never durable — so a hook that
@@ -171,7 +171,7 @@ defmodule Flezha.SDK.Tasklet do
     {:event_time_of, 1, "`event_time/1`"}
   ]
 
-  # The §5 short form's options, taken by the operator macro beside the
+  # The §5 short form's options, taken by the relay macro beside the
   # tasklet's own. A tasklet refuses them.
   @short_form_options [:sink, :input]
   # Everything a short form takes beyond `factory_id` and the class settings:
@@ -225,13 +225,13 @@ defmodule Flezha.SDK.Tasklet do
   writes only `run/3`. `apply_change/2` is not written by hand here:
   `defchange` generates it.
 
-  `sink` and `input` describe an operator, not a tasklet, and are a
-  `CompileError` naming the operator macro: the §5 short form is written
-  with `use Flezha.SDK.Operator`.
+  `sink` and `input` describe a relay, not a tasklet, and are a
+  `CompileError` naming the relay macro: the §5 short form is written
+  with `use Flezha.SDK.Relay`.
 
   ## Nesting
 
-  A tasklet nested inside an operator module inherits that module's imports
+  A tasklet nested inside a relay module inherits that module's imports
   lexically, so `use` writes `import Flezha.SDK.Channels, only: []` to take
   `input/2` and `sink/2` back — a nested tasklet defining its own `input/0`
   would otherwise clash. A nested tasklet must be written **before** the
@@ -252,8 +252,8 @@ defmodule Flezha.SDK.Tasklet do
     for {key, _value} <- opts, key in @short_form_options do
       raise CompileError,
         description:
-          "`use Flezha.SDK.Tasklet` declares a tasklet; `#{key}:` belongs to an operator: " <>
-            "write the short form as `use Flezha.SDK.Operator`"
+          "`use Flezha.SDK.Tasklet` declares a tasklet; `#{key}:` belongs to a relay: " <>
+            "write the short form as `use Flezha.SDK.Relay`"
     end
 
     callbacks = __callbacks__(opts, @use_options, __MODULE__)
@@ -264,7 +264,7 @@ defmodule Flezha.SDK.Tasklet do
       use Flezha.SDK.State
 
       import Flezha.SDK.Ctx, only: unquote(ctx_imports)
-      # A nested tasklet inherits its operator module's imports; the builder
+      # A nested tasklet inherits its relay module's imports; the builder
       # is not part of a tasklet's surface and `input/2` would clash with a
       # tasklet's own `input/0`.
       import Flezha.SDK.Channels, only: []
@@ -378,13 +378,13 @@ defmodule Flezha.SDK.Tasklet do
     end
   end
 
-  # Everything `use` on an operator module emits: the behaviour, the builder
+  # Everything `use` on a relay module emits: the behaviour, the builder
   # import, the required `factory_id`, one callback per option written, and
   # what a short form's `run/3` body is written with (the ctx imports and the
   # `state` block). A short form's own options, and its tasklet's, are kept
-  # for `__before_compile_operator__/1`.
+  # for `__before_compile_relay__/1`.
   @doc false
-  def __operator_using__(opts, use_options, behaviour) do
+  def __relay_using__(opts, use_options, behaviour) do
     opts =
       __validate__(
         opts,
@@ -410,17 +410,17 @@ defmodule Flezha.SDK.Tasklet do
 
       unquote_splicing(callbacks)
 
-      @flezha_operator {unquote(factory_id), unquote(short_form)}
+      @flezha_relay {unquote(factory_id), unquote(short_form)}
       # After `Flezha.SDK.State`'s hook, so a `state` block's callbacks exist.
-      @before_compile {Flezha.SDK.Tasklet, :__before_compile_operator__}
+      @before_compile {Flezha.SDK.Tasklet, :__before_compile_relay__}
     end
   end
 
-  # An operator module is a short form exactly when it defines `run/3` and no
+  # A relay module is a short form exactly when it defines `run/3` and no
   # `channels/1`.
   @doc false
-  defmacro __before_compile_operator__(env) do
-    {factory_id, short_form} = Module.get_attribute(env.module, :flezha_operator)
+  defmacro __before_compile_relay__(env) do
+    {factory_id, short_form} = Module.get_attribute(env.module, :flezha_relay)
     run? = Module.defines?(env.module, {:run, 3})
     topology? = Module.defines?(env.module, {:channels, 1})
 
@@ -448,7 +448,7 @@ defmodule Flezha.SDK.Tasklet do
       true ->
         refuse(
           "#{inspect(env.module)} declares no body: write `run/3` for a single-tasklet " <>
-            "operator, or `channels/1`"
+            "relay, or `channels/1`"
         )
     end
   end
@@ -508,7 +508,7 @@ defmodule Flezha.SDK.Tasklet do
   end
 
   @doc """
-  Whether this tasklet declares a saga undo hook. A steps operator that unwinds
+  Whether this tasklet declares a saga undo hook. A steps relay that unwinds
   runs `compensate/3` on every Cell whose tasklet completed forward; a
   tasklet declaring none simply has nothing to undo.
   """

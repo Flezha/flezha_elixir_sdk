@@ -69,11 +69,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert error.description =~ "max_entites"
   end
 
-  # A nested tasklet inherits the operator module's imports, so `use` has to
+  # A nested tasklet inherits the relay module's imports, so `use` has to
   # take `Channels.input/2` back before the tasklet's own `input/0` is read.
-  defmodule NestingOperator do
+  defmodule NestingRelay do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "nesting_operator"
+    use Flezha.SDK.Relay, factory_id: "nesting_relay"
 
     defmodule Nested do
       @moduledoc false
@@ -90,9 +90,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a nested tasklet's own input/0 does not clash with the builder's" do
-    assert NestingOperator.Nested.input() == "the nested tasklet's own"
-    assert {:ok, topo} = Topology.build(NestingOperator)
-    assert entry_names(NestingOperator) == ["in"]
+    assert NestingRelay.Nested.input() == "the nested tasklet's own"
+    assert {:ok, topo} = Topology.build(NestingRelay)
+    assert entry_names(NestingRelay) == ["in"]
     assert sink_names(topo) == ["out"]
   end
 
@@ -120,12 +120,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  defmodule HandWrittenOperator do
+  defmodule HandWrittenRelay do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
 
     @impl true
-    def factory_id, do: "hand_written_operator"
+    def factory_id, do: "hand_written_relay"
 
     @impl true
     def channels(c) do
@@ -134,8 +134,8 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "the behaviour form registers and runs, with its clock and idle TTL read from its callbacks" do
-    assert {:ok, topo} = Topology.build(HandWrittenOperator)
-    assert topo.factory_id == "hand_written_operator"
+    assert {:ok, topo} = Topology.build(HandWrittenRelay)
+    assert topo.factory_id == "hand_written_relay"
     refute function_exported?(HandWritten, :mailbox_capacity, 0)
 
     assert Tasklet.idle_ttl_ms(HandWritten) == 1_000
@@ -143,7 +143,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {[{:add, 7}], 7} = journal(HandWritten, "7")
     assert HandWritten.apply_change(HandWritten.init_state(nil), {:add, 7}) == 7
 
-    run = start_run(HandWrittenOperator)
+    run = start_run(HandWrittenRelay)
     collect(run, "out")
     :ok = Local.feed(run, "in", "1234")
     :ok = Local.run_until_idle(run, 5_000)
@@ -152,11 +152,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
            "`now/1` serves the input's own event time"
   end
 
-  # --- the operator macros -------------------------------------------------
+  # --- the relay macros -------------------------------------------------
 
   defmodule TunedSteps do
     @moduledoc false
-    use Flezha.SDK.Operator,
+    use Flezha.SDK.Relay,
       factory_id: "tuned_steps",
       run: {:steps, each: :chained, on_failure: :keep_progress}
 
@@ -166,7 +166,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "an operator macro defines only the settings written" do
+  test "a relay macro defines only the settings written" do
     assert TunedSteps.factory_id() == "tuned_steps"
     assert TunedSteps.run() == {:steps, each: :chained, on_failure: :keep_progress}
     refute function_exported?(TunedSteps, :durable, 0)
@@ -182,7 +182,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         ] do
       error =
         refused("""
-        use Flezha.SDK.Operator, factory_id: "w", #{option}, run: :steps
+        use Flezha.SDK.Relay, factory_id: "w", #{option}, run: :steps
         def channels(c), do: c
         """)
 
@@ -200,7 +200,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         ] do
       error =
         refused("""
-        use Flezha.SDK.Operator, factory_id: "w", #{option}
+        use Flezha.SDK.Relay, factory_id: "w", #{option}
         def channels(c), do: c
         """)
 
@@ -218,23 +218,23 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
         ] do
       error =
         refused("""
-        use Flezha.SDK.Operator, factory_id: "w", #{option}
+        use Flezha.SDK.Relay, factory_id: "w", #{option}
         def channels(c), do: c
         """)
 
-      assert error.description =~ "'#{parent}' of operator 'w' declares #{setting}",
+      assert error.description =~ "'#{parent}' of relay 'w' declares #{setting}",
              "read: #{error.description}"
     end
 
     # A member of the tree written beside it is no option of the macro.
-    error = refused(~s|use Flezha.SDK.Operator, factory_id: "w", each: :chained|)
+    error = refused(~s|use Flezha.SDK.Relay, factory_id: "w", each: :chained|)
     assert error.description =~ "has no option :each"
   end
 
-  test "an operator macro refuses an unknown option and a missing factory_id" do
+  test "a relay macro refuses an unknown option and a missing factory_id" do
     unknown =
       refused("""
-      use Flezha.SDK.Operator, factory_id: "x", persistance_enabled: false
+      use Flezha.SDK.Relay, factory_id: "x", persistance_enabled: false
       def channels(_c), do: :ok
       """)
 
@@ -242,7 +242,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     missing =
       refused("""
-      use Flezha.SDK.Operator, description: "no id"
+      use Flezha.SDK.Relay, description: "no id"
       def channels(_c), do: :ok
       """)
 
@@ -253,7 +253,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByImport do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "merged_by_import"
+    use Flezha.SDK.Relay, factory_id: "merged_by_import"
 
     @impl true
     def channels(c) do
@@ -272,7 +272,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule MergedByPrefix do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
 
     @impl true
     def factory_id, do: "merged_by_prefix"
@@ -475,7 +475,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
           {~s|Tasklet, name: "by_hand"|, block, by_hand},
           {~s|Tasklet, name: "by_hand"|, change, by_hand},
           {~s|Tasklet, name: "by_hand"|, "", "defp apply_change(s, _c), do: s"},
-          {~s|Operator, factory_id: "by_hand"|, "", by_hand}
+          {~s|Relay, factory_id: "by_hand"|, "", by_hand}
         ] do
       error =
         refused("""
@@ -494,7 +494,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Upcase do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "upcase", sink: "out"
+    use Flezha.SDK.Relay, factory_id: "upcase", sink: "out"
 
     def run(input, state, ctx) do
       emit(ctx, String.upcase(input))
@@ -512,9 +512,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  defmodule UpcaseTwinOperator do
+  defmodule UpcaseTwinRelay do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "upcase_twin"
+    use Flezha.SDK.Relay, factory_id: "upcase_twin"
 
     @impl true
     def channels(c), do: c |> input("input") |> into(UpcaseTwin) |> sink("out")
@@ -522,7 +522,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "place", sink: "placed", input: "order", run: :steps
+    use Flezha.SDK.Relay, factory_id: "place", sink: "placed", input: "order", run: :steps
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -532,7 +532,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Chat do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "chat", sink: "replies", run: {:steps, each: :per_input}
+    use Flezha.SDK.Relay, factory_id: "chat", sink: "replies", run: {:steps, each: :per_input}
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -542,7 +542,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule CappedShort do
     @moduledoc false
-    use Flezha.SDK.Operator,
+    use Flezha.SDK.Relay,
       factory_id: "capped_short",
       run: {:steps, each: :chained},
       durable: false,
@@ -556,7 +556,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Counter do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "counter", input: "ticks", max_cells: 10
+    use Flezha.SDK.Relay, factory_id: "counter", input: "ticks", max_cells: 10
 
     state do
       field(:seen, :list, default: [])
@@ -569,18 +569,18 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     def run(input, state, ctx), do: {:ok, seen(state, ctx, input)}
   end
 
-  test "an operator module with a run body is a whole flow operator" do
+  test "a relay module with a run body is a whole flow relay" do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
 
     assert {:ok, short} = Topology.build(Upcase)
-    assert {:ok, hand} = Topology.build(UpcaseTwinOperator)
-    assert entry_names(Upcase) == entry_names(UpcaseTwinOperator)
+    assert {:ok, hand} = Topology.build(UpcaseTwinRelay)
+    assert entry_names(Upcase) == entry_names(UpcaseTwinRelay)
     assert sink_names(short) == sink_names(hand)
     assert route_shape(short) == route_shape(hand)
   end
 
-  test "an operator module with a run body is a whole steps operator" do
+  test "a relay module with a run body is a whole steps relay" do
     assert Place.factory_id() == "place"
     assert function_exported?(Place, :channels, 1)
 
@@ -636,7 +636,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     declared =
       runner
-      |> Flezha.SDK.register_factory(UpcaseTwinOperator)
+      |> Flezha.SDK.register_factory(UpcaseTwinRelay)
       |> Flezha.SDK.register_factory(TunedSteps)
 
     assert Enum.map(declared.classes, fn {_m, c} -> c.factory_id end) ==
@@ -654,16 +654,16 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   # How it runs is the settings', not the body's: both runs write `channels/1`.
   defmodule HandWrittenSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "hand_written_steps"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
-  # A body and no behaviour: nothing says it is an operator.
-  defmodule NotAnOperator do
+  # A body and no behaviour: nothing says it is a relay.
+  defmodule NotARelay do
     @moduledoc false
-    def factory_id, do: "not_an_operator"
+    def factory_id, do: "not_a_relay"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
   end
 
@@ -673,17 +673,17 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert %Flezha.SDK{classes: [{HandWrittenSteps, %Flezha.SDK.Steps.Spec{}}]} =
              Flezha.SDK.register_factory(runner, HandWrittenSteps)
 
-    assert %Flezha.SDK{classes: [{HandWrittenOperator, %Topology{}}]} =
-             Flezha.SDK.register_factory(runner, HandWrittenOperator)
+    assert %Flezha.SDK{classes: [{HandWrittenRelay, %Topology{}}]} =
+             Flezha.SDK.register_factory(runner, HandWrittenRelay)
   end
 
-  test "a module that is not an operator is refused at registration" do
-    runner = Flezha.SDK.create_runner("not_an_operator_ns")
+  test "a module that is not a relay is refused at registration" do
+    runner = Flezha.SDK.create_runner("not_a_relay_ns")
 
-    assert {:error, %Flezha.SDK.Error{code: "topology.no_operator_exported", details: details}} =
-             Flezha.SDK.register_factory(runner, NotAnOperator)
+    assert {:error, %Flezha.SDK.Error{code: "topology.no_relay_exported", details: details}} =
+             Flezha.SDK.register_factory(runner, NotARelay)
 
-    assert details == %{"module" => inspect(NotAnOperator)}
+    assert details == %{"module" => inspect(NotARelay)}
   end
 
   test "a duplicate factory id is refused, however the class runs" do
@@ -702,7 +702,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "a run body beside a topology body does not compile" do
     error =
       refused("""
-      use Flezha.SDK.Operator, factory_id: "x", sink: "out"
+      use Flezha.SDK.Relay, factory_id: "x", sink: "out"
       def run(_i, s, _c), do: {:ok, s}
       def channels(c), do: c
       """)
@@ -711,12 +711,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
            "expected the message to begin with the code, read: #{error.description}"
   end
 
-  test "an operator with neither body does not compile, naming both" do
-    error = refused(~s|use Flezha.SDK.Operator, factory_id: "x"|)
+  test "a relay with neither body does not compile, naming both" do
+    error = refused(~s|use Flezha.SDK.Relay, factory_id: "x"|)
     assert error.description =~ "run/3" and error.description =~ "channels/1"
   end
 
-  test "an operator option on a tasklet does not compile, naming the operator macro" do
+  test "a relay option on a tasklet does not compile, naming the relay macro" do
     for option <- [~s|sink: "out"|, ~s|input: "ticks"|] do
       error =
         refused("""
@@ -727,7 +727,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       [key | _] = String.split(option, ":")
 
       assert error.description =~ "`#{key}:`" and
-               error.description =~ "Flezha.SDK.Operator"
+               error.description =~ "Flezha.SDK.Relay"
     end
   end
 
@@ -738,7 +738,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     for option <- [~s|sink: "out"|, "max_cells: 10"] do
       stray =
         refused("""
-        use Flezha.SDK.Operator, factory_id: "x", #{option}
+        use Flezha.SDK.Relay, factory_id: "x", #{option}
         def channels(c), do: c
         """)
 

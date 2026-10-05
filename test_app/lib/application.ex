@@ -58,7 +58,7 @@ defmodule ElixirRunner.Application do
     # The declared set is settled before the watcher is armed: a refusal-fixture
     # row that the check refuses exits non-zero here, and an already-closed
     # standard input would otherwise halt the VM with 0 first.
-    operators = declared_set()
+    relays = declared_set()
     watch_stdin()
     transport = System.get_env("FLEZHA_TRANSPORT", "uds") |> String.to_atom()
 
@@ -67,7 +67,7 @@ defmodule ElixirRunner.Application do
     children = [
       Flezha.SDK.child_spec(
         namespace: namespace,
-        operators: operators,
+        relays: relays,
         transport: transport
       )
     ]
@@ -79,21 +79,21 @@ defmodule ElixirRunner.Application do
     started
   end
 
-  # The local-send drill: a JSON array of `{operator, channel, message, when}`
+  # The local-send drill: a JSON array of `{relay, channel, message, when}`
   # sends this app's own code makes with `local: true`, each once the file
-  # `when` names exists, printing `local_send <operator> ok` or
-  # `local_send <operator> err <code>`.
+  # `when` names exists, printing `local_send <relay> ok` or
+  # `local_send <relay> err <code>`.
   defp local_sends(nil), do: :ok
 
   defp local_sends(script) do
     spawn(fn ->
-      for %{"operator" => operator, "channel" => channel, "message" => message, "when" => go} <-
+      for %{"relay" => relay, "channel" => channel, "message" => message, "when" => go} <-
             Jason.decode!(script) do
         await_file(go)
 
-        case Flezha.SDK.send(Flezha.SDK.RunnerServer, operator, message, channel, local: true) do
-          {:ok, _} -> IO.puts("local_send #{operator} ok")
-          {:error, %{code: code}} -> IO.puts("local_send #{operator} err #{code}")
+        case Flezha.SDK.send(Flezha.SDK.RunnerServer, relay, message, channel, local: true) do
+          {:ok, _} -> IO.puts("local_send #{relay} ok")
+          {:error, %{code: code}} -> IO.puts("local_send #{relay} err #{code}")
         end
       end
     end)
@@ -117,7 +117,7 @@ defmodule ElixirRunner.Application do
           ElixirRunner.Steps.all() ++
           ElixirRunner.StepsLoop.all() ++
           ElixirRunner.Call.all() ++
-          ElixirRunner.OperatorCall.all() ++
+          ElixirRunner.RelayCall.all() ++
           ElixirRunner.Part.all()
 
       topology ->
@@ -145,9 +145,9 @@ defmodule ElixirRunner.Application do
   def watch_stdin do
     spawn(fn ->
       # Read the standard-io device itself, not `:stdio`. Under an application
-      # `:stdio` is the application master, which relays to the device without
+      # `:stdio` is the application master, which forwards to the device without
       # being it: `:io.request/2` monitors the master, so a device that dies
-      # answers the relayed read nothing at all and the watcher hangs for ever.
+      # answers the forwarded read nothing at all and the watcher hangs for ever.
       if device = Process.whereis(:user), do: Process.group_leader(self(), device)
       stdin_loop()
     end)

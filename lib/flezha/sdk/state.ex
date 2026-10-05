@@ -29,7 +29,7 @@ defmodule Flezha.SDK.State do
   several fields is one journal record. A module with no `defchange` exports
   no `apply_change/2` and is changeless.
 
-  A module that `use`s `Flezha.SDK.Tasklet` or an operator macro and writes
+  A module that `use`s `Flezha.SDK.Tasklet` or a relay macro and writes
   `apply_change/2` by hand fails to compile, directing the author to
   `defchange`; a hand-written `apply_change/2` belongs to the reference form,
   `@behaviour Flezha.SDK.Tasklet`. A block beside a hand-written
@@ -135,8 +135,8 @@ defmodule Flezha.SDK.State do
     fields = Module.get_attribute(env.module, :flezha_state_fields, []) |> Enum.reverse()
     changes = Module.get_attribute(env.module, :flezha_changes, [])
     block? = Module.get_attribute(env.module, :flezha_state_block, false)
-    # A short-form operator module carries the block for the tasklet the
-    # operator generates, so there the callbacks implement no behaviour.
+    # A short-form relay module carries the block for the tasklet the
+    # relay generates, so there the callbacks implement no behaviour.
     impl = Flezha.SDK.Tasklet in Module.get_attribute(env.module, :behaviour, [])
 
     refuse_hand_written(env.module, block?)

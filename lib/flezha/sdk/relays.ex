@@ -1,7 +1,7 @@
-defmodule Flezha.SDK.Operators do
+defmodule Flezha.SDK.Relays do
   @moduledoc """
-  The operators a runner hosts: each started under the class its
-  `AddOperator` names, stopped on a `RemOperator`, and recorded in the
+  The relays a runner hosts: each started under the class its
+  `AddRelay` names, stopped on a `RemRelay`, and recorded in the
   runner's state and its registry. This is the half of what
   `Flezha.SDK.RunnerServer` answers that writes its state; `Flezha.SDK.Commands`
   is the half that only reads it.
@@ -12,17 +12,17 @@ defmodule Flezha.SDK.Operators do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Operator}
+  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Relay}
   alias Flezha.SDK.Steps.{Driver, Spec}
 
   @doc """
-  Start the operator `add` names under its registered class, which decides
+  Start the relay `add` names under its registered class, which decides
   how it runs. Answers `{:ok, s, declarations}`, or `{:error, reason, s}` for
   a factory this runner does not carry.
   """
   @spec add(map(), map()) :: {:ok, map(), map()} | {:error, Error.t(), map()}
   def add(s, add) do
-    s = answered(s, add.operator_id)
+    s = answered(s, add.relay_id)
 
     range =
       KeyGroup.decode(
@@ -50,7 +50,7 @@ defmodule Flezha.SDK.Operators do
 
   defp check_registered(_class, _factory_id), do: :ok
 
-  # A steps operator that reads one message would reach one member and leave the
+  # A steps relay that reads one message would reach one member and leave the
   # rest waiting, whatever its keying, so its loop mode is refused first.
   defp check_partitionable(topo, range, factory_id) do
     cond do
@@ -73,7 +73,7 @@ defmodule Flezha.SDK.Operators do
     end
   end
 
-  @doc "The flow topology a class runs on: a steps operator's own, or the class itself."
+  @doc "The flow topology a class runs on: a steps relay's own, or the class itself."
   def flow_topology(%Spec{topology: topology}), do: topology
   def flow_topology(topology), do: topology
 
@@ -82,7 +82,7 @@ defmodule Flezha.SDK.Operators do
   def remove(s, oid) do
     case s |> answered(oid) |> drop(oid) do
       {{pid, _fid}, s} ->
-        if Process.alive?(pid), do: Operator.Server.stop(pid)
+        if Process.alive?(pid), do: Relay.Server.stop(pid)
         s
 
       {nil, s} ->
@@ -92,7 +92,7 @@ defmodule Flezha.SDK.Operators do
 
   @doc """
   The process registered for an instance exited: forget the instance, so no
-  input is routed to the dead process and the next `AddOperator` for its id
+  input is routed to the dead process and the next `AddRelay` for its id
   starts a fresh one. An abnormal exit, while the runner is neither
   disconnecting nor stopped, is kept in `exited` until the controller answers
   it and answers `{:report, oid, s}`; anything else, including the exit of a
@@ -100,34 +100,34 @@ defmodule Flezha.SDK.Operators do
   """
   @spec exited(map(), pid(), term()) :: {:report, binary(), map()} | {:ok, map()}
   def exited(s, pid, reason) do
-    case Enum.find(s.operators, fn {_oid, {registered, _fid}} -> registered == pid end) do
+    case Enum.find(s.relays, fn {_oid, {registered, _fid}} -> registered == pid end) do
       nil ->
         {:ok, s}
 
       {oid, _} ->
         {_entry, s} = drop(s, oid)
 
-        if Operator.Server.clean_exit?(reason) or s.disconnecting? or s.stopped?,
+        if Relay.Server.clean_exit?(reason) or s.disconnecting? or s.stopped?,
           do: {:ok, s},
           else: {:report, oid, %{s | exited: Map.put(s.exited, oid, reason)}}
     end
   end
 
-  # Out of the operator map and the registry, so nothing is routed to it.
+  # Out of the relay map and the registry, so nothing is routed to it.
   defp drop(s, oid) do
-    {entry, operators} = Map.pop(s.operators, oid)
+    {entry, relays} = Map.pop(s.relays, oid)
     :ets.delete(s.registry, oid)
-    {entry, %{s | operators: operators}}
+    {entry, %{s | relays: relays}}
   end
 
-  # An `AddOperator` or a `RemOperator` for the id is the controller's answer
+  # An `AddRelay` or a `RemRelay` for the id is the controller's answer
   # to its exit report.
   defp answered(s, oid), do: %{s | exited: Map.delete(s.exited, oid)}
 
   defp start_flow(s, add, topo, range) do
     {:ok, op_pid} =
-      Operator.Server.start_link(
-        operator_id: add.operator_id,
+      Relay.Server.start_link(
+        relay_id: add.relay_id,
         topology: topo,
         range: range,
         counters: s.counters,
@@ -143,7 +143,7 @@ defmodule Flezha.SDK.Operators do
   defp start_steps(s, add, %Spec{} = spec, range) do
     {:ok, pid} =
       Driver.start_link(
-        operator_id: add.operator_id,
+        relay_id: add.relay_id,
         spec: spec,
         range: range,
         journal: Codec.journal_facts(add.task_journal),
@@ -162,20 +162,20 @@ defmodule Flezha.SDK.Operators do
   # A started instance of either run is registered, takes its `init_values`
   # as its tasklets' initial state, and answers its class's declarations.
   defp registered(s, add, pid, declared) do
-    :ets.insert(s.registry, {add.operator_id, pid})
+    :ets.insert(s.registry, {add.relay_id, pid})
     seed_init_values(pid, add)
 
-    {:ok, %{s | operators: Map.put(s.operators, add.operator_id, {pid, add.factory_id})},
+    {:ok, %{s | relays: Map.put(s.relays, add.relay_id, {pid, add.factory_id})},
      Declarations.for(declared)}
   end
 
   defp seed_init_values(op_pid, add) do
-    case Commands.apply_json(op_pid, add.operator_id, add.init_values) do
+    case Commands.apply_json(op_pid, add.relay_id, add.init_values) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Flezha.SDK] #{add.operator_id} init_values: #{reason.message}")
+        Logger.warning("[Flezha.SDK] #{add.relay_id} init_values: #{reason.message}")
     end
   end
 end

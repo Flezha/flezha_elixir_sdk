@@ -28,7 +28,7 @@ end
 
 defmodule Flezha.Bench.DoNothing do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "do_nothing"
 
   def channels(c) do
@@ -111,7 +111,7 @@ end
 
 defmodule Flezha.Bench.CellStress do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "cell_stress"
 
   def channels(c) do
@@ -145,7 +145,7 @@ defmodule Flezha.Bench.DynamicTask do
   def state_from_json(%{"seen" => seen}), do: %{seen: seen}
 
   # The e2e sets the idle TTL short, in milliseconds, which round up to whole
-  # seconds; unset, the Cells live for the operator's lifetime, as the
+  # seconds; unset, the Cells live for the relay's lifetime, as the
   # reference's do.
   @impl true
   def idle_ttl_seconds do
@@ -165,7 +165,7 @@ end
 
 defmodule Flezha.Bench.DynamicCell do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "dynamic_cell"
 
   def channels(c) do
@@ -183,7 +183,7 @@ end
 
 defmodule Flezha.Bench.BenchEcho do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bench_echo"
 
   def channels(c) do
@@ -236,7 +236,7 @@ end
 
 defmodule Flezha.Bench.BenchKeyed do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bench_keyed"
 
   def channels(c) do
@@ -253,7 +253,7 @@ end
 
 defmodule Flezha.Bench.KeyedNoPersist do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bench_keyed_nopersist"
 
   # The same upsert with the class's persistence off — the heap-only posture
@@ -264,7 +264,7 @@ end
 
 defmodule Flezha.Bench.TierStore do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "tier_store"
   def run, do: {:flow, exactly: :effectively_once}
 
@@ -272,7 +272,7 @@ defmodule Flezha.Bench.TierStore do
   # measures with `--durability on`, and the conformance fixture the tier's
   # crash and dead-letter scenarios drive. The 300 ms backoff base keeps the
   # min-watermark freeze observable while the ladder runs; DropNothing because
-  # a durable-input-log operator that shed at its mailbox would hold the
+  # a durable-input-log relay that shed at its mailbox would hold the
   # min-watermark on the shed offset for ever.
   def channels(c) do
     import Flezha.SDK.Channels
@@ -289,7 +289,7 @@ end
 
 defmodule Flezha.Bench.RemoteTierStore do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "remote_tier_store"
   def run, do: {:flow, exactly: :effectively_once}
 
@@ -321,7 +321,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
 
   alias Flezha.SDK.Knob
 
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
   def factory_id, do: "bench_checkpoint"
 
   # `tier_store` driven by a declared cadence instead of a `commit:` input:
@@ -366,9 +366,9 @@ defmodule Flezha.Bench.BenchCheckpoint do
 end
 
 defmodule ElixirRunner.BenchFactories do
-  @moduledoc "Registry of the Elixir bench factory operators (see this file's header)."
+  @moduledoc "Registry of the Elixir bench factory relays (see this file's header)."
 
-  @doc "Every bench factory operator module."
+  @doc "Every bench factory relay module."
   def all do
     [
       Flezha.Bench.DoNothing,

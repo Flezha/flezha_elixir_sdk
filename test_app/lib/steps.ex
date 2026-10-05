@@ -332,7 +332,7 @@ defmodule ElixirRunner.Steps do
     end
   end
 
-  # Echoes the first message, which a `:once` steps operator's one pass runs on.
+  # Echoes the first message, which a `:once` steps relay's one pass runs on.
   defmodule Echo do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "echo"
@@ -348,7 +348,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule EchoSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "echo_steps"
@@ -381,7 +381,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule TypedOnceSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "typed_once_steps"
@@ -398,7 +398,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule CommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "commit_block_steps"
@@ -416,7 +416,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule SyncDurableSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "sync_durable_steps"
     def run, do: :steps
     def durable, do: :remote
@@ -434,7 +434,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule OptOutCommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "optout_commit_block"
     def run, do: :steps
     def durable, do: false
@@ -454,7 +454,7 @@ defmodule ElixirRunner.Steps do
   # twin is transcribed from: A's channel reaches a plugin sink and feeds B.
   defmodule TierCommitBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "tier_commit_block_steps"
@@ -472,7 +472,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule SagaBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "saga_block_steps"
@@ -508,7 +508,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule KeyedBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "keyed_block_steps"
@@ -522,7 +522,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule KeyedSagaSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "keyed_saga_steps"
@@ -552,7 +552,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule OutboxBlockSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "outbox_block_steps"
@@ -571,7 +571,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule UndoOutboxSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "undo_outbox_steps"
@@ -605,7 +605,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule FailedStageSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "failed_stage_steps"
@@ -625,7 +625,7 @@ defmodule ElixirRunner.Steps do
   # branches read exactly what BranchA released on it.
   defmodule BranchSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "branch_steps"
@@ -658,7 +658,7 @@ defmodule ElixirRunner.Steps do
   # mentions of DiamJoin are one node, dispatched once after both arms commit.
   defmodule DiamondSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "diamond_steps"
@@ -689,7 +689,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule RetrySteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "retry_steps"
@@ -706,12 +706,12 @@ defmodule ElixirRunner.Steps do
     end
   end
 
-  # `timer_loop_steps`: `in -> tick -> relay -> out`, a per-input loop whose
+  # `timer_loop_steps`: `in -> tick -> tock -> out`, a per-input loop whose
   # `tick` arms a processing-time timer of the delay `after:<ms>` names and
   # emits `armed:<at>`; its firing emits `fired:<at>` and opens a pass of its
   # own. `slow:<ms>` holds `tick` that long, for a firing due mid-pass. On a
   # runner booted with `FLEZHA_STEPS_E2E_HOLD` the firing parks at the gate:
-  # `timer` inside `on_timer`, before `tick` commits; `relay` in `relay`, after.
+  # `timer` inside `on_timer`, before `tick` commits; `tock` in `tock`, after.
   defmodule Tick do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "tick"
@@ -743,21 +743,21 @@ defmodule ElixirRunner.Steps do
     end
   end
 
-  defmodule Relay do
+  defmodule Tock do
     @moduledoc false
-    use Flezha.SDK.Tasklet, name: "relay"
+    use Flezha.SDK.Tasklet, name: "tock"
 
     @impl true
     def run(input, state, ctx) do
-      if String.starts_with?(input, "fired:"), do: Gate.hold_at("relay")
-      emit(ctx, "relay:" <> input)
+      if String.starts_with?(input, "fired:"), do: Gate.hold_at("tock")
+      emit(ctx, "tock:" <> input)
       {:ok, state}
     end
   end
 
   defmodule TimerLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "timer_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -770,7 +770,7 @@ defmodule ElixirRunner.Steps do
       |> input("in")
       |> into(ElixirRunner.Steps.Tick)
       |> named("ticked")
-      |> into(ElixirRunner.Steps.Relay)
+      |> into(ElixirRunner.Steps.Tock)
       |> sink("out")
     end
   end
@@ -803,7 +803,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule EventTimerSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "event_timer_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -837,7 +837,7 @@ defmodule ElixirRunner.Steps do
 
   defmodule StaticCellSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "static_cell_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()

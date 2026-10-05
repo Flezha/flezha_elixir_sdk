@@ -8,10 +8,10 @@ defmodule Flezha.SDK.RouteLatestTest do
 
   import ExUnit.CaptureIO, only: [with_io: 2]
 
-  alias Flezha.SDK.{Channels, Cell, Local, Operator, Topology}
+  alias Flezha.SDK.{Channels, Cell, Local, Relay, Topology}
 
   defmodule RouterOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "router_op"
 
     def channels(c) do
@@ -25,7 +25,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   end
 
   defmodule NamedRouterOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "named_router_op"
 
     def channels(c) do
@@ -54,7 +54,7 @@ defmodule Flezha.SDK.RouteLatestTest do
     assert routed() == ["A=v1", "B=v1"]
 
     assert [{"route_latest", :single, [{_key, router}]}] =
-             Operator.Server.cells(Local.operator(run))
+             Relay.Server.cells(Local.relay(run))
 
     assert {:ok, %{version: 1, delivered: %{"A" => 1, "B" => 1}}, _seq} =
              Cell.read(router, 1_000)

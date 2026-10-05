@@ -6,10 +6,10 @@ defmodule Flezha.SDK.Steps.Driver do
   chain has committed, so a fan-in is dispatched exactly once with the
   accumulated batch of this pass's producers. Each stage commits durably as
   soon as its Cells have drained, whatever its siblings are still doing, and
-  the run ends by shipping `OperatorCompleted`.
+  the run ends by shipping `RelayCompleted`.
 
   It presents the same contract to an `Flezha.SDK.Cell` that
-  `Flezha.SDK.Operator.Server` does: a Cell casts its emits to its `operator`
+  `Flezha.SDK.Relay.Server` does: a Cell casts its emits to its `relay`
   pid and knows nothing else about it. So every Cell mechanism — the state,
   the records, the retry ladder — is reused as it stands, and what is written
   here is only what a *steps* run adds: the stages, the barrier and the
@@ -23,8 +23,8 @@ defmodule Flezha.SDK.Steps.Driver do
   and for a message-fed pass with nothing queued, its next message or the idle
   window's `{:sleep_due, ref}`.
 
-  A message enters through the same `Flezha.SDK.Operator.Inbox.enter/5` the
-  flow operator's frames take, and runs only the chain of the entry channel
+  A message enters through the same `Flezha.SDK.Relay.Inbox.enter/5` the
+  flow relay's frames take, and runs only the chain of the entry channel
   it arrived on; a chained loop's later passes re-enter the chain its first
   message picked.
 
@@ -41,7 +41,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
   alias Flezha.SDK.{Cell, Knob}
   alias Flezha.SDK.Cell.Records
-  alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
+  alias Flezha.SDK.Relay.{Cells, Inbox, Routing}
   alias Flezha.SDK.Steps.{Commit, Compensation, Instance, Resume, Spec, Stage}
 
   defmodule State do
@@ -49,9 +49,9 @@ defmodule Flezha.SDK.Steps.Driver do
     defstruct [
       :instance,
       :spec,
-      :operator_id,
+      :relay_id,
       :runner,
-      # the flow operator's Cell set, minted per mode and swept between passes
+      # the flow relay's Cell set, minted per mode and swept between passes
       :cells,
       # the stage barrier refs the running stages still owe, each with its
       # node and Cell, and how many each forward stage owes, so its last one
@@ -123,28 +123,28 @@ defmodule Flezha.SDK.Steps.Driver do
   @impl true
   def init(opts) do
     spec = Keyword.fetch!(opts, :spec)
-    operator_id = Keyword.fetch!(opts, :operator_id)
+    relay_id = Keyword.fetch!(opts, :relay_id)
     journal = journal(opts)
 
     # Cells are minted before anything runs, so a `RestoreInitState` frame
-    # arriving right after the `AddOperator` ack always finds a declared one
+    # arriving right after the `AddRelay` ack always finds a declared one
     # registered; a keyed one the frame names is minted by its lookup.
     cells =
       opts
-      |> Keyword.take([:operator_id, :range, :counters, :runner, :secondaries, :credit])
+      |> Keyword.take([:relay_id, :range, :counters, :runner, :secondaries, :credit])
       |> Keyword.merge(topology: spec.topology, run: :steps)
       |> Cells.new()
       |> Cells.schedule_reap()
 
     state = %State{
       instance:
-        Instance.new(operator_id, spec,
+        Instance.new(relay_id, spec,
           journal: journal,
           owed_inbox: Keyword.get(opts, :owed_inbox, 0),
           dead_letter_turns: Keyword.get(opts, :dead_letter_turns, false)
         ),
       spec: spec,
-      operator_id: operator_id,
+      relay_id: relay_id,
       pass_channel: journaled_channel(spec, journal),
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
@@ -168,9 +168,9 @@ defmodule Flezha.SDK.Steps.Driver do
     if s.resume_owed > 0, do: settle(s), else: settle(resume_bound(s))
   end
 
-  # The calls the controller's persistence commands make on an operator,
-  # answered exactly as `Flezha.SDK.Operator.Server` answers them, through the same
-  # Cell set: a restore, a compaction and a live read reach a steps operator
+  # The calls the controller's persistence commands make on a relay,
+  # answered exactly as `Flezha.SDK.Relay.Server` answers them, through the same
+  # Cell set: a restore, a compaction and a live read reach a steps relay
   # instance through the same `Flezha.SDK.Commands` path a flow one does.
   @impl true
   def handle_call({:lookup, tasklet, key, materialise?}, _from, %State{} = s) do
@@ -203,7 +203,7 @@ defmodule Flezha.SDK.Steps.Driver do
   end
 
   # A Cell finished one invocation. Its outputs are collected for the stage
-  # rather than routed: a steps operator hands a batch on at the barrier, not per
+  # rather than routed: a steps relay hands a batch on at the barrier, not per
   # value, so the whole stage's release is what the journal records.
   @impl true
   def handle_cast({:emitted, node_ref, cell_key, emits, seq, _input, report}, %State{} = s) do
@@ -240,7 +240,7 @@ defmodule Flezha.SDK.Steps.Driver do
   end
 
   # A message off the bound data stream, through the same entrance a stream
-  # operator's frame takes: an undeclared name or a parser refusal parks it,
+  # relay's frame takes: an undeclared name or a parser refusal parks it,
   # consumed without a pass, and a driver waiting for a message waits a fresh
   # idle window. A readable one waits in the inbox for the next message-fed
   # pass; a driver waiting for one starts that pass now.
@@ -275,7 +275,7 @@ defmodule Flezha.SDK.Steps.Driver do
   defp enter(%State{} = s, channel, message, metadata) do
     case Inbox.enter(
            s.runner,
-           s.operator_id,
+           s.relay_id,
            s.spec.topology,
            channel,
            message,
@@ -349,7 +349,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
   # A class that journals has its stage Cells capture their plugin output into
   # their own effect records, released once the stage commits; one that
-  # journals nothing sends it straight to the wire, as a flow operator's is.
+  # journals nothing sends it straight to the wire, as a flow relay's is.
   defp sink_outputs(%State{} = s, node_ref, value, emit, ordinal) do
     if journals?(s) do
       s
@@ -358,7 +358,7 @@ defmodule Flezha.SDK.Steps.Driver do
       |> Map.get({:node, node_ref}, [])
       |> Enum.filter(&match?(%{to: {:sink, _}}, &1))
       |> Enum.reduce(s, fn route, acc ->
-        stamp_with = if route.keyed, do: {acc.operator_id, acc.spec.topology.node_modules}
+        stamp_with = if route.keyed, do: {acc.relay_id, acc.spec.topology.node_modules}
         {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
         %{acc | cells: Cells.emit_output(acc.cells, metadata, bytes)}
       end)
@@ -499,7 +499,7 @@ defmodule Flezha.SDK.Steps.Driver do
       start_pass(s, item.channel, frontier)
     else
       {:rejected, reason} ->
-        Inbox.park_pre_dispatch(s.runner, s.operator_id, item.channel, item.channel, reason, nil)
+        Inbox.park_pre_dispatch(s.runner, s.relay_id, item.channel, item.channel, reason, nil)
         await_input(%{s | instance: Instance.note_parked(s.instance, item.offset)})
     end
   end
@@ -510,7 +510,7 @@ defmodule Flezha.SDK.Steps.Driver do
     e -> {:rejected, "entry edge failed: " <> Exception.message(e)}
   end
 
-  # Before any Cell is minted, as the flow operator's router refuses a key.
+  # Before any Cell is minted, as the flow relay's router refuses a key.
   defp own_keys(%State{cells: cells}, frontier) do
     Enum.find_value(frontier, :ok, fn {root, batch} ->
       Enum.find_value(batch, fn {_value, key} ->
@@ -751,7 +751,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.task(s.runner, self(), ref,
-          operator_id: s.operator_id,
+          relay_id: s.relay_id,
           task_idx: task_idx,
           iter: s.iter,
           cells_ran: Commit.cells_ran(s.written, node_ref, ran),
@@ -834,7 +834,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.iter(s.runner, self(), ref,
-          operator_id: s.operator_id,
+          relay_id: s.relay_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
           entry_channel: s.pass_channel,
@@ -886,7 +886,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
     if barrier.attempt < attempts do
       Logger.warning(
-        "[Flezha.SDK] #{s.operator_id} barrier attempt #{barrier.attempt}/#{attempts} " <>
+        "[Flezha.SDK] #{s.relay_id} barrier attempt #{barrier.attempt}/#{attempts} " <>
           "refused: #{error.message} (#{error.code}); re-sending"
       )
 
@@ -897,7 +897,7 @@ defmodule Flezha.SDK.Steps.Driver do
       %{s | barrier: %{barrier | attempt: barrier.attempt + 1}}
     else
       Logger.warning(
-        "[Flezha.SDK] #{s.operator_id} barrier gave up: #{error.message} (#{error.code})"
+        "[Flezha.SDK] #{s.relay_id} barrier gave up: #{error.message} (#{error.code})"
       )
 
       give_up(%{s | barrier: nil}, "#{error.message} (#{error.code})")
@@ -943,7 +943,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
       command =
         Commit.iter(s.runner, self(), ref,
-          operator_id: s.operator_id,
+          relay_id: s.relay_id,
           iter: s.iter,
           consumed_offset: s.consumed_offset,
           entry_channel: s.pass_channel,
@@ -955,7 +955,7 @@ defmodule Flezha.SDK.Steps.Driver do
     else
       Inbox.park_pre_dispatch(
         s.runner,
-        s.operator_id,
+        s.relay_id,
         "_turn",
         s.pass_channel,
         "tasklet `#{tasklet}` failed after #{attempts} attempt(s): #{error}",
@@ -983,7 +983,7 @@ defmodule Flezha.SDK.Steps.Driver do
 
   defp fail(%State{unwind: %{status: st}} = s, node_ref, error) when st != nil do
     Logger.warning(
-      "[Flezha.SDK] #{s.operator_id} compensate hook on #{Spec.tasklet_name(s.spec, node_ref)} " <>
+      "[Flezha.SDK] #{s.relay_id} compensate hook on #{Spec.tasklet_name(s.spec, node_ref)} " <>
         "failed: #{error}; the rest of the plan still runs"
     )
 
@@ -1047,13 +1047,13 @@ defmodule Flezha.SDK.Steps.Driver do
   end
 
   # A park is not a terminal outcome: the instance tears its run down WITHOUT
-  # a `OperatorCompleted`, and the controller keeps it suspended until an
+  # a `RelayCompleted`, and the controller keeps it suspended until an
   # inbox append or the wake deadline rehydrates it. The park record names the
   # last COMMITTED iteration, so a resume enters the one after it either way,
   # and the last message the run parked unread, which the inbox releases.
   defp park(%State{} = s) do
     wake = earliest_timer(s)
-    Commit.park(s.runner, s.operator_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
+    Commit.park(s.runner, s.relay_id, max(s.iter - 1, 0), wake, s.instance.parked_offset)
     %{s | terminal: :parked}
   end
 
@@ -1110,7 +1110,7 @@ defmodule Flezha.SDK.Steps.Driver do
   defp complete(s, status, error, result \\ <<>>)
 
   defp complete(%State{terminal: nil} = s, status, error, result) do
-    Commit.completed(s.runner, s.operator_id, status, error, result)
+    Commit.completed(s.runner, s.relay_id, status, error, result)
     %{s | terminal: {status, error}}
   end
 

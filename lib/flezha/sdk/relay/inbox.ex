@@ -1,17 +1,17 @@
-defmodule Flezha.SDK.Operator.Inbox do
+defmodule Flezha.SDK.Relay.Inbox do
   @moduledoc """
-  The messages an operator is sent from below: a raw frame off a bound
+  The messages a relay is sent from below: a raw frame off a bound
   primary stream, the values a Cell produced for its node's outputs, and a
   steps tasklet's request to end its instance. They live beside the
-  operator rather than on it so that a `DataStream` or a `Cell` reaching
+  relay rather than on it so that a `DataStream` or a `Cell` reaching
   upward names this module and not the router itself.
 
-  The first two are answered by `Flezha.SDK.Operator.handle_cast/2`, all three
+  The first two are answered by `Flezha.SDK.Relay.handle_cast/2`, all three
   by `Flezha.SDK.Steps.Driver.handle_cast/2`.
 
   The entrance is here too: how a raw frame becomes a value on an entry
-  channel (`enter/5`) is one rule for both runs, so a steps operator's message is
-  resolved, parsed and parked exactly where a flow operator's frame is.
+  channel (`enter/5`) is one rule for both runs, so a steps relay's message is
+  resolved, parsed and parked exactly where a flow relay's frame is.
   """
 
   alias Flezha.SDK.Park
@@ -94,7 +94,7 @@ defmodule Flezha.SDK.Operator.Inbox do
   One frame through the entrance: `{:ok, channel, value}` once the name
   resolved and the channel's parser read the bytes, or `:parked` when the
   frame named a channel `topo` does not declare or the parser rejected it,
-  parked under that name, on `runner`, with `operator_id`'s identity and the
+  parked under that name, on `runner`, with `relay_id`'s identity and the
   `call` waiting on the frame.
   """
   @spec enter(
@@ -105,12 +105,12 @@ defmodule Flezha.SDK.Operator.Inbox do
           binary(),
           binary() | nil
         ) :: {:ok, String.t(), term()} | :parked
-  def enter(runner, operator_id, topo, channel, message, call) do
+  def enter(runner, relay_id, topo, channel, message, call) do
     case resolve_channel(topo, channel) do
       {:unresolved, requested} ->
         park_pre_dispatch(
           runner,
-          operator_id,
+          relay_id,
           @unresolved_tasklet_id,
           requested,
           unresolved_entry_error(topo, requested),
@@ -128,7 +128,7 @@ defmodule Flezha.SDK.Operator.Inbox do
           {:error, reason} ->
             park_pre_dispatch(
               runner,
-              operator_id,
+              relay_id,
               channel,
               channel,
               "entry parse failed: #{inspect(reason)}",
@@ -141,7 +141,7 @@ defmodule Flezha.SDK.Operator.Inbox do
     end
   end
 
-  # A name the operator declares resolves to it; a name it does not is
+  # A name the relay declares resolves to it; a name it does not is
   # unresolved, and parks under the name it asked for rather than reaching
   # whichever entry channel happens to be first. A frame naming no channel
   # takes the first DECLARED entry — the source-plugin default, and the order
@@ -180,16 +180,16 @@ defmodule Flezha.SDK.Operator.Inbox do
   end
 
   # Why the frame did not enter: the name it asked for against the set the
-  # operator declares, or that it declares none at all. `flz_core`'s
+  # relay declares, or that it declares none at all. `flz_core`'s
   # `unresolved_entry_error` answers in the same words, over the same sorted
   # set, so a user reading a DLQ row cannot tell which core wrote it.
   defp unresolved_entry_error(topo, requested) do
     case Enum.sort(topo.entry_order) do
       [] ->
-        "the operator declares no entry channel"
+        "the relay declares no entry channel"
 
       declared ->
-        "no entry channel `#{requested}`; the operator declares: #{Enum.join(declared, ", ")}"
+        "no entry channel `#{requested}`; the relay declares: #{Enum.join(declared, ", ")}"
     end
   end
 
@@ -205,13 +205,13 @@ defmodule Flezha.SDK.Operator.Inbox do
   `opts` then name the `cell_key` and the `attempts` it failed after.
   `opts[:reply_to]` is the call waiting on the parked input, if any.
   """
-  def park_pre_dispatch(runner, operator_id, tasklet_id, channel, error, payload, opts \\ []) do
-    park_id = "#{operator_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
+  def park_pre_dispatch(runner, relay_id, tasklet_id, channel, error, payload, opts \\ []) do
+    park_id = "#{relay_id}/#{tasklet_id}##{System.unique_integer([:positive, :monotonic])}"
 
     Park.ship(
       runner,
       self(),
-      Park.identity(operator_id, tasklet_id, Keyword.get(opts, :cell_key, "")),
+      Park.identity(relay_id, tasklet_id, Keyword.get(opts, :cell_key, "")),
       Park.body(
         park_id,
         channel,

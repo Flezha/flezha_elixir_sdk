@@ -1,15 +1,15 @@
 defmodule Flezha.SDK.DataStream do
   @moduledoc """
   Owns one bound primary stream sdk-side handle and routes inbound
-  `{:flz_data, _, operator_id, message, metadata}` to the owning operator — a
+  `{:flz_data, _, relay_id, message, metadata}` to the owning relay — a
   per-stream reader, so primaries route concurrently rather than serializing
-  through the runner. The operator registry is a shared ETS table the runner
+  through the runner. The relay registry is a shared ETS table the runner
   owns; a `{:flz_closed, ...}` is reported to the runner for reconnect.
   """
 
   use GenServer
 
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.Relay.Inbox
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -27,9 +27,9 @@ defmodule Flezha.SDK.DataStream do
   end
 
   @impl true
-  def handle_info({:flz_data, _id, operator_id, message, metadata}, state) do
-    case :ets.lookup(state.registry, operator_id) do
-      [{^operator_id, op_pid}] ->
+  def handle_info({:flz_data, _id, relay_id, message, metadata}, state) do
+    case :ets.lookup(state.registry, relay_id) do
+      [{^relay_id, op_pid}] ->
         Inbox.input(op_pid, metadata["channel"], message, metadata)
 
       [] ->

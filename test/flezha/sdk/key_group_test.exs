@@ -2,7 +2,7 @@ defmodule Flezha.SDK.KeyGroupTest do
   @moduledoc """
   The Elixir half of a three-implementation contract. The controller decides
   which member owns a key; the SDK refuses a key it does not own. If the two
-  hashes disagree by one bit, every operator in that group parks its traffic —
+  hashes disagree by one bit, every relay in that group parks its traffic —
   so the fixture vectors here are the SAME ones `determinism.rs` and
   `StableIdTest.java` assert.
   """

@@ -86,7 +86,7 @@ defmodule Flezha.SDK.Cell.Clock do
     s
   end
 
-  @doc "Every armed ref cancelled: an eviction, or an Operator that has gone."
+  @doc "Every armed ref cancelled: an eviction, or a Relay that has gone."
   @spec disarm_all(State.t()) :: State.t()
   def disarm_all(%State{timers: timers} = s),
     do: Enum.reduce(Map.keys(timers.refs), s, &disarm(&2, &1))
@@ -120,7 +120,7 @@ defmodule Flezha.SDK.Cell.Clock do
 
   defp event(%State{} = s, event, count) do
     :telemetry.execute([:flezha, :sdk, :timers], %{count: count}, %{
-      operator_id: s.operator_id,
+      relay_id: s.relay_id,
       tasklet: s.module.name(),
       event: event
     })

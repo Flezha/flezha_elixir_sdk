@@ -1,6 +1,6 @@
 defmodule ElixirRunner.Call do
   @moduledoc """
-  Call fixtures (`call_response`): operators an outside caller calls and whose
+  Call fixtures (`call_response`): relays an outside caller calls and whose
   graph answers it through `response/1` — from the first tasklet, from a
   downstream one, from whichever of two filtered paths the input took, and
   from a durable steps turn.
@@ -85,7 +85,7 @@ defmodule ElixirRunner.Call do
 
   defmodule EchoOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "call_echo"
 
     def channels(c) do
@@ -96,7 +96,7 @@ defmodule ElixirRunner.Call do
 
   defmodule DownstreamOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "call_downstream"
 
     def channels(c) do
@@ -113,7 +113,7 @@ defmodule ElixirRunner.Call do
   # An input starting `no` takes the refused path, every other the accepted one.
   defmodule SplitOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "call_split"
 
     def channels(c) do
@@ -135,7 +135,7 @@ defmodule ElixirRunner.Call do
 
   defmodule TurnSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "call_turn"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()

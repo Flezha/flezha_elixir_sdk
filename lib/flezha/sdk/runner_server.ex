@@ -11,8 +11,8 @@ defmodule Flezha.SDK.RunnerServer do
   nothing reconnects, and the process stays, so a `:permanent` supervisor has
   nothing to restart into a second registration. The persistence family — restore, compaction, the live
   read, the JSON apply, the credit window — is answered by `Flezha.SDK.Commands`
-  off this loop, operators start and stop through `Flezha.SDK.Operators`, and
-  a graceful stop ships every operator's state before the connection closes.
+  off this loop, relays start and stop through `Flezha.SDK.Relays`, and
+  a graceful stop ships every relay's state before the connection closes.
   A caller waiting on a controller reply is kept in
   `Flezha.SDK.RunnerServer.Waiters` until the reply settles it.
   """
@@ -32,7 +32,7 @@ defmodule Flezha.SDK.RunnerServer do
     Hold,
     Jitter,
     Knob,
-    Operators,
+    Relays,
     Park,
     PersistentId,
     Spawn,
@@ -80,9 +80,9 @@ defmodule Flezha.SDK.RunnerServer do
       factories: [],
       primaries: [],
       secondaries: [],
-      operators: %{},
+      relays: %{},
       # Instances whose process exited abnormally, reported and not yet
-      # answered by an `AddOperator` or `RemOperator`: `%{oid => reason}`.
+      # answered by an `AddRelay` or `RemRelay`: `%{oid => reason}`.
       exited: %{},
       parks: %{},
       waiters: %{},
@@ -108,24 +108,24 @@ defmodule Flezha.SDK.RunnerServer do
   def remove(server, module), do: Call.control(server, {:remove, module}, @busy)
   def namespace(server), do: Call.control(server, :namespace, nil)
 
-  @doc "The ids of the operators this runner holds now, sorted."
-  def operators(server), do: Call.control(server, :operators, @busy)
+  @doc "The ids of the relays this runner holds now, sorted."
+  def relays(server), do: Call.control(server, :relays, @busy)
 
   @doc """
-  The process and topology of `operator_id` when this runner holds it, for a
-  local send; `runtime.operator_not_local` otherwise.
+  The process and topology of `relay_id` when this runner holds it, for a
+  local send; `runtime.relay_not_local` otherwise.
   """
-  def local_target(server, operator_id),
-    do: Call.control(server, {:local_target, operator_id}, @busy)
+  def local_target(server, relay_id),
+    do: Call.control(server, {:local_target, relay_id}, @busy)
 
   @doc """
   Run one administration verb against the controller's published consumer
   surface, as the identity this connection proved (see `Flezha.SDK.Control`).
 
-  A cast rather than a call: the controller may have to start an operator
+  A cast rather than a call: the controller may have to start a relay
   before it can answer, and the runner must keep serving while it does. The
   reply reaches the caller through `Flezha.SDK.RunnerServer.Waiters`, as a
-  steps operator commit's ack does.
+  steps relay commit's ack does.
   """
   @spec admin_call(pid() | atom(), String.t(), String.t(), timeout()) ::
           {:ok, String.t()} | {:error, Error.t()}
@@ -175,7 +175,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # Everything the runner owns before it connects: its identity, the registry
-  # and counters its Operators share, and the credit window linked here.
+  # and counters its Relays share, and the credit window linked here.
   defp initial_state(opts) do
     namespace = Keyword.fetch!(opts, :namespace)
     factories = Keyword.fetch!(opts, :factories)
@@ -187,7 +187,7 @@ defmodule Flezha.SDK.RunnerServer do
       namespace: namespace,
       transport: Keyword.fetch!(opts, :transport),
       stable_id: stable_id,
-      registry: :ets.new(:flezha_sdk_operators, [:public, :set, {:read_concurrency, true}]),
+      registry: :ets.new(:flezha_sdk_relays, [:public, :set, {:read_concurrency, true}]),
       counters: counters,
       credit: credit,
       topologies: Keyword.fetch!(opts, :topologies),
@@ -220,14 +220,14 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_call({:remove, module}, _from, %State{} = s) do
     fid = module.factory_id()
-    live = Enum.count(s.operators, fn {_oid, {_pid, f}} -> f == fid end)
+    live = Enum.count(s.relays, fn {_oid, {_pid, f}} -> f == fid end)
 
     cond do
       not Map.has_key?(s.topologies, fid) ->
         {:reply, {:error, Error.new("runtime.class_not_registered", factory: fid)}, s}
 
       live > 0 ->
-        error = Error.new("runtime.operator_type_in_use", factory_id: fid, live_instances: live)
+        error = Error.new("runtime.relay_type_in_use", factory_id: fid, live_instances: live)
         {:reply, {:error, error}, s}
 
       true ->
@@ -244,16 +244,16 @@ defmodule Flezha.SDK.RunnerServer do
 
   def handle_call(:namespace, _from, %State{} = s), do: {:reply, s.namespace, s}
 
-  def handle_call(:operators, _from, %State{} = s),
-    do: {:reply, {:ok, s.operators |> Map.keys() |> Enum.sort()}, s}
+  def handle_call(:relays, _from, %State{} = s),
+    do: {:reply, {:ok, s.relays |> Map.keys() |> Enum.sort()}, s}
 
   def handle_call({:local_target, oid}, _from, %State{} = s) do
-    case Map.fetch(s.operators, oid) do
+    case Map.fetch(s.relays, oid) do
       {:ok, {pid, factory_id}} ->
-        {:reply, {:ok, pid, Operators.flow_topology(Map.fetch!(s.topologies, factory_id))}, s}
+        {:reply, {:ok, pid, Relays.flow_topology(Map.fetch!(s.topologies, factory_id))}, s}
 
       :error ->
-        {:reply, {:error, Error.new("runtime.operator_not_local", operator: oid)}, s}
+        {:reply, {:error, Error.new("runtime.relay_not_local", relay: oid)}, s}
     end
   end
 
@@ -361,11 +361,11 @@ defmodule Flezha.SDK.RunnerServer do
   def handle_info({:spawn_deadline, reference_id}, %State{} = s),
     do: settle(s, reference_id, :timeout, nil)
 
-  # An operator instance's process ended. The report is kept until answered,
+  # A relay instance's process ended. The report is kept until answered,
   # because a control frame is never held and one written while no control
   # stream is bound goes nowhere.
   def handle_info({:EXIT, pid, reason}, %State{} = s) do
-    case Operators.exited(s, pid, reason) do
+    case Relays.exited(s, pid, reason) do
       {:report, oid, s} ->
         report_exit(s, oid, reason)
         {:noreply, s}
@@ -450,7 +450,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   # A graceful stop — the supervisor's shutdown, `Flezha.SDK.close/1`, a
-  # `RunnerDisconnect` — ships every operator's state before the connection
+  # `RunnerDisconnect` — ships every relay's state before the connection
   # goes, so a reconnect-resume is loss-free.
   @impl true
   def terminate(_reason, %State{} = s) do
@@ -517,10 +517,10 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  defp dispatch({:add_operator, add}, ref, s) do
-    case Operators.add(s, add) do
+  defp dispatch({:add_relay, add}, ref, s) do
+    case Relays.add(s, add) do
       {:ok, s, metadata} ->
-        reply(s, ref, "success", [], Codec.encode_add_operator_response(metadata))
+        reply(s, ref, "success", [], Codec.encode_add_relay_response(metadata))
         {:noreply, s}
 
       {:error, reason, s} ->
@@ -529,8 +529,8 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
-  defp dispatch({:rem_operator, %{operator_id: oid}}, ref, s) do
-    reply_ok(Operators.remove(s, oid), ref)
+  defp dispatch({:rem_relay, %{relay_id: oid}}, ref, s) do
+    reply_ok(Relays.remove(s, oid), ref)
   end
 
   defp dispatch({:ping, %{nonce: nonce}}, ref, s) do
@@ -538,10 +538,10 @@ defmodule Flezha.SDK.RunnerServer do
     {:noreply, s}
   end
 
-  defp dispatch({:steps_stop, %{operator_id: oid}}, ref, s) do
-    case Map.get(s.operators, oid) do
+  defp dispatch({:steps_stop, %{relay_id: oid}}, ref, s) do
+    case Map.get(s.relays, oid) do
       {pid, _fid} -> Driver.stop_steps(pid)
-      nil -> Logger.warning("[Flezha.SDK] StepsStop for unknown operator #{oid}")
+      nil -> Logger.warning("[Flezha.SDK] StepsStop for unknown relay #{oid}")
     end
 
     reply_ok(s, ref)
@@ -590,7 +590,7 @@ defmodule Flezha.SDK.RunnerServer do
       {:stop, :normal, %{s | disconnecting?: true}}
     else
       # `System.stop/1` runs the application shutdown — this server, its
-      # Operators and their Cells — and then ends the VM with the status.
+      # Relays and their Cells — and then ends the VM with the status.
       # The server stays up until then: a stopped one is restarted by its
       # supervisor and re-registers the process the controller just ended.
       System.stop(@terminal_exit_status)
@@ -659,14 +659,14 @@ defmodule Flezha.SDK.RunnerServer do
             pid
           end)
 
-        # What this process held goes out before the operators are told the
+        # What this process held goes out before the relays are told the
         # wire is back, so a staged steps output cannot be overtaken by the
-        # frames a resumed operator writes.
+        # frames a resumed relay writes.
         s = %{s | primaries: readers, secondaries: secondaries}
         s = %{s | held: s |> wire() |> Hold.replay()}
 
-        # Push the fresh secondaries to any operators that survived a reconnect.
-        Enum.each(s.operators, fn {_oid, {pid, _f}} ->
+        # Push the fresh secondaries to any relays that survived a reconnect.
+        Enum.each(s.relays, fn {_oid, {pid, _f}} ->
           if Process.alive?(pid), do: send(pid, {:secondaries, secondaries})
         end)
 
@@ -766,7 +766,7 @@ defmodule Flezha.SDK.RunnerServer do
 
   # Built once per runner process and presented on every connect it makes, so
   # the `incarnation` minted here tells the controller a reconnect of this
-  # process, which still runs its operators, from a restart that runs none.
+  # process, which still runs its relays, from a restart that runs none.
   defp handshake_payload(namespace, factories, stable_id) do
     %{
       "namespace" => namespace,
@@ -804,7 +804,7 @@ defmodule Flezha.SDK.RunnerServer do
   end
 
   defp report_exit(%State{} = s, oid, reason),
-    do: ship_request(s, request_ref("exit"), Codec.operator_exited_command(oid, reason))
+    do: ship_request(s, request_ref("exit"), Codec.relay_exited_command(oid, reason))
 
   # A fresh reference id for a request this runner starts.
   defp request_ref(prefix),

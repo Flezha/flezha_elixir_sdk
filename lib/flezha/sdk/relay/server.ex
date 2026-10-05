@@ -1,6 +1,6 @@
-defmodule Flezha.SDK.Operator.Server do
+defmodule Flezha.SDK.Relay.Server do
   @moduledoc """
-  One process per operator instance: the routing core plus per-Cell
+  One process per relay instance: the routing core plus per-Cell
   supervision. An input on an entry channel (parsed, a parse failure riding the
   entry ladder) fans out along that entry's routes; a value a Cell emits fans
   out along its node's routes. Each route applies at most one fused transform and
@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Operator.Server do
   the seq its dispatch started at with the emit ordinal, and the key. Routing
   is serialized here (per-Cell ordering); Cells dispatch concurrently.
 
-  Its Cells are the `Flezha.SDK.Operator.Cells` set, the one a steps operator
+  Its Cells are the `Flezha.SDK.Relay.Cells` set, the one a steps relay
   driver holds too: minted per mode, capped, and swept by a `:reap` tick that
   runs in this process, so no push can be routed while it runs. What an
   evicted Cell could not ship — the records it still held, then its delete —
@@ -30,16 +30,16 @@ defmodule Flezha.SDK.Operator.Server do
   instance ships `IterPark` at iteration `0`, and the controller evicts it.
 
   A tasklet's `complete/2`, or the class's `max_duration_ms`, ends the
-  instance: once every Cell holds nothing it ships one `OperatorCompleted`
+  instance: once every Cell holds nothing it ships one `RelayCompleted`
   (`completed`, or `cancelled` for the wall-clock stop), and the controller
-  stops it as it stops a finished steps operator.
+  stops it as it stops a finished steps relay.
   """
 
   use GenServer
   require Logger
 
   alias Flezha.SDK.{Call, Cell, Hold, Knob, Park, Prefix, Record}
-  alias Flezha.SDK.Operator.{Cells, Inbox, Routing}
+  alias Flezha.SDK.Relay.{Cells, Inbox, Routing}
   alias Flezha.SDK.Steps.Commit
 
   # How long a report of the processed prefix waits for more releases.
@@ -48,7 +48,7 @@ defmodule Flezha.SDK.Operator.Server do
   @drain_recheck_ms 5
 
   # What a router that will not answer tells its caller.
-  @busy {:error, :operator_busy}
+  @busy {:error, :relay_busy}
   # What an entry input carries into routing: no metadata, no key, no Cell,
   # and the durable offset the controller stamped.
   @entry_emit %{meta: %{}, key: nil, origin: nil, offset: nil, call: nil, replay: nil}
@@ -56,7 +56,7 @@ defmodule Flezha.SDK.Operator.Server do
   defmodule State do
     @moduledoc false
     defstruct [
-      :operator_id,
+      :relay_id,
       :topology,
       :runner,
       :cells,
@@ -100,20 +100,20 @@ defmodule Flezha.SDK.Operator.Server do
              | :cell_not_found
              | :cell_evicted
              | :cell_capped
-             | :operator_busy}
+             | :relay_busy}
   def lookup(pid, tasklet, key, opts \\ []),
     do: Call.control(pid, {:lookup, tasklet, key, Keyword.get(opts, :materialise, false)}, @busy)
 
   @doc """
   Every node as `{tasklet_name, mode, [{key, cell_pid}]}` — the live-read
-  walk's input — or `{:error, :operator_busy}` from a router that will not
+  walk's input — or `{:error, :relay_busy}` from a router that will not
   answer. The refusal is deliberately not an empty list: "no Cells" and "the
   router did not say" are different facts, and a walk that confused them would
-  report a live operator as empty.
+  report a live relay as empty.
   """
   @spec cells(GenServer.server()) ::
           [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
-          | {:error, :operator_busy}
+          | {:error, :relay_busy}
   def cells(pid), do: Call.control(pid, :cells, @busy)
 
   # --- server ---
@@ -123,7 +123,7 @@ defmodule Flezha.SDK.Operator.Server do
     Process.flag(:trap_exit, true)
 
     counters = Keyword.fetch!(opts, :counters)
-    # The reconnect cap, resolved once: this Operator's holds and every
+    # The reconnect cap, resolved once: this Relay's holds and every
     # Cell's are bounded by one number the caller can state, rather than by
     # what the process-wide variable said at each separate construction.
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
@@ -133,7 +133,7 @@ defmodule Flezha.SDK.Operator.Server do
     cells =
       opts
       |> Keyword.take([
-        :operator_id,
+        :relay_id,
         :topology,
         :range,
         :counters,
@@ -146,7 +146,7 @@ defmodule Flezha.SDK.Operator.Server do
       |> Cells.schedule_reap()
 
     s = %State{
-      operator_id: Keyword.fetch!(opts, :operator_id),
+      relay_id: Keyword.fetch!(opts, :relay_id),
       topology: topology,
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
@@ -173,7 +173,7 @@ defmodule Flezha.SDK.Operator.Server do
 
   def handle_call(:cells, _from, %State{} = s), do: {:reply, Cells.listing(s.cells), s}
 
-  # A restore frame landed. Its saga markers are a steps operator's; a flow operator has
+  # A restore frame landed. Its saga markers are a steps relay's; a flow relay has
   # no restore gate to count it toward.
   def handle_call({:restore_landed, _identity, _intent, _done}, _from, %State{} = s),
     do: {:reply, :ok, s}
@@ -200,7 +200,7 @@ defmodule Flezha.SDK.Operator.Server do
 
     {offset, call, replay} = frame_facts(metadata)
 
-    case Inbox.enter(s.runner, s.operator_id, s.topology, channel, message, call) do
+    case Inbox.enter(s.runner, s.relay_id, s.topology, channel, message, call) do
       {:ok, channel, value} ->
         emit = %{@entry_emit | offset: offset, call: call, replay: replay}
         # Held while it routes, so the prefix reaches it even when it reaches
@@ -252,10 +252,10 @@ defmodule Flezha.SDK.Operator.Server do
   end
 
   # A Cell died — forget it; it is recreated on that key's next input. A
-  # crash must not take the Operator down with it, and must not leave the
+  # crash must not take the Relay down with it, and must not leave the
   # key unroutable; the log is what makes a key crashing on every input
   # visible instead of looking like silent inactivity. Monitored, not linked,
-  # so this process's own exit — `:normal` on `RemOperator` — ends every Cell
+  # so this process's own exit — `:normal` on `RemRelay` — ends every Cell
   # through its monitor of this process. The Cell's `after` cannot run for an
   # untrappable kill, so its in-flight slot is released there too.
   @impl true
@@ -330,7 +330,7 @@ defmodule Flezha.SDK.Operator.Server do
       Process.send_after(self(), :end_due, @drain_recheck_ms)
       s
     else
-      Commit.completed(s.runner, s.operator_id, status, "", result)
+      Commit.completed(s.runner, s.relay_id, status, "", result)
       %{s | reported?: true}
     end
   end
@@ -357,7 +357,7 @@ defmodule Flezha.SDK.Operator.Server do
          {:quiet, latest} <- quiet_since(s),
          quiet_for = now - latest,
          :sleep <- if(quiet_for < window, do: {:wait, window - quiet_for}, else: :sleep) do
-      Commit.park(s.runner, s.operator_id, 0, 0, nil)
+      Commit.park(s.runner, s.relay_id, 0, 0, nil)
       %{s | idle: nil}
     else
       {:wait, after_ms} -> arm_idle(s, after_ms)
@@ -394,7 +394,7 @@ defmodule Flezha.SDK.Operator.Server do
   defp report_prefix(%State{prefix: ledger, cells: cells} = s) do
     with p when is_integer(p) <- Prefix.candidate(ledger),
          true <- s.handed.n == 0 and cells.held.n == 0 and cells.secondaries != [] do
-      identity = Park.identity(s.operator_id, "", "")
+      identity = Park.identity(s.relay_id, "", "")
       frame = Record.prefix_frame(identity, p, length(cells.secondaries))
 
       sent? =
@@ -450,7 +450,7 @@ defmodule Flezha.SDK.Operator.Server do
   # then — on a keyed sink — the identity stamps, which nothing can clobber.
   # Every plugin output advances the ordinal, stamped or not.
   defp deliver(%State{} = s, %{to: {:sink, _}} = route, _source, value, emit, ordinal) do
-    stamp_with = if route.keyed, do: {s.operator_id, s.topology.node_modules}
+    stamp_with = if route.keyed, do: {s.relay_id, s.topology.node_modules}
     {metadata, bytes} = Routing.sink_frame(route, value, emit, ordinal, stamp_with)
     {%{s | cells: Cells.emit_output(s.cells, metadata, bytes)}, ordinal + 1}
   end
@@ -518,7 +518,7 @@ defmodule Flezha.SDK.Operator.Server do
       deliver_to_node(s, consumer_ref, value, key, emit)
     else
       _unknown ->
-        Logger.warning("[Flezha.SDK] #{s.operator_id} re-delivered edge #{edge} matches no route")
+        Logger.warning("[Flezha.SDK] #{s.relay_id} re-delivered edge #{edge} matches no route")
         s
     end
   end
@@ -534,7 +534,7 @@ defmodule Flezha.SDK.Operator.Server do
 
   defp park_misroute(%State{} = s, node_ref, value, reason, call) do
     label = node_ref_label(s, node_ref)
-    Inbox.park_pre_dispatch(s.runner, s.operator_id, label, label, reason, value, reply_to: call)
+    Inbox.park_pre_dispatch(s.runner, s.relay_id, label, label, reason, value, reply_to: call)
     s
   end
 

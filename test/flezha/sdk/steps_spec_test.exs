@@ -41,7 +41,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
   end
 
   defmodule LinearSteps do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "linear_steps"
 
@@ -145,7 +145,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
 
     assert {"topology.invalid_setting",
             %{
-              "declaration" => "operator 'forever_loop'",
+              "declaration" => "relay 'forever_loop'",
               "setting" => "each",
               "value" => "forever"
             }} =
@@ -172,7 +172,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
       Process.put(:steps_spec_test_run, run)
 
       assert {"topology.unknown_field",
-              %{"declaration" => "'#{parent}' of operator 'misplaced'", "fields" => setting}} ==
+              %{"declaration" => "'#{parent}' of relay 'misplaced'", "fields" => setting}} ==
                refused_setting(Misplaced)
     end
   end
@@ -185,7 +185,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
     end
 
     assert {"topology.unknown_field",
-            %{"declaration" => "'false' of operator 'sleepless_flow'", "fields" => "sleep_after"}} ==
+            %{"declaration" => "'false' of relay 'sleepless_flow'", "fields" => "sleep_after"}} ==
              refused_setting(SleeplessFlow)
   end
 
@@ -223,17 +223,17 @@ defmodule Flezha.SDK.Steps.SpecTest do
 
   test "each class declares where it keeps its work and when it sleeps" do
     defmodule SleepingFlow do
-      use Flezha.SDK.Operator, factory_id: "sleeping_flow", durable: {:local, sleep_after: 150}
+      use Flezha.SDK.Relay, factory_id: "sleeping_flow", durable: {:local, sleep_after: 150}
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
     defmodule OptedOutSteps do
-      use Flezha.SDK.Operator, factory_id: "opted_out_steps", run: :steps, durable: false
+      use Flezha.SDK.Relay, factory_id: "opted_out_steps", run: :steps, durable: false
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
     defmodule CappedSteps do
-      use Flezha.SDK.Operator,
+      use Flezha.SDK.Relay,
         factory_id: "capped_steps",
         run: {:steps, each: :chained, on_failure: :keep_progress},
         max_duration_ms: 5_000
@@ -263,12 +263,12 @@ defmodule Flezha.SDK.Steps.SpecTest do
 
   test "a class that says nothing sleeps by its run: a flow never, a steps class after six hours" do
     defmodule SilentFlow do
-      use Flezha.SDK.Operator, factory_id: "silent_flow"
+      use Flezha.SDK.Relay, factory_id: "silent_flow"
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
     defmodule LocalFlow do
-      use Flezha.SDK.Operator, factory_id: "local_flow", durable: :local
+      use Flezha.SDK.Relay, factory_id: "local_flow", durable: :local
       def channels(c), do: c |> input("in") |> into(TailTask)
     end
 
@@ -363,7 +363,7 @@ defmodule Flezha.SDK.Steps.SpecTest do
     assert length(spec.dag.parents[join]) == 2
   end
 
-  test "a keyed edge into a keyless tasklet makes it dynamic, as a flow operator's" do
+  test "a keyed edge into a keyless tasklet makes it dynamic, as a flow relay's" do
     defmodule DynamicSteps do
       def factory_id, do: "dynamic_steps"
 

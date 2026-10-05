@@ -1,7 +1,7 @@
 # flezha_sdk
 
 The Elixir SDK for Flezha. You write tasklets that handle one message at a
-time and operators that declare how those tasklets are connected; a Flezha
+time and relays that declare how those tasklets are connected; a Flezha
 controller places them, keeps their state durable, retries failures and moves
 work when a host goes away.
 
@@ -27,17 +27,17 @@ Elixir 1.17 or later.
   transport (`Flezha.SDK.Connect`) at boot, and a runner started there with
   `transport: :native` reaches it without a socket.
 
-`Flezha.SDK.Local` runs an operator's declared graph in your own process with no
+`Flezha.SDK.Local` runs a relay's declared graph in your own process with no
 controller at all, holding state in memory only.
 
-## Declaring an operator
+## Declaring a relay
 
-One macro declares every operator. Its settings say how it runs and where its
+One macro declares every relay. Its settings say how it runs and where its
 work is kept, and each is optional:
 
 ```elixir
 defmodule Checkout do
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "checkout",
     run: {:steps, each: :per_input, on_failure: :keep_progress},
     durable: {:local, sleep_after: 60_000}
@@ -50,12 +50,12 @@ end
 effectively-once tier) or `:steps`; `durable` is `false`, `:local` (the
 default; a flow instance never sleeps, a steps instance after six hours idle)
 or `:remote`. A setting written under
-the wrong parent does not compile. `Flezha.SDK.Operator` documents the tree.
+the wrong parent does not compile. `Flezha.SDK.Relay` documents the tree.
 
-## Answering a caller, calling an operator
+## Answering a caller, calling a relay
 
 A channel can end in `response/1`, which answers the outside call its input
-carried, or in `call/3`, which sends each value to another operator and hands
+carried, or in `call/3`, which sends each value to another relay and hands
 the outcome back on a new entry channel, `<channel>.response`:
 
 ```elixir

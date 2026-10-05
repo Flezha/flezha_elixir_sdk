@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Control do
   @moduledoc """
   Administering the namespace this runner's connection proved, from ordinary
-  application code. Sending to an operator is not here: it is
+  application code. Sending to a relay is not here: it is
   `Flezha.SDK.send/5`.
 
   No tasklet has to be running and the application holds no credential of its
@@ -26,33 +26,33 @@ defmodule Flezha.SDK.Control do
   @type runner :: Flezha.SDK.t() | pid() | atom()
 
   @doc """
-  Start an operator of `factory_id`, on the specification `flz operator start`
+  Start a relay of `factory_id`, on the specification `flz relay start`
   takes: `id:`, `init_values:` and `opts:`, each optional. Answers the
   id it runs under, the generated one when no `id:` was given, and whether this
   call started it or found a live instance already holding the id.
 
-  Without `id:` every call starts a new operator, so a start retried after a
+  Without `id:` every call starts a new relay, so a start retried after a
   lost answer starts a second one, and a second stream runs until it is stopped.
   Pass `id:` when the start may be retried.
   """
-  @spec start_operator(runner(), String.t(), keyword()) ::
+  @spec start_relay(runner(), String.t(), keyword()) ::
           {:ok, %{id: String.t(), outcome: :started | :already_running}} | {:error, term()}
-  def start_operator(runner, factory_id, opts \\ []) do
+  def start_relay(runner, factory_id, opts \\ []) do
     fields = given(%{"factory_id" => factory_id}, opts, [:id, :init_values, :opts])
 
-    with {:ok, answer} <- call(runner, "Operator.start", [fields]), do: started(answer)
+    with {:ok, answer} <- call(runner, "Relay.start", [fields]), do: started(answer)
   end
 
-  @doc "Stop an operator, or the whole partition group it names."
-  @spec stop_operator(runner(), String.t()) :: {:ok, term()} | {:error, term()}
-  def stop_operator(runner, operator_id),
-    do: call(runner, "Operator.stop", [operator_id])
+  @doc "Stop a relay, or the whole partition group it names."
+  @spec stop_relay(runner(), String.t()) :: {:ok, term()} | {:error, term()}
+  def stop_relay(runner, relay_id),
+    do: call(runner, "Relay.stop", [relay_id])
 
   @doc """
   Enable the plugin `name` in this namespace, of the provider `provider` (for
-  example `"operator_websocket"`). Options: `opts:`, the provider's options;
+  example `"relay_websocket"`). Options: `opts:`, the provider's options;
   `single: true` to run one copy in the whole cluster; and
-  `operator_id:` with `hooks:` to bind that operator in the same call.
+  `relay_id:` with `hooks:` to bind that relay in the same call.
   """
   @spec enable_plugin(runner(), String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
@@ -61,42 +61,42 @@ defmodule Flezha.SDK.Control do
 
     call(runner, "PluginManager.enable", [
       name,
-      given(fields, opts, [:single, :operator_id, :hooks])
+      given(fields, opts, [:single, :relay_id, :hooks])
     ])
   end
 
   @doc """
-  Bind the operator `operator_id` to the enabled plugin `name`, with the
+  Bind the relay `relay_id` to the enabled plugin `name`, with the
   optional `hooks:` and `channel:`.
   """
   @spec bind_plugin(runner(), String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
-  def bind_plugin(runner, name, operator_id, opts \\ []) do
-    fields = given(%{"operator_id" => operator_id}, opts, [:hooks, :channel])
+  def bind_plugin(runner, name, relay_id, opts \\ []) do
+    fields = given(%{"relay_id" => relay_id}, opts, [:hooks, :channel])
     call(runner, "PluginManager.bind", [name, fields])
   end
 
-  @doc "Unbind the operator `operator_id` from the plugin `name`, which stays enabled."
+  @doc "Unbind the relay `relay_id` from the plugin `name`, which stays enabled."
   @spec unbind_plugin(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def unbind_plugin(runner, name, operator_id),
-    do: call(runner, "PluginManager.unbind", [name, %{"operator_id" => operator_id}])
+  def unbind_plugin(runner, name, relay_id),
+    do: call(runner, "PluginManager.unbind", [name, %{"relay_id" => relay_id}])
 
   @doc "Disable the plugin `name`, stopping it wherever it runs."
   @spec disable_plugin(runner(), String.t()) :: {:ok, term()} | {:error, term()}
   def disable_plugin(runner, name), do: call(runner, "PluginManager.disable", [name, %{}])
 
-  @doc "The operator ids running in this namespace."
-  @spec list_operators(runner()) :: {:ok, term()} | {:error, term()}
-  def list_operators(runner), do: call(runner, "Operator.list_operators", [])
+  @doc "The relay ids running in this namespace."
+  @spec list_relays(runner()) :: {:ok, term()} | {:error, term()}
+  def list_relays(runner), do: call(runner, "Relay.list_relays", [])
 
-  @doc "The plugins enabled in this namespace: name, provider, single, bound operators."
+  @doc "The plugins enabled in this namespace: name, provider, single, bound relays."
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
   def list_plugins(runner), do: call(runner, "PluginManager.list", [])
 
   @doc "One cell's live state, and the change sequence it was read at."
   @spec cell_state(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def cell_state(runner, operator_id, cell_key),
-    do: call(runner, "Operator.cell_state", [operator_id, cell_key])
+  def cell_state(runner, relay_id, cell_key),
+    do: call(runner, "Relay.cell_state", [relay_id, cell_key])
 
   @doc """
   Any published function, by name.
@@ -122,7 +122,7 @@ defmodule Flezha.SDK.Control do
     do: {:ok, %{id: id, outcome: :already_running}}
 
   defp started(_other),
-    do: {:error, Error.new("control.unreadable_answer", verb: "Operator.start")}
+    do: {:error, Error.new("control.unreadable_answer", verb: "Relay.start")}
 
   @doc false
   # The `keys` set in `opts`, added to `fields` under their names; the

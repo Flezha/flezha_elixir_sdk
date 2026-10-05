@@ -1,9 +1,9 @@
 defmodule Flezha.SDK.Declarations do
   @moduledoc """
-  What a class tells the controller about itself in its `AddOperator` reply:
-  a map of string keys that becomes `AddOperatorResponse.metadata`.
+  What a class tells the controller about itself in its `AddRelay` reply:
+  a map of string keys that becomes `AddRelayResponse.metadata`.
 
-  Both runs live here, as they do in the reference's `operator_start.rs`,
+  Both runs live here, as they do in the reference's `relay_start.rs`,
   because they answer one question and the controller decodes them all in one
   place of its own. A new declared fact is added here and there, and nowhere
   else: the SDK names no controller module, so the pair is kept by the
@@ -18,11 +18,11 @@ defmodule Flezha.SDK.Declarations do
   threshold when they depart from the default. A steps class declares its
   `each` (only a `per_input` loop partitions) and `on_failure`, the
   compensable positions (a rewind may only unwind those) and the leaves,
-  since the operator is done when every leaf has committed. The checkpoint
+  since the relay is done when every leaf has committed. The checkpoint
   cadence, the outputs posture and the delay stay SDK-side.
   """
 
-  alias Flezha.SDK.{Operator, Tasklet, Topology}
+  alias Flezha.SDK.{Relay, Tasklet, Topology}
   alias Flezha.SDK.Steps.Spec
 
   @doc "The metadata `class` declares: a flow `Topology` or a steps `Spec`."
@@ -58,7 +58,7 @@ defmodule Flezha.SDK.Declarations do
 
   # What either run declares: where its work is kept, when it sleeps and when
   # it stops.
-  defp settled(%Operator{} = settings) do
+  defp settled(%Relay{} = settings) do
     %{"durable" => Atom.to_string(settings.durable)}
     |> put_when(settings.sleep_after_ms != nil, "sleep_after_ms", settings.sleep_after_ms)
     |> put_when(settings.max_duration_ms != nil, "max_duration_ms", settings.max_duration_ms)

@@ -20,20 +20,20 @@ defmodule Flezha.SDK.ControlTest do
     end
   end
 
-  test "a plugin is enabled by name, and bound and unbound by operator" do
+  test "a plugin is enabled by name, and bound and unbound by relay" do
     server = recording_server()
 
-    Control.enable_plugin(server, "writer", "operator_file_sink", opts: %{"path" => "out.txt"})
+    Control.enable_plugin(server, "writer", "relay_file_sink", opts: %{"path" => "out.txt"})
 
     assert_received {:called, "PluginManager.enable",
                      [
                        "writer",
-                       %{"provider" => "operator_file_sink", "opts" => %{"path" => "out.txt"}}
+                       %{"provider" => "relay_file_sink", "opts" => %{"path" => "out.txt"}}
                      ]}
 
-    Control.enable_plugin(server, "feed", "operator_websocket",
+    Control.enable_plugin(server, "feed", "relay_websocket",
       single: true,
-      operator_id: "my_echo",
+      relay_id: "my_echo",
       hooks: [["on_output", %{}]]
     )
 
@@ -41,27 +41,27 @@ defmodule Flezha.SDK.ControlTest do
                      [
                        "feed",
                        %{
-                         "provider" => "operator_websocket",
+                         "provider" => "relay_websocket",
                          "opts" => %{},
                          "single" => true,
-                         "operator_id" => "my_echo",
+                         "relay_id" => "my_echo",
                          "hooks" => [["on_output", %{}]]
                        }
                      ]}
 
     Control.bind_plugin(server, "writer", "my_echo")
-    assert_received {:called, "PluginManager.bind", ["writer", %{"operator_id" => "my_echo"}]}
+    assert_received {:called, "PluginManager.bind", ["writer", %{"relay_id" => "my_echo"}]}
 
     Control.bind_plugin(server, "writer", "my_other", hooks: ["on_output"], channel: "in")
 
     assert_received {:called, "PluginManager.bind",
                      [
                        "writer",
-                       %{"operator_id" => "my_other", "hooks" => ["on_output"], "channel" => "in"}
+                       %{"relay_id" => "my_other", "hooks" => ["on_output"], "channel" => "in"}
                      ]}
 
     Control.unbind_plugin(server, "writer", "my_echo")
-    assert_received {:called, "PluginManager.unbind", ["writer", %{"operator_id" => "my_echo"}]}
+    assert_received {:called, "PluginManager.unbind", ["writer", %{"relay_id" => "my_echo"}]}
 
     Control.disable_plugin(server, "writer")
     assert_received {:called, "PluginManager.disable", ["writer", %{}]}

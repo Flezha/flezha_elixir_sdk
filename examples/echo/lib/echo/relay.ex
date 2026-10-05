@@ -1,6 +1,6 @@
-defmodule Echo.Operator do
+defmodule Echo.Relay do
   @moduledoc """
-  The deployable unit. An operator declares the graph a message travels: the
+  The deployable unit. A relay declares the graph a message travels: the
   entry channel it arrives on, the steps it passes through, and the channel its
   result leaves on.
 
@@ -8,8 +8,8 @@ defmodule Echo.Operator do
   cannot work is refused at startup.
   """
 
-  # the name `flz operator start` takes
-  use Flezha.SDK.Operator, factory_id: "echo"
+  # the name `flz relay start` takes
+  use Flezha.SDK.Relay, factory_id: "echo"
 
   @impl true
   def channels(c) do

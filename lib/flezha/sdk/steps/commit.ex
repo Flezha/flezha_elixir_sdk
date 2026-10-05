@@ -4,7 +4,7 @@ defmodule Flezha.SDK.Steps.Commit do
   the park record and the terminal frame.
 
   It sits beside the driver rather than on the runner for the reason
-  `Flezha.SDK.Operator.Inbox` does: a driver reaching upward names this module
+  `Flezha.SDK.Relay.Inbox` does: a driver reaching upward names this module
   and not the runner, so the two do not name each other. The runner answers
   every one of these in `handle_cast/2`.
 
@@ -35,7 +35,7 @@ defmodule Flezha.SDK.Steps.Commit do
   def task(runner, driver, ref, fields) do
     command =
       Codec.task_commit_command(
-        Keyword.fetch!(fields, :operator_id),
+        Keyword.fetch!(fields, :relay_id),
         Keyword.fetch!(fields, :task_idx),
         Keyword.fetch!(fields, :iter),
         Keyword.fetch!(fields, :cells_ran),
@@ -63,7 +63,7 @@ defmodule Flezha.SDK.Steps.Commit do
   def iter(runner, driver, ref, fields) do
     command =
       Codec.iter_commit_command(
-        Keyword.fetch!(fields, :operator_id),
+        Keyword.fetch!(fields, :relay_id),
         Keyword.fetch!(fields, :iter),
         Keyword.fetch!(fields, :consumed_offset),
         Keyword.fetch!(fields, :handoff),
@@ -87,24 +87,24 @@ defmodule Flezha.SDK.Steps.Commit do
 
   @doc """
   Ship `IterPark`: an instance of either run asks to sleep (a loop that found
-  its inbox empty at a committed boundary, a flow operator at iteration `0`) WITHOUT a
+  its inbox empty at a committed boundary, a flow relay at iteration `0`) WITHOUT a
   terminal frame, which is not an outcome. The controller releases every
   input-log offset up to `consumed_offset`, the last message the run parked
   unread (`nil` when it parked none).
   """
   @spec park(pid(), String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer() | nil) ::
           :ok
-  def park(runner, operator_id, iter, wake_deadline_ms, consumed_offset),
+  def park(runner, relay_id, iter, wake_deadline_ms, consumed_offset),
     do:
       notify(
         runner,
-        Codec.iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset)
+        Codec.iter_park_command(relay_id, iter, wake_deadline_ms, consumed_offset)
       )
 
-  @doc "Ship `OperatorCompleted`: the run reached an exit."
+  @doc "Ship `RelayCompleted`: the run reached an exit."
   @spec completed(pid(), String.t(), String.t(), String.t(), binary()) :: :ok
-  def completed(runner, operator_id, status, error, result),
-    do: notify(runner, Codec.operator_completed_command(operator_id, status, error, result))
+  def completed(runner, relay_id, status, error, result),
+    do: notify(runner, Codec.relay_completed_command(relay_id, status, error, result))
 
   @doc """
   Ship one saga marker on the runner's record wire. Presence is the signal:

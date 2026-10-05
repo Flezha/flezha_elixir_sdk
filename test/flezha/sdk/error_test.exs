@@ -16,7 +16,7 @@ defmodule Flezha.SDK.ErrorTest do
   end
 
   test "a JSON error document reads back as the error it renders" do
-    error = Error.new("quota.exceeded", kind: :max_operators, current: 3, limit: 3)
+    error = Error.new("quota.exceeded", kind: :max_relays, current: 3, limit: 3)
 
     assert Error.from_document(Error.render(error, :json)) == error
     assert Error.from_document("not json") == nil

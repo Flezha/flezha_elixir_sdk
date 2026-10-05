@@ -84,7 +84,7 @@ defmodule Flezha.SDK.KnobTest do
     test "announces every wait and every reset" do
       ref = make_ref()
       events = [[:flezha, :backoff, :wait], [:flezha, :backoff, :reset]]
-      :telemetry.attach_many(ref, events, &__MODULE__.relay/4, self())
+      :telemetry.attach_many(ref, events, &__MODULE__.forward/4, self())
       on_exit(fn -> :telemetry.detach(ref) end)
 
       assert Knob.arm(:park_resend, 1, "p-1") == 2_000
@@ -100,7 +100,7 @@ defmodule Flezha.SDK.KnobTest do
   end
 
   @doc false
-  def relay(event, measurements, metadata, pid), do: send(pid, {event, measurements, metadata})
+  def forward(event, measurements, metadata, pid), do: send(pid, {event, measurements, metadata})
 
   defp expect("error"), do: :error
   defp expect("true"), do: {:ok, true}

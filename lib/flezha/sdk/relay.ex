@@ -1,13 +1,13 @@
-defmodule Flezha.SDK.Operator do
+defmodule Flezha.SDK.Relay do
   @moduledoc """
-  An operator class, declared with `use` (see `__using__/1`), which defines
+  A relay class, declared with `use` (see `__using__/1`), which defines
   this behaviour's zero-arity callbacks from its options and imports the channel
   builder. The author writes the graph in `channels/1`, a DAG of Tasklets,
   Channels and Cells, or the one tasklet's `run/3` of the §5 short form.
 
   One settings tree says how the class runs and where its work is kept:
 
-      use Flezha.SDK.Operator,
+      use Flezha.SDK.Relay,
         factory_id: "checkout",
         run: {:steps, each: :chained, on_failure: :keep_progress},
         durable: {:local, sleep_after: 60_000},
@@ -37,7 +37,7 @@ defmodule Flezha.SDK.Operator do
 
   A setting written under a parent that does not carry it is a `CompileError`
   naming the setting and the parent. A module that writes the callbacks by
-  hand (`@behaviour Flezha.SDK.Operator`) meets the same check at
+  hand (`@behaviour Flezha.SDK.Relay`) meets the same check at
   registration, as `topology.unknown_field`.
 
   A tasklet of either run ends its instance with `complete/2`: a flow
@@ -89,9 +89,9 @@ defmodule Flezha.SDK.Operator do
         }
 
   @doc """
-  Write an operator as a declaration rather than as one-line callbacks.
+  Write a relay as a declaration rather than as one-line callbacks.
 
-      use Flezha.SDK.Operator, factory_id: "market"
+      use Flezha.SDK.Relay, factory_id: "market"
 
       @impl true
       def channels(c) do
@@ -111,9 +111,9 @@ defmodule Flezha.SDK.Operator do
   ## The §5 short form
 
   A module that writes its one tasklet's `run/3` instead of `channels/1` is
-  a whole single-tasklet operator:
+  a whole single-tasklet relay:
 
-      use Flezha.SDK.Operator, factory_id: "upcase", sink: "out", input: "words"
+      use Flezha.SDK.Relay, factory_id: "upcase", sink: "out", input: "words"
 
       def run(input, state, ctx) do
         emit(ctx, String.upcase(input))
@@ -133,7 +133,7 @@ defmodule Flezha.SDK.Operator do
   naming both.
   """
   defmacro __using__(opts) do
-    quoted = Tasklet.__operator_using__(opts, @use_options, __MODULE__)
+    quoted = Tasklet.__relay_using__(opts, @use_options, __MODULE__)
 
     with {:error, issue} <- parse(Keyword.fetch!(opts, :factory_id), opts) do
       raise CompileError, description: "`use #{inspect(__MODULE__)}`: " <> message(issue)
@@ -191,10 +191,10 @@ defmodule Flezha.SDK.Operator do
       {:ok, settle_sleep(settings)}
     else
       {:error, {:unknown, parent, fields}} ->
-        {:error, {:UnknownField, "'#{parent}' of operator '#{factory_id}'", fields}}
+        {:error, {:UnknownField, "'#{parent}' of relay '#{factory_id}'", fields}}
 
       {:error, {:invalid, setting, value, expected}} ->
-        {:error, {:InvalidSetting, "operator '#{factory_id}'", setting, value, expected}}
+        {:error, {:InvalidSetting, "relay '#{factory_id}'", setting, value, expected}}
     end
   end
 

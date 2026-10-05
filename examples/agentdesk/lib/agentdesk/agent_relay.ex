@@ -1,10 +1,10 @@
-defmodule Agentdesk.AgentOperator do
+defmodule Agentdesk.AgentRelay do
   @moduledoc """
-  One conversation: a steps operator that runs one turn per message it is
+  One conversation: a steps relay that runs one turn per message it is
   sent, for as long as the session lasts. Every session is an instance of its
   own, with its own state.
   """
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "agent",
     # one turn per message; a failed turn fails alone
     run: {:steps, each: :per_input, on_failure: :keep_progress},
@@ -16,7 +16,7 @@ defmodule Agentdesk.AgentOperator do
   @impl true
   def channels(c) do
     c
-    # entry 1: `flz operator call`
+    # entry 1: `flz relay call`
     |> input("turn")
     |> into(Reply)
     # to whoever listens; the chain goes on

@@ -25,7 +25,7 @@ defmodule Flezha.SDK.Steps.Compensation do
   require Logger
 
   alias Flezha.SDK.{Cell, Record, Tasklet, Wire}
-  alias Flezha.SDK.Operator.Cells
+  alias Flezha.SDK.Relay.Cells
   alias Flezha.SDK.Steps.{Commit, Instance}
 
   @doc """
@@ -91,7 +91,7 @@ defmodule Flezha.SDK.Steps.Compensation do
 
       command =
         Commit.task(state.runner, self(), ref,
-          operator_id: state.operator_id,
+          relay_id: state.relay_id,
           task_idx: stage.task_idx,
           iter: Map.get(stage, :iter, state.iter),
           cells_ran: Commit.cells_ran(state.written, stage.node_ref, stage.cells),
@@ -205,7 +205,7 @@ defmodule Flezha.SDK.Steps.Compensation do
     stage.cells
     |> Enum.reject(&Instance.compensation_done?(state.instance, &1))
     |> Enum.reduce({[], state}, fn identity, {pids, state} ->
-      {:ok, {_operator, tasklet, key}} = Wire.decode_cell_id(identity)
+      {:ok, {_relay, tasklet, key}} = Wire.decode_cell_id(identity)
 
       case Cells.lookup(state.cells, tasklet, key, true) do
         {{:ok, pid}, cells} -> {pids ++ [pid], %{state | cells: cells}}
@@ -223,7 +223,7 @@ defmodule Flezha.SDK.Steps.Compensation do
     Cell.compensate(pid, outputs)
     ref = make_ref()
     Cell.barrier(pid, ref, self())
-    Logger.debug("[Flezha.SDK] #{state.operator_id} compensating task #{stage.task_idx}")
+    Logger.debug("[Flezha.SDK] #{state.relay_id} compensating task #{stage.task_idx}")
     %{state | awaiting: Map.put(state.awaiting, ref, {stage.node_ref, pid})}
   end
 end

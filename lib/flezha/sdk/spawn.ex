@@ -54,8 +54,8 @@ defmodule Flezha.SDK.Spawn do
 
   @typedoc """
   What a handle resolves to: the instance reached, or the refusal, carrying
-  the controller's own code (`operator.already_running`,
-  `operator.factory_unknown`, `operator.factory_not_steps`, ...) or one the
+  the controller's own code (`relay.already_running`,
+  `relay.factory_unknown`, `relay.factory_not_steps`, ...) or one the
   runner decides itself: `spawn.timeout`, `spawn.unavailable`.
   """
   @type result ::

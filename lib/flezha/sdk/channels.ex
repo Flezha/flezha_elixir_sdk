@@ -7,7 +7,7 @@ defmodule Flezha.SDK.Channels do
   (`named`/`on_full`/`retry_max`/`retry_backoff_ms`) and `keyed` (output
   identity on the plugin wire the handle reaches). Fan-out is handle reuse, or
   `branch` over a list of arms. The effectively-once tier is a class setting
-  (`Flezha.SDK.Operator`), not a builder call.
+  (`Flezha.SDK.Relay`), not a builder call.
 
   This builder RECORDS; it does not judge. Every fluent call appends one link
   to the chain its handle carries — a transform, a key, a plugin sink, an edge
@@ -242,7 +242,7 @@ defmodule Flezha.SDK.Channels do
     do: %{link(s, {:response, serializer}) | chain_id: nil}
 
   @doc """
-  End the chain in a call to another operator: every value reaching it, after
+  End the chain in a call to another relay: every value reaching it, after
   the chain's transforms and key, is one request, written as `sink/2` writes
   (`serialize:`). `target` names an instance, or a partition group whose
   member the chain's key chooses; `factory:` instead names a factory whose

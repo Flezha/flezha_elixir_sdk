@@ -19,7 +19,7 @@ defmodule Flezha.SDK.Cell.Tier do
 
   alias Flezha.SDK.Cell.{Interval, Records, State}
   alias Flezha.SDK.{Hold, Record}
-  alias Flezha.SDK.Operator.Routing
+  alias Flezha.SDK.Relay.Routing
 
   # The end of a replayed slice, taken from the Cell's own queue in mailbox
   # order behind the members it closes. A member's push is usually a cast,

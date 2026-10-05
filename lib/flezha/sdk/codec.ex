@@ -51,10 +51,10 @@ defmodule Flezha.SDK.Codec do
     IO.iodata_to_binary(iodata)
   end
 
-  @doc "Encode an `AddOperatorResponse` metadata map into its raw_data bytes."
-  @spec encode_add_operator_response(map()) :: binary()
-  def encode_add_operator_response(metadata) when is_map(metadata) do
-    {:ok, iodata, _size} = Protox.encode(%RunnerCommands.AddOperatorResponse{metadata: metadata})
+  @doc "Encode an `AddRelayResponse` metadata map into its raw_data bytes."
+  @spec encode_add_relay_response(map()) :: binary()
+  def encode_add_relay_response(metadata) when is_map(metadata) do
+    {:ok, iodata, _size} = Protox.encode(%RunnerCommands.AddRelayResponse{metadata: metadata})
     IO.iodata_to_binary(iodata)
   end
 
@@ -92,10 +92,10 @@ defmodule Flezha.SDK.Codec do
 
   @doc "The `RunnerShutdownNotification` command tuple for `encode_request/2`."
   @spec shutdown_notification_command(String.t(), binary()) :: {atom(), struct()}
-  def shutdown_notification_command(operator_id, serialized_state) do
+  def shutdown_notification_command(relay_id, serialized_state) do
     {:runner_shutdown_notification,
      %RunnerCommands.RunnerShutdownNotification{
-       operator_id: operator_id,
+       relay_id: relay_id,
        serialized_state: serialized_state
      }}
   end
@@ -174,14 +174,14 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc """
-  The `OperatorExited` command tuple for an instance whose process exited
+  The `RelayExited` command tuple for an instance whose process exited
   abnormally; the reason is rendered for a log line, bounded.
   """
-  @spec operator_exited_command(String.t(), term()) :: {atom(), struct()}
-  def operator_exited_command(operator_id, reason) do
-    {:operator_exited,
-     %RunnerCommands.OperatorExited{
-       operator_id: operator_id,
+  @spec relay_exited_command(String.t(), term()) :: {atom(), struct()}
+  def relay_exited_command(relay_id, reason) do
+    {:relay_exited,
+     %RunnerCommands.RelayExited{
+       relay_id: relay_id,
        reason: inspect(reason, limit: 20, printable_limit: 256)
      }}
   end
@@ -201,7 +201,7 @@ defmodule Flezha.SDK.Codec do
           map() | nil
         ) :: {atom(), struct()}
   def task_commit_command(
-        operator_id,
+        relay_id,
         task_idx,
         iter,
         cells_ran,
@@ -213,7 +213,7 @@ defmodule Flezha.SDK.Codec do
       ) do
     {:task_commit,
      %RunnerCommands.TaskCommit{
-       operator_id: operator_id,
+       relay_id: relay_id,
        task_idx: task_idx,
        iter: iter,
        cells_ran: Enum.map(cells_ran, &committed_cell/1),
@@ -256,7 +256,7 @@ defmodule Flezha.SDK.Codec do
           String.t()
         ) :: {atom(), struct()}
   def iter_commit_command(
-        operator_id,
+        relay_id,
         iter,
         consumed_offset,
         handoff,
@@ -267,7 +267,7 @@ defmodule Flezha.SDK.Codec do
       ) do
     {:iter_commit,
      %RunnerCommands.IterCommit{
-       operator_id: operator_id,
+       relay_id: relay_id,
        iter: iter,
        consumed_offset: consumed_offset,
        handoff: handoff_items(handoff),
@@ -289,23 +289,23 @@ defmodule Flezha.SDK.Codec do
           non_neg_integer(),
           non_neg_integer() | nil
         ) :: {atom(), struct()}
-  def iter_park_command(operator_id, iter, wake_deadline_ms, consumed_offset) do
+  def iter_park_command(relay_id, iter, wake_deadline_ms, consumed_offset) do
     {:iter_park,
      %RunnerCommands.IterPark{
-       operator_id: operator_id,
+       relay_id: relay_id,
        iter: iter,
        wake_deadline_ms: wake_deadline_ms,
        consumed_offset: consumed_offset
      }}
   end
 
-  @doc "The `OperatorCompleted` command tuple for a terminated instance."
-  @spec operator_completed_command(String.t(), String.t(), String.t(), binary()) ::
+  @doc "The `RelayCompleted` command tuple for a terminated instance."
+  @spec relay_completed_command(String.t(), String.t(), String.t(), binary()) ::
           {atom(), struct()}
-  def operator_completed_command(operator_id, status, error, result) do
-    {:operator_completed,
-     %RunnerCommands.OperatorCompleted{
-       operator_id: operator_id,
+  def relay_completed_command(relay_id, status, error, result) do
+    {:relay_completed,
+     %RunnerCommands.RelayCompleted{
+       relay_id: relay_id,
        status: status,
        error: error,
        result: result

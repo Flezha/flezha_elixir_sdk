@@ -5,11 +5,11 @@ defmodule Flezha.SDK.WireTest do
 
   describe "encode_cell_id / decode_cell_id" do
     test "round-trips structured identity" do
-      bin = Wire.encode_cell_id("MarketOperator", "OhlcTasklet", "M1")
-      assert {:ok, {"MarketOperator", "OhlcTasklet", "M1"}} = Wire.decode_cell_id(bin)
+      bin = Wire.encode_cell_id("MarketRelay", "OhlcTasklet", "M1")
+      assert {:ok, {"MarketRelay", "OhlcTasklet", "M1"}} = Wire.decode_cell_id(bin)
     end
 
-    test "rejects operator_class > 255 bytes" do
+    test "rejects relay_class > 255 bytes" do
       assert_raise ArgumentError, fn ->
         Wire.encode_cell_id(String.duplicate("x", 256), "S", "P")
       end

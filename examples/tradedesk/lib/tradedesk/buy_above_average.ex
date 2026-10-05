@@ -8,7 +8,7 @@ defmodule Tradedesk.BuyAboveAverage do
   block, beside `Tradedesk.TrackPrices`, which keeps the window.
 
   It does two things per input, both through the context: it starts a steps
-  operator and it emits.
+  relay and it emits.
   """
   use Flezha.SDK.Tasklet, name: "buy_above_average"
 
@@ -23,7 +23,7 @@ defmodule Tradedesk.BuyAboveAverage do
       # A stronger move buys more.
       quantity = round(percent * @units_per_percent)
 
-      # One steps operator per order.
+      # One steps relay per order.
       spawn_steps(ctx, "order_executor", %{symbol: symbol, quantity: quantity})
 
       emit(

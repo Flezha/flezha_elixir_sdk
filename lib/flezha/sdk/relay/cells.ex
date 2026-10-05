@@ -1,7 +1,7 @@
-defmodule Flezha.SDK.Operator.Cells do
+defmodule Flezha.SDK.Relay.Cells do
   @moduledoc """
-  An operator instance's Cells, held in the state of the process that owns
-  them — a flow instance's `Flezha.SDK.Operator.Server` or a steps
+  A relay instance's Cells, held in the state of the process that owns
+  them — a flow instance's `Flezha.SDK.Relay.Server` or a steps
   instance's `Flezha.SDK.Steps.Driver` — as `%{node_ref => %{key => pid}}`, with each
   live Cell's `Flezha.SDK.Cell.Room`, which a push takes its slot from.
 
@@ -28,7 +28,7 @@ defmodule Flezha.SDK.Operator.Cells do
     Hold,
     KeyGroup,
     Knob,
-    Operator,
+    Relay,
     Park,
     Prefix,
     Tasklet,
@@ -41,9 +41,9 @@ defmodule Flezha.SDK.Operator.Cells do
   # so a burst of expiries drains over a few ticks rather than stalling it.
   @evict_budget 256
 
-  @enforce_keys [:operator_id, :topology, :run]
+  @enforce_keys [:relay_id, :topology, :run]
   defstruct [
-    :operator_id,
+    :relay_id,
     :topology,
     :run,
     :range,
@@ -65,7 +65,7 @@ defmodule Flezha.SDK.Operator.Cells do
 
   @doc """
   The Cell set of the calling process, its Single and owned Static Cells
-  minted. `opts` carries `:operator_id`, `:topology`, `:run` (`:flow` |
+  minted. `opts` carries `:relay_id`, `:topology`, `:run` (`:flow` |
   `:steps`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
   `:secondaries`, `:credit` and `:prefix`, the instance's processed-prefix
   ledger.
@@ -77,7 +77,7 @@ defmodule Flezha.SDK.Operator.Cells do
     hold_cap = Keyword.get(opts, :hold_cap) || Hold.cap()
 
     prewarm(%__MODULE__{
-      operator_id: Keyword.fetch!(opts, :operator_id),
+      relay_id: Keyword.fetch!(opts, :relay_id),
       topology: topology,
       run: Keyword.fetch!(opts, :run),
       range: Keyword.get(opts, :range) || KeyGroup.decode(0, 0, 0, 0),
@@ -267,7 +267,7 @@ defmodule Flezha.SDK.Operator.Cells do
     dead = for {ref, keyed} <- c.cells, {key, ^pid} <- keyed, do: {ref, key}
 
     Enum.reduce(dead, c, fn {node_ref, key}, acc ->
-      if not Operator.Server.clean_exit?(reason), do: crashed(acc, node_ref, key, reason)
+      if not Relay.Server.clean_exit?(reason), do: crashed(acc, node_ref, key, reason)
       acc |> forget(node_ref, key) |> remint(node_ref, key, reason)
     end)
   end
@@ -280,7 +280,7 @@ defmodule Flezha.SDK.Operator.Cells do
   # instance with durable input keeps a ledger.
   defp crashed(%__MODULE__{} = c, node_ref, key, reason) do
     Logger.warning(
-      "[Flezha.SDK] cell crashed: operator=#{c.operator_id} " <>
+      "[Flezha.SDK] cell crashed: relay=#{c.relay_id} " <>
         "node=#{inspect(node_ref)} key=#{inspect(key)} reason=#{inspect(reason)}"
     )
 
@@ -289,7 +289,7 @@ defmodule Flezha.SDK.Operator.Cells do
   end
 
   defp remint(%__MODULE__{topology: topo} = c, node_ref, key, reason) do
-    if Operator.Server.clean_exit?(reason) or topo.node_mode[node_ref] == :dynamic,
+    if Relay.Server.clean_exit?(reason) or topo.node_mode[node_ref] == :dynamic,
       do: c,
       else: c |> ensure(node_ref, key) |> elem(1)
   end
@@ -339,7 +339,7 @@ defmodule Flezha.SDK.Operator.Cells do
   @spec emit_output(t(), map(), binary()) :: t()
   def emit_output(%__MODULE__{} = c, meta, bytes) do
     hold = Hold.bind(c.held, c.secondaries)
-    {_verdict, held} = Hold.write({:output, c.operator_id}, hold, {bytes, meta})
+    {_verdict, held} = Hold.write({:output, c.relay_id}, hold, {bytes, meta})
     %{c | held: held}
   end
 
@@ -404,17 +404,17 @@ defmodule Flezha.SDK.Operator.Cells do
   @doc "The wire identity of the Cell of `key` on `node_ref`."
   @spec wire_identity(t(), reference(), String.t() | nil) :: binary()
   def wire_identity(%__MODULE__{topology: topo} = c, node_ref, key),
-    do: Park.identity(c.operator_id, topo.node_modules[node_ref].name(), key)
+    do: Park.identity(c.relay_id, topo.node_modules[node_ref].name(), key)
 
   defp note_evicted(%__MODULE__{evicted: evicted} = c, key) do
     dynamic_event(c, :evicted)
     %{c | evicted: Hold.push(evicted, key)}
   end
 
-  defp dynamic_event(%__MODULE__{operator_id: oid}, event),
+  defp dynamic_event(%__MODULE__{relay_id: oid}, event),
     do:
       :telemetry.execute([:flezha, :sdk, :dynamic], %{count: 1}, %{
-        operator_id: oid,
+        relay_id: oid,
         event: event
       })
 
@@ -470,7 +470,7 @@ defmodule Flezha.SDK.Operator.Cells do
   """
   @spec forget(t(), reference(), String.t() | nil) :: t()
   def forget(%__MODULE__{} = c, node_ref, key) do
-    Counters.dispatch_finished(c.counters, Cell.identity(c.operator_id, node_ref, key))
+    Counters.dispatch_finished(c.counters, Cell.identity(c.relay_id, node_ref, key))
 
     %{
       c
@@ -484,8 +484,8 @@ defmodule Flezha.SDK.Operator.Cells do
     ladder = Topology.retry_ladder(topo, node_ref)
 
     Cell.start(
-      operator: self(),
-      operator_id: c.operator_id,
+      relay: self(),
+      relay_id: c.relay_id,
       node_ref: node_ref,
       node_name: topo.node_name[node_ref],
       # The channel this Cell consumes from: what a park reports, matching
@@ -497,7 +497,7 @@ defmodule Flezha.SDK.Operator.Cells do
       policy: knob(topo, node_ref, :on_full, :drop_nothing),
       retry_max: ladder.retry_max,
       retry_backoff_ms: ladder.retry_backoff_ms,
-      # A steps operator answers an exhausted ladder by unwinding, not by shedding
+      # A steps relay answers an exhausted ladder by unwinding, not by shedding
       # the input to the dead-letter queue, and decides when a due firing runs.
       park_on_exhaustion: c.run == :flow,
       gate_firings: c.run == :steps,
@@ -513,10 +513,10 @@ defmodule Flezha.SDK.Operator.Cells do
   end
 
   # What a Cell of this node needs to know about its records: whether it
-  # writes effect records (the tier, or a durable steps operator, whose stage commit
+  # writes effect records (the tier, or a durable steps relay, whose stage commit
   # names them), the checkpoint policy, the sink routes it captures its own
   # outputs through (the router delivers such a class's emits to nodes only),
-  # whether a record waits for an inter-tasklet edge (a steps operator's edge value
+  # whether a record waits for an inter-tasklet edge (a steps relay's edge value
   # waits on its driver instead) and whether it is a steps stage's Cell.
   defp tier_facts(%__MODULE__{run: run} = c, topo, node_ref) do
     routes = Map.get(topo.routes, {:node, node_ref}, [])

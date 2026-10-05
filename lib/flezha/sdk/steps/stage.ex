@@ -3,11 +3,11 @@ defmodule Flezha.SDK.Steps.Stage do
   One stage of a steps chain: how its batch reaches its Cells, and how the
   driver learns the stage has finished.
 
-  Every Cell here is one of the flow operator's, held through
-  `Flezha.SDK.Operator.Cells`, with the same state, records and ladder,
-  bounded by the consuming edge's `retry_max`/`retry_backoff_ms` as a flow operator's
+  Every Cell here is one of the flow relay's, held through
+  `Flezha.SDK.Relay.Cells`, with the same state, records and ladder,
+  bounded by the consuming edge's `retry_max`/`retry_backoff_ms` as a flow relay's
   Cell is. A value reaches its Cells by the same per-mode target resolution
-  the flow operator routes with: the one Cell of a Single node, the keys
+  the flow relay routes with: the one Cell of a Single node, the keys
   `cells_for/1` names on a Static one, the Cell of its edge's key on a Dynamic
   one, minted on first sight up to the node's cap.
 
@@ -17,7 +17,7 @@ defmodule Flezha.SDK.Steps.Stage do
   """
 
   alias Flezha.SDK.Cell
-  alias Flezha.SDK.Operator.Cells
+  alias Flezha.SDK.Relay.Cells
 
   @doc """
   Hand `batch` — `{value, key}` pairs, the key the edge gave each value — to

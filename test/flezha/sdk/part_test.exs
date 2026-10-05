@@ -11,9 +11,9 @@ defmodule Flezha.SDK.PartTest do
 
   import ExUnit.CaptureLog
 
-  alias Flezha.SDK.{Contract, Counters, LocalStream, Operator, Topology}
+  alias Flezha.SDK.{Contract, Counters, LocalStream, Relay, Topology}
   alias Flezha.SDK.Steps.{Driver, Spec}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.Relay.Inbox
   alias Flezha.SDK.Test.StubRunner
 
   @probe {__MODULE__, :probe}
@@ -93,43 +93,43 @@ defmodule Flezha.SDK.PartTest do
   end
 
   defmodule SinkOp do
-    use Flezha.SDK.Operator, factory_id: "part_sink"
+    use Flezha.SDK.Relay, factory_id: "part_sink"
 
     def channels(c),
       do: c |> input("in") |> retry_backoff_ms(1) |> into(P0) |> sink("answer")
   end
 
   defmodule KeyedOp do
-    use Flezha.SDK.Operator, factory_id: "part_keyed"
+    use Flezha.SDK.Relay, factory_id: "part_keyed"
 
     def channels(c),
       do: c |> input("in") |> key_by(fn _ -> "s-7" end) |> into(P0) |> sink("answer")
   end
 
   defmodule EdgeOp do
-    use Flezha.SDK.Operator, factory_id: "part_edge"
+    use Flezha.SDK.Relay, factory_id: "part_edge"
     def channels(c), do: c |> input("in") |> into(Refused) |> into(Log)
   end
 
   defmodule ResponseOp do
-    use Flezha.SDK.Operator, factory_id: "part_response"
+    use Flezha.SDK.Relay, factory_id: "part_response"
     def channels(c), do: c |> input("in") |> into(Refused) |> response()
   end
 
   defmodule CallOp do
-    use Flezha.SDK.Operator, factory_id: "part_call"
+    use Flezha.SDK.Relay, factory_id: "part_call"
 
     def channels(c),
       do: c |> input("in") |> into(Refused) |> call("pricing", deadline_ms: 500) |> into(Log)
   end
 
   defmodule KeepOp do
-    use Flezha.SDK.Operator, factory_id: "part_keep"
+    use Flezha.SDK.Relay, factory_id: "part_keep"
     def channels(c), do: c |> input("in") |> into(Refused) |> sink("answer")
   end
 
   defmodule TurnLoop do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "part_turn"
     def run, do: {:steps, each: :per_input}
@@ -146,12 +146,12 @@ defmodule Flezha.SDK.PartTest do
     end)
   end
 
-  # An operator of `module` under `id`, whose data stream is this process.
+  # A relay of `module` under `id`, whose data stream is this process.
   defp start(module, id) do
     {:ok, topology} = Topology.build(module)
     {:ok, runner} = StubRunner.start_link(test: self())
-    opts = [operator_id: id, topology: topology, counters: Counters.new(), runner: runner]
-    {:ok, op} = Operator.Server.start_link(opts)
+    opts = [relay_id: id, topology: topology, counters: Counters.new(), runner: runner]
+    {:ok, op} = Relay.Server.start_link(opts)
     wire_to(op)
     op
   end
@@ -214,7 +214,7 @@ defmodule Flezha.SDK.PartTest do
       Inbox.input(op, "in", "x", %{})
       assert_receive {:part, {:error, %Flezha.SDK.Error{code: "part.no_sink"} = error}}, 5_000
       assert error.details["tasklet"] == "refused"
-      assert error.details["operator"] == id
+      assert error.details["relay"] == id
       assert error.details["channel"] not in [nil, ""]
       refute_received {:flz_data, _, "output_part", _, _}
     end
@@ -243,7 +243,7 @@ defmodule Flezha.SDK.PartTest do
 
     {:ok, driver} =
       Driver.start_link(
-        operator_id: "part_turn_1",
+        relay_id: "part_turn_1",
         counters: Counters.new(),
         spec: spec,
         runner: runner

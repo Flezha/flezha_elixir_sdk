@@ -40,14 +40,14 @@ defmodule Flezha.SDK.AnnounceRunTest do
 
   defmodule FlowClass do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "announce_flow"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
   end
 
   defmodule StepsClass do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: {:steps, each: :chained, on_failure: :keep_progress}
     def factory_id, do: "announce_steps"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Echo)
@@ -55,7 +55,7 @@ defmodule Flezha.SDK.AnnounceRunTest do
 
   defmodule Late do
     @moduledoc false
-    use Flezha.SDK.Operator,
+    use Flezha.SDK.Relay,
       factory_id: "announce_late",
       sink: "out",
       run: :steps,

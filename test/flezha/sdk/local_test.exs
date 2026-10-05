@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.LocalTest do
   @moduledoc """
-  The Elixir SDK's local mode: a user's own operator module, its declared
+  The Elixir SDK's local mode: a user's own relay module, its declared
   two-tasklet graph, and no controller anywhere. `Normalise`, `Tally` and
   `WordCount` below are the worked example in `docs/quickstart.md`, copied
   verbatim so the documented graph is the one that runs here.
@@ -11,7 +11,7 @@ defmodule Flezha.SDK.LocalTest do
   import ExUnit.CaptureIO, only: [with_io: 2]
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
-  alias Flezha.SDK.{Channels, Local, Operator, Spawn}
+  alias Flezha.SDK.{Channels, Local, Relay, Spawn}
 
   # --- a changeful tasklet, and one that asks for a spawn ---
 
@@ -35,7 +35,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule CounterOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "counter_op"
 
     def channels(c),
@@ -61,7 +61,7 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule SpawnerOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "spawner"
 
     def channels(c),
@@ -100,7 +100,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule WordCount do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     alias Flezha.SDK.Channels
 
     def factory_id, do: "word_count"
@@ -122,7 +122,7 @@ defmodule Flezha.SDK.LocalTest do
   # --- classes and channels local mode has something to say about ---
 
   defmodule TieredOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_tiered"
     def run, do: {:flow, exactly: :effectively_once}
 
@@ -137,13 +137,13 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule Job do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "local_job"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
   end
 
-  # Asks to end its operator on `end`. Reports every invocation, so a retry
+  # Asks to end its relay on `end`. Reports every invocation, so a retry
   # would show.
   @closer_probe :local_mode_closer
 
@@ -160,7 +160,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule CloserOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_closer"
 
     def channels(c),
@@ -168,7 +168,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule StrictOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_strict"
 
     def channels(c) do
@@ -199,7 +199,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule HeldOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_held"
 
     def channels(c) do
@@ -244,7 +244,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defmodule StamperOp do
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_stamper"
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Stamper)
   end
@@ -288,7 +288,7 @@ defmodule Flezha.SDK.LocalTest do
     assert_receive {:stamp, "flaky", first}, 5_000
     assert_receive {:stamp, "flaky", ^first}, 5_000
 
-    {:ok, cell} = Operator.Server.lookup(Local.operator(run), "stamper", nil)
+    {:ok, cell} = Relay.Server.lookup(Local.relay(run), "stamper", nil)
     ref = Process.monitor(cell)
 
     log =
@@ -302,7 +302,7 @@ defmodule Flezha.SDK.LocalTest do
         assert_receive {:stamp, "die", ^killed}, 5_000
       end)
 
-    assert log =~ "cell crashed: operator=local_stamper-local"
+    assert log =~ "cell crashed: relay=local_stamper-local"
   end
 
   # The lines to feed and the output to release, read from the file the Rust and
@@ -342,7 +342,7 @@ defmodule Flezha.SDK.LocalTest do
     assert :ok = Local.run_until_idle(run, 5_000)
 
     {"tally", :dynamic, keyed} =
-      List.keyfind(Operator.Server.cells(Local.operator(run)), "tally", 0)
+      List.keyfind(Relay.Server.cells(Local.relay(run)), "tally", 0)
 
     assert keyed |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ~w(a b c)
   end
@@ -388,7 +388,7 @@ defmodule Flezha.SDK.LocalTest do
 
   # --- what local mode refuses ---
 
-  test "an unknown channel is refused, naming the channel and the operator" do
+  test "an unknown channel is refused, naming the channel and the relay" do
     run = start_run(WordCount)
 
     assert {:error, %{code: "runtime.channel_undeclared", message: entry}} =
@@ -456,7 +456,7 @@ defmodule Flezha.SDK.LocalTest do
     refute log =~ "parked an input"
     assert [{:ran, "hi"}, {:ran, "end"}] == for({:ran, _} = m <- collect_ran(), do: m)
     assert payloads() == ["hi", "end"]
-    assert Process.alive?(Local.operator(run))
+    assert Process.alive?(Local.relay(run))
   end
 
   defp collect_ran(acc \\ []) do

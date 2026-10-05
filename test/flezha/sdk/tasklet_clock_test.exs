@@ -26,9 +26,9 @@ defmodule Flezha.SDK.TaskletClockTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule NochangeOperator do
+  defmodule NochangeRelay do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "nochange_operator"
+    use Flezha.SDK.Relay, factory_id: "nochange_relay"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(Nochange)
@@ -61,7 +61,7 @@ defmodule Flezha.SDK.TaskletClockTest do
   test "two clocks do not compile, in a tasklet or in a short form" do
     for line <- [
           ~s|Tasklet, name: "quiet", logical_clock: true|,
-          ~s|Operator, factory_id: "quiet", logical_clock: true|
+          ~s|Relay, factory_id: "quiet", logical_clock: true|
         ] do
       error =
         refused("""
@@ -82,7 +82,7 @@ defmodule Flezha.SDK.TaskletClockTest do
     assert Tasklet.clock(Nochange) == :logical
 
     assert {:error, %Flezha.SDK.Error{code: "topology.unservable_clock", details: details}} =
-             Topology.build(NochangeOperator)
+             Topology.build(NochangeRelay)
 
     assert details["tasklet"] == inspect(Nochange)
     assert length(details["issues"]) == 1
@@ -93,7 +93,7 @@ defmodule Flezha.SDK.TaskletClockTest do
           {"cell_idle_ttl_ms: 200", "`idle_ttl_seconds:`"},
           {"clock: :logical", "`logical_clock: true`"}
         ],
-        macro <- [~s|Tasklet, name: "p"|, ~s|Operator, factory_id: "p"|] do
+        macro <- [~s|Tasklet, name: "p"|, ~s|Relay, factory_id: "p"|] do
       error =
         refused("""
         use Flezha.SDK.#{macro}, #{option}
@@ -110,7 +110,7 @@ defmodule Flezha.SDK.TaskletClockTest do
           {"defp event_time_of(_input), do: 0", "`event_time/1`"},
           {"def cell_idle_ttl_ms, do: 20", "`idle_ttl_seconds/0`"}
         ],
-        macro <- [~s|Tasklet, name: "p"|, ~s|Operator, factory_id: "p"|] do
+        macro <- [~s|Tasklet, name: "p"|, ~s|Relay, factory_id: "p"|] do
       error =
         refused("""
         use Flezha.SDK.#{macro}
@@ -148,17 +148,17 @@ defmodule Flezha.SDK.TaskletClockTest do
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
-  defmodule TwoClocksOperator do
+  defmodule TwoClocksRelay do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "two_clocks_operator"
+    use Flezha.SDK.Relay, factory_id: "two_clocks_relay"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(TwoClocksByHand)
   end
 
-  defmodule RetiredOperator do
+  defmodule RetiredRelay do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "retired_operator"
+    use Flezha.SDK.Relay, factory_id: "retired_relay"
 
     @impl true
     def channels(c), do: c |> input("in") |> into(RetiredByHand)
@@ -166,12 +166,12 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   test "a hand-written tasklet with two clocks, or a retired callback, is refused at registration" do
     assert {:error, %Flezha.SDK.Error{code: "topology.two_clocks", details: two}} =
-             Topology.build(TwoClocksOperator)
+             Topology.build(TwoClocksRelay)
 
     assert two["tasklet"] == inspect(TwoClocksByHand)
 
     assert {:error, %Flezha.SDK.Error{details: %{"issues" => issues}}} =
-             Topology.build(RetiredOperator)
+             Topology.build(RetiredRelay)
 
     assert for(
              %{"code" => "topology.retired_callback", "details" => details} <- issues,

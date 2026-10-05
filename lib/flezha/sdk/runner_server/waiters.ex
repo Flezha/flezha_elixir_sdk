@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.RunnerServer.Waiters do
   @moduledoc """
   The callers a runner keeps waiting on a controller reply, by the reference id
-  their request went out under: a steps operator barrier, an admin call and a
+  their request went out under: a steps relay barrier, an admin call and a
   tasklet's spawn request.
 
   One table, because each asks one question: which caller waits on this

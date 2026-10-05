@@ -4,15 +4,15 @@ defmodule Flezha.SDK.CellDeathTest do
   still queued behind its work, the barrier is never answered, so the driver
   fails that stage the way an exhausted ladder does and the run ends instead
   of waiting for ever. In a flow instance holding unfinished input, the
-  Operator ends so the controller rebinds it and re-forwards that input; with
+  Relay ends so the controller rebinds it and re-forwards that input; with
   nothing held, the Cell is minted again.
   """
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog, only: [with_log: 1]
 
-  alias Flezha.SDK.{Channels, Counters, Operator, Topology}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.{Channels, Counters, Relay, Topology}
+  alias Flezha.SDK.Relay.Inbox
   alias Flezha.SDK.Test.StubRunner
   alias Flezha.SDK.Steps.{Driver, Spec}
 
@@ -116,12 +116,12 @@ defmodule Flezha.SDK.CellDeathTest do
   end
 
   defmodule BlockerOp do
-    use Flezha.SDK.Operator, factory_id: "cell_death_blocker_op"
+    use Flezha.SDK.Relay, factory_id: "cell_death_blocker_op"
     def channels(c), do: c |> input("in") |> into(Blocker)
   end
 
   defmodule KeyedOp do
-    use Flezha.SDK.Operator, factory_id: "cell_death_keyed_op"
+    use Flezha.SDK.Relay, factory_id: "cell_death_keyed_op"
     def channels(c), do: c |> input("in") |> key_by(& &1) |> into(Blocker)
   end
 
@@ -148,7 +148,7 @@ defmodule Flezha.SDK.CellDeathTest do
 
     {:ok, driver} =
       Driver.start_link(
-        operator_id: "cell-death",
+        relay_id: "cell-death",
         counters: Counters.new(),
         spec: spec,
         runner: runner
@@ -167,7 +167,7 @@ defmodule Flezha.SDK.CellDeathTest do
       ref = Process.monitor(driver)
       Process.exit(cell, :kill)
       assert_receive {:DOWN, ^ref, :process, ^driver, :normal}, 5_000
-      assert_receive {:shipped, {:operator_completed, done}}, 5_000
+      assert_receive {:shipped, {:relay_completed, done}}, 5_000
       done
     end)
   end
@@ -180,7 +180,7 @@ defmodule Flezha.SDK.CellDeathTest do
       end)
 
     assert %{status: "error", error: "blocker: cell exited: :killed"} = done
-    assert log =~ "cell crashed: operator=cell-death"
+    assert log =~ "cell crashed: relay=cell-death"
     assert log =~ "reason=:killed"
     refute_received {:ran, "tail", _}
   end
@@ -200,19 +200,19 @@ defmodule Flezha.SDK.CellDeathTest do
     assert log =~
              "compensate hook on held_undo failed: cell exited: :killed; the rest of the plan still runs"
 
-    assert log =~ "cell crashed: operator=cell-death"
+    assert log =~ "cell crashed: relay=cell-death"
   end
 
   describe "a flow instance" do
     # Unlinked, so its exit reaches the test as a `:DOWN` rather than an exit
     # signal.
-    defp start_operator(module \\ BlockerOp) do
+    defp start_relay(module \\ BlockerOp) do
       {:ok, topology} = Topology.build(module)
       {:ok, runner} = StubRunner.start_link(test: self())
 
       {:ok, op} =
-        Operator.Server.start_link(
-          operator_id: "cell-death-op",
+        Relay.Server.start_link(
+          relay_id: "cell-death-op",
           topology: topology,
           counters: Counters.new(),
           runner: runner
@@ -225,14 +225,14 @@ defmodule Flezha.SDK.CellDeathTest do
     defp at(offset), do: %{"flz.offset" => Integer.to_string(offset)}
 
     defp cell_of(op),
-      do: op |> Operator.Server.cells() |> then(fn [{_, _, [{nil, pid}]}] -> pid end)
+      do: op |> Relay.Server.cells() |> then(fn [{_, _, [{nil, pid}]}] -> pid end)
 
     defp end_cell(cell, :kill), do: Process.exit(cell, :kill)
     defp end_cell(cell, :linked_exit), do: send(cell, :linked_exit)
 
     for how <- [:kill, :linked_exit] do
-      test "#{how}: a Cell that dies with unfinished input ends its Operator" do
-        {op, ref} = start_operator()
+      test "#{how}: a Cell that dies with unfinished input ends its Relay" do
+        {op, ref} = start_relay()
 
         {_, log} =
           with_log(fn ->
@@ -247,13 +247,13 @@ defmodule Flezha.SDK.CellDeathTest do
           end)
 
         refute_receive {:took, _, _}, 100
-        assert log =~ "cell crashed: operator=cell-death-op node=#Reference"
+        assert log =~ "cell crashed: relay=cell-death-op node=#Reference"
         assert log =~ "key=nil"
       end
     end
 
-    test "inputs queued behind a parked input end the Operator with their Cell" do
-      {op, ref} = start_operator()
+    test "inputs queued behind a parked input end the Relay with their Cell" do
+      {op, ref} = start_relay()
       Inbox.input(op, "in", "park", at(10))
       assert_receive {:shipped, {:park_payload, _body}}, 5_000
       Inbox.input(op, "in", "b", at(11))
@@ -269,10 +269,10 @@ defmodule Flezha.SDK.CellDeathTest do
       refute_receive {:took, _, _}, 100
     end
 
-    # The push is queued ahead of the Operator's `:DOWN`, so the push is what
+    # The push is queued ahead of the Relay's `:DOWN`, so the push is what
     # finds the Cell dead: its exit names the push, not the kill.
     test "a push to a dead Cell does not mint a replacement over held input" do
-      {op, ref} = start_operator()
+      {op, ref} = start_relay()
       Inbox.input(op, "in", "a", at(10))
       assert_receive {:running, cell}, 5_000
 
@@ -291,7 +291,7 @@ defmodule Flezha.SDK.CellDeathTest do
     end
 
     test "a Cell death with no offset held re-mints as today" do
-      {op, ref} = start_operator()
+      {op, ref} = start_relay()
       Inbox.input(op, "in", "a", %{})
       assert_receive {:running, cell}, 5_000
 
@@ -306,11 +306,11 @@ defmodule Flezha.SDK.CellDeathTest do
       refute_received {:DOWN, ^ref, :process, ^op, _}
     end
 
-    test "an Operator that stops abnormally ends every Cell before its own exit is seen" do
-      {op, ref} = start_operator(KeyedOp)
+    test "a Relay that stops abnormally ends every Cell before its own exit is seen" do
+      {op, ref} = start_relay(KeyedOp)
       for key <- ["x", "y", "z"], do: Inbox.input(op, "in", key, %{})
       for _ <- 1..3, do: assert_receive({:took, _, _}, 5_000)
-      cells = for {_, _, keyed} <- Operator.Server.cells(op), {_key, pid} <- keyed, do: pid
+      cells = for {_, _, keyed} <- Relay.Server.cells(op), {_key, pid} <- keyed, do: pid
       cell_refs = Enum.map(cells, &Process.monitor/1)
       assert length(cell_refs) == 3
 

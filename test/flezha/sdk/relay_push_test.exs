@@ -1,22 +1,22 @@
-defmodule Flezha.SDK.OperatorPushTest do
+defmodule Flezha.SDK.RelayPushTest do
   @moduledoc """
-  A flow operator pushing into a Cell that is mid-run: with room in the
-  Cell's queue the push lands at once, so the operator keeps answering; with
+  A flow relay pushing into a Cell that is mid-run: with room in the
+  Cell's queue the push lands at once, so the relay keeps answering; with
   none the pusher waits, and keeps its place in line.
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Cell, Counters, Operator, Topology}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.{Cell, Counters, Relay, Topology}
+  alias Flezha.SDK.Relay.Inbox
   alias Flezha.SDK.Test.StubRunner
 
   # Reports each run and holds it until the test releases it. The give-up
-  # outlasts the operator's own control-call bound, so a router stuck behind
+  # outlasts the relay's own control-call bound, so a router stuck behind
   # a run cannot answer in time by accident.
   defmodule Held do
     @moduledoc false
     def run(input) do
-      send(:operator_push_test, {:running, input, self()})
+      send(:relay_push_test, {:running, input, self()})
 
       receive do
         :release -> :ok
@@ -49,40 +49,40 @@ defmodule Flezha.SDK.OperatorPushTest do
   end
 
   defmodule SheddingGateOp do
-    use Flezha.SDK.Operator, factory_id: "shedding_gate_op"
+    use Flezha.SDK.Relay, factory_id: "shedding_gate_op"
     def channels(c), do: c |> input("in") |> on_full(:drop_oldest) |> into(NarrowGate)
   end
 
   defmodule GateOp do
-    use Flezha.SDK.Operator, factory_id: "gate_op"
+    use Flezha.SDK.Relay, factory_id: "gate_op"
     def channels(c), do: c |> input("in") |> into(Gate)
   end
 
   defmodule NarrowGateOp do
-    use Flezha.SDK.Operator, factory_id: "narrow_gate_op"
+    use Flezha.SDK.Relay, factory_id: "narrow_gate_op"
     def channels(c), do: c |> input("in") |> into(NarrowGate)
   end
 
   setup do
-    Process.register(self(), :operator_push_test)
+    Process.register(self(), :relay_push_test)
     :ok
   end
 
   defp start(module) do
     {:ok, topology} = Topology.build(module)
     {:ok, runner} = StubRunner.start_link(test: self())
-    opts = [operator_id: "gate-1", topology: topology, counters: Counters.new(), runner: runner]
-    {:ok, op} = Operator.Server.start_link(opts)
+    opts = [relay_id: "gate-1", topology: topology, counters: Counters.new(), runner: runner]
+    {:ok, op} = Relay.Server.start_link(opts)
     op
   end
 
-  test "a push into a Cell that is mid-run with room leaves the operator answering" do
+  test "a push into a Cell that is mid-run with room leaves the relay answering" do
     op = start(GateOp)
     Inbox.input(op, "in", "first", %{})
     assert_receive {:running, "first", cell}, 5_000
 
     Inbox.input(op, "in", "second", %{})
-    assert [{"gate", :single, [{nil, ^cell}]}] = Operator.Server.cells(op)
+    assert [{"gate", :single, [{nil, ^cell}]}] = Relay.Server.cells(op)
 
     send(cell, :release)
     assert_receive {:running, "second", ^cell}, 5_000

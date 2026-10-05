@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Call do
   @moduledoc """
   One call into one of the runner's own processes.
 
-  A runner runs inside a host application, so a wedged Cell, Operator,
+  A runner runs inside a host application, so a wedged Cell, Relay,
   RunnerServer or local run must refuse its caller rather than exit it. Every
   such call goes through `Flezha.SDK.SafeCall`, through this module, with a
   bound one of the declared rows names and the caller's refusal declared as data.

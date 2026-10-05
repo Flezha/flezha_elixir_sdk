@@ -5,12 +5,12 @@ defmodule Flezha.SDK.Prefix do
   processed and every record it produced has been written. The shared core
   keeps the same ledger in `prefix.rs`.
 
-  The Operator holds `P` below an input as it pushes it into a Cell; the Cell
+  The Relay holds `P` below an input as it pushes it into a Cell; the Cell
   releases it once the record the input settled into is on the wire, or at
-  once when it records nothing. The Operator reports `P` behind those records
+  once when it records nothing. The Relay reports `P` behind those records
   on every stream the instance writes, and never through a hold.
 
-  An ordered table the Operator and its Cells share: an offset's row counts the
+  An ordered table the Relay and its Cells share: an offset's row counts the
   inputs of it still pending, and the atom rows (which order after every
   offset) carry the highest offset seen, the last `P` reported, the restore's
   catch-up gate and the freeze a lost record sets.
@@ -21,7 +21,7 @@ defmodule Flezha.SDK.Prefix do
   @spec new() :: t()
   def new, do: :ets.new(:flezha_sdk_prefix, [:ordered_set, :public])
 
-  @doc "Hold `P` below `offset` for one input. Only the Operator holds."
+  @doc "Hold `P` below `offset` for one input. Only the Relay holds."
   @spec hold(t(), non_neg_integer()) :: :ok
   def hold(ledger, offset) do
     :ets.update_counter(ledger, offset, {2, 1}, {offset, 0})
@@ -45,7 +45,7 @@ defmodule Flezha.SDK.Prefix do
 
     :ok
   rescue
-    # The Operator that owned the ledger stopped, and every hold with it.
+    # The Relay that owned the ledger stopped, and every hold with it.
     ArgumentError -> :ok
   end
 

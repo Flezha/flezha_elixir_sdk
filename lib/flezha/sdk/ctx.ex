@@ -32,7 +32,7 @@ defmodule Flezha.SDK.Ctx do
   removal even when it registered nothing. `now/1` is the declared clock's value: the
   epoch millisecond, the durable seq, or the input's event time, evaluated
   once per invocation — and, inside a firing, the scheduled timestamp. Inside a
-  steps operator's tasklet timers are unavailable until they fire there: the Cell
+  steps relay's tasklet timers are unavailable until they fire there: the Cell
   hands `timers: :unavailable`, and the four timer calls answer
   `runtime.timers_unavailable` and arm nothing.
 
@@ -67,7 +67,7 @@ defmodule Flezha.SDK.Ctx do
     :firing,
     :runner,
     :origin,
-    :operator_id,
+    :relay_id,
     :counters,
     :preview,
     identity: <<>>,
@@ -81,7 +81,7 @@ defmodule Flezha.SDK.Ctx do
 
   @zero_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
 
-  # FNV-1a-128, the constants `flz_core::operator::instance` fixes; the
+  # FNV-1a-128, the constants `flz_core::relay::instance` fixes; the
   # rendered id is a cross-language contract, so the three fixture vectors are
   # the only thing that may change it.
   @fnv128_offset_basis 0x6C62272E07BB014262B821756295C58D
@@ -97,7 +97,7 @@ defmodule Flezha.SDK.Ctx do
   `opts` carries the node's channel name, whether its sink is keyed
   (`keyed_sink?`), whether a keyless emit has nothing to fall back on
   (`key_required?`), the Cell's pending timers (`timers`, empty by default,
-  `:unavailable` inside a steps operator),
+  `:unavailable` inside a steps relay),
   the tasklet's timer policy (`timer_policy`, resolved from `module` by
   default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
   runner a spawn request goes to (`runner`, nil for none), whether the input
@@ -121,7 +121,7 @@ defmodule Flezha.SDK.Ctx do
       firing: Keyword.get(opts, :firing),
       runner: Keyword.get(opts, :runner),
       origin: Keyword.get(opts, :origin),
-      operator_id: Keyword.get(opts, :operator_id),
+      relay_id: Keyword.get(opts, :relay_id),
       counters: Keyword.get(opts, :counters),
       preview: Keyword.get(opts, :preview),
       identity: Keyword.get(opts, :identity, <<>>),
@@ -386,7 +386,7 @@ defmodule Flezha.SDK.Ctx do
     {:error,
      Error.new("part.no_sink",
        tasklet: ctx.module.name(),
-       operator: ctx.operator_id,
+       relay: ctx.relay_id,
        channel: ctx.channel
      )}
   end
@@ -419,7 +419,7 @@ defmodule Flezha.SDK.Ctx do
   defp send_part(%__MODULE__{} = ctx, value, number) do
     bytes = ctx.preview.serializer.(value)
 
-    # A local run's owner reads only its operator's outputs off its in-process
+    # A local run's owner reads only its relay's outputs off its in-process
     # stream, so a part sent there is dropped by the owner.
     outcome =
       cond do
@@ -438,7 +438,7 @@ defmodule Flezha.SDK.Ctx do
   end
 
   defp write_part(ctx, bytes, number) do
-    case Hold.write("output_part", ctx.hold, {bytes, part_stamps(ctx, number), ctx.operator_id}) do
+    case Hold.write("output_part", ctx.hold, {bytes, part_stamps(ctx, number), ctx.relay_id}) do
       {:ok, _hold} -> :parts_sent
       {_refused, _hold} -> :parts_dropped_refused
     end
@@ -449,8 +449,8 @@ defmodule Flezha.SDK.Ctx do
       "channel" => ctx.preview.channel,
       "flz.part" => Integer.to_string(number),
       "flz.part_attempt" => Integer.to_string(ctx.attempt),
-      "flz.cell" => "#{ctx.operator_id}/#{ctx.module.name()}/#{ctx.cell_key || ""}",
-      "flz.operator" => ctx.operator_id
+      "flz.cell" => "#{ctx.relay_id}/#{ctx.module.name()}/#{ctx.cell_key || ""}",
+      "flz.relay" => ctx.relay_id
     }
 
     if ctx.cell_key, do: Map.put(stamps, "flz.key", ctx.cell_key), else: stamps

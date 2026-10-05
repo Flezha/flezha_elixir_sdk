@@ -15,7 +15,7 @@ defmodule Flezha.SDK.Steps.Instance do
 
   alias Flezha.SDK.Knob
   alias Flezha.SDK.Steps.Spec
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.Relay.Inbox
 
   defmodule Item do
     @moduledoc """

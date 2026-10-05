@@ -4,7 +4,7 @@ defmodule ElixirRunner.Part do
   `n` and then emits `done:<n>` on its sink `answer`; for `retry:<n>` it sends
   the same parts and fails its first attempt retryably, then sends them again
   and succeeds. `part_echo` runs as a flow, `part_echo_steps` a `per_input`
-  steps operator doing the same per message.
+  steps relay doing the same per message.
   """
 
   @failed_once {__MODULE__, :failed_once}
@@ -59,7 +59,7 @@ defmodule ElixirRunner.Part do
 
   defmodule EchoOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "part_echo"
 
     def channels(c) do
@@ -70,7 +70,7 @@ defmodule ElixirRunner.Part do
 
   defmodule EchoSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "part_echo_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()

@@ -145,7 +145,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule ChatLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "chat_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -187,7 +187,7 @@ defmodule ElixirRunner.StepsLoop do
   # lands between a root's `task_committed` and the pass's `iter_committed`.
   defmodule ReplyBlockLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "reply_block_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -207,7 +207,7 @@ defmodule ElixirRunner.StepsLoop do
 
   # A durable per-input loop keyed on its entry edge by the text before the
   # first `:`, so one Cell counts one symbol's messages and emits
-  # `<symbol>:<count>`: the shape a partition group of steps operator members takes.
+  # `<symbol>:<count>`: the shape a partition group of steps relay members takes.
   defmodule KeyedLoopCount do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "keyed_loop_count"
@@ -229,7 +229,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule KeyedLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "keyed_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -252,7 +252,7 @@ defmodule ElixirRunner.StepsLoop do
   # rides the bind itself.
   defmodule StatelessLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "stateless_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -335,7 +335,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule FailingTurnLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "failing_turn_loop_steps"
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
     def durable, do: ElixirRunner.fixture_durable()
@@ -345,7 +345,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule FailingTurnUndoAllSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "failing_turn_undo_all_steps"
     def run, do: {:steps, each: :per_input, on_failure: :undo_all}
     def durable, do: ElixirRunner.fixture_durable()
@@ -355,7 +355,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule ChatRewindSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "chat_rewind_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -375,7 +375,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule BenchLoopSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "bench_loop_steps"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -415,7 +415,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule BenchChain1 do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_1"
@@ -426,7 +426,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule BenchChain4 do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_4"
@@ -437,7 +437,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule BenchChain16 do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def durable, do: ElixirRunner.fixture_durable()
     def factory_id, do: "bench_chain_16"
@@ -448,7 +448,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule BenchChainOptOut4 do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     def factory_id, do: "bench_chain_optout_4"
     def run, do: :steps
     def durable, do: false
@@ -473,7 +473,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule CompleteFlowOp do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "complete_flow"
+    use Flezha.SDK.Relay, factory_id: "complete_flow"
 
     def channels(c),
       do: c |> input("input") |> into(ElixirRunner.StepsLoop.CompleteFlow) |> sink("complete_flow_out")
@@ -497,7 +497,7 @@ defmodule ElixirRunner.StepsLoop do
 
   defmodule ChainedSteps do
     @moduledoc false
-    use Flezha.SDK.Operator, factory_id: "chained_steps", run: {:steps, each: :chained}
+    use Flezha.SDK.Relay, factory_id: "chained_steps", run: {:steps, each: :chained}
 
     def channels(c),
       do: c |> input("in") |> into(ElixirRunner.StepsLoop.ChainedCountdown) |> named("carry")

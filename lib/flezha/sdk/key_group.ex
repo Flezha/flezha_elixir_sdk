@@ -2,7 +2,7 @@ defmodule Flezha.SDK.KeyGroup do
   @moduledoc """
   Key groups: the hash that puts a routing key in one of #{256} groups, and the
   partition key-group range twin of the Rust `KeyGroupRange`, decoded from
-  `AddOperator` fields 7–10. `partition_count < 2` is unpartitioned (one
+  `AddRelay` fields 7–10. `partition_count < 2` is unpartitioned (one
   comparison).
 
   The hash is FNV-1a-128 with the constants frozen by every SDK's `StableId`.

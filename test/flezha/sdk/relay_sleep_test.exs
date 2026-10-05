@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.OperatorSleepTest do
+defmodule Flezha.SDK.RelaySleepTest do
   @moduledoc """
   A flow instance whose class sleeps ships `IterPark` at iteration `0` once
   every Cell has been quiet for its `sleep_after`, and not while one still
@@ -8,8 +8,8 @@ defmodule Flezha.SDK.OperatorSleepTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Counters, Operator, Topology}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.{Channels, Counters, Relay, Topology}
+  alias Flezha.SDK.Relay.Inbox
   alias Flezha.SDK.Test.StubRunner
 
   @window_ms 150
@@ -28,12 +28,12 @@ defmodule Flezha.SDK.OperatorSleepTest do
   end
 
   defmodule Sleeping do
-    use Flezha.SDK.Operator, factory_id: "sleeping", durable: {:local, sleep_after: 150}
+    use Flezha.SDK.Relay, factory_id: "sleeping", durable: {:local, sleep_after: 150}
     def channels(c), do: c |> input("in") |> key_by(& &1) |> into(Seen)
   end
 
   defmodule Awake do
-    use Flezha.SDK.Operator, factory_id: "awake", durable: {:local, sleep_after: false}
+    use Flezha.SDK.Relay, factory_id: "awake", durable: {:local, sleep_after: false}
     def channels(c), do: c |> Channels.input("in") |> Channels.into(Seen)
   end
 
@@ -51,12 +51,12 @@ defmodule Flezha.SDK.OperatorSleepTest do
   end
 
   defmodule Completing do
-    use Flezha.SDK.Operator, factory_id: "completing"
+    use Flezha.SDK.Relay, factory_id: "completing"
     def channels(c), do: c |> input("in") |> key_by(& &1) |> into(Finisher)
   end
 
   defmodule Capped do
-    use Flezha.SDK.Operator, factory_id: "capped", max_duration_ms: 100
+    use Flezha.SDK.Relay, factory_id: "capped", max_duration_ms: 100
     def channels(c), do: c |> input("in") |> into(Finisher)
   end
 
@@ -65,8 +65,8 @@ defmodule Flezha.SDK.OperatorSleepTest do
     {:ok, runner} = StubRunner.start_link(test: self())
 
     {:ok, pid} =
-      Operator.Server.start_link(
-        [operator_id: "op-#{inspect(module)}", topology: topology, counters: Counters.new()] ++
+      Relay.Server.start_link(
+        [relay_id: "op-#{inspect(module)}", topology: topology, counters: Counters.new()] ++
           [runner: runner] ++ opts
       )
 
@@ -83,7 +83,7 @@ defmodule Flezha.SDK.OperatorSleepTest do
     refute_receive {:shipped, {:iter_park, _}}, 4 * @window_ms
   end
 
-  test "a Cell still running keeps the operator awake until it is done" do
+  test "a Cell still running keeps the relay awake until it is done" do
     started = System.monotonic_time(:millisecond)
     op = start(Sleeping)
     Inbox.input(op, "in", "slow", %{})
@@ -113,18 +113,18 @@ defmodule Flezha.SDK.OperatorSleepTest do
     Inbox.input(op, "in", "slow", %{})
     Inbox.input(op, "in", "done", %{})
 
-    assert_receive {:shipped, {:operator_completed, done}}, 5_000
+    assert_receive {:shipped, {:relay_completed, done}}, 5_000
     assert System.monotonic_time(:millisecond) - started >= 150, "the slow Cell drained first"
     assert done.status == "completed"
     assert Jason.decode!(done.result) == %{"last" => nil}
-    refute_receive {:shipped, {:operator_completed, _}}, 3 * @window_ms
+    refute_receive {:shipped, {:relay_completed, _}}, 3 * @window_ms
   end
 
   test "a flow class's max_duration_ms ends it as cancelled" do
     op = start(Capped)
     Inbox.input(op, "in", "a", %{})
 
-    assert_receive {:shipped, {:operator_completed, %{status: "cancelled"}}}, 5_000
+    assert_receive {:shipped, {:relay_completed, %{status: "cancelled"}}}, 5_000
     assert Process.alive?(op)
   end
 end

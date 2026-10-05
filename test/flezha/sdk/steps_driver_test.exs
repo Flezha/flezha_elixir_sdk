@@ -2,8 +2,8 @@ defmodule Flezha.SDK.Steps.DriverTest do
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.{Channels, Codec, Commands, Counters, Declarations, KeyGroup}
-  alias Flezha.SDK.{Operator, Operators, Park, Spawn}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.{Relay, Relays, Park, Spawn}
+  alias Flezha.SDK.Relay.Inbox
   alias Flezha.SDK.Test.StubRunner
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Steps.{Driver, Instance, Resume, Spec}
@@ -199,7 +199,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   # `after:<ms>` arms a timer that far out and emits `armed:<at>`;
-  # `after-slow:<ms>` does the same, marked for the relay to linger on;
+  # `after-slow:<ms>` does the same, marked for the tock to linger on;
   # `hold:<ms>` holds the stage that long. A firing emits `fired:<at>`.
   defmodule Tick do
     use Flezha.SDK.Tasklet, name: "tick"
@@ -239,13 +239,13 @@ defmodule Flezha.SDK.Steps.DriverTest do
     end
   end
 
-  defmodule Relay do
-    use Flezha.SDK.Tasklet, name: "relay"
+  defmodule Tock do
+    use Flezha.SDK.Tasklet, name: "tock"
 
     @impl true
     def run(input, state, ctx) do
       if String.starts_with?(input, "armed-slow"), do: Process.sleep(150)
-      emit(ctx, "relay:" <> input)
+      emit(ctx, "tock:" <> input)
       {:ok, state}
     end
   end
@@ -255,7 +255,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     def run, do: {:steps, each: :per_input}
 
     def channels(c) do
-      c |> Channels.input("in") |> Channels.into(Tick) |> Channels.into(Relay)
+      c |> Channels.input("in") |> Channels.into(Tick) |> Channels.into(Tock)
     end
   end
 
@@ -279,7 +279,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
       |> Channels.input("in")
       |> Channels.into(Forward)
       |> Channels.into(Tick)
-      |> Channels.into(Relay)
+      |> Channels.into(Tock)
     end
   end
 
@@ -293,7 +293,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     spec = with_sleep_after(spec, sleep_after_ms)
     {error, opts} = Keyword.pop(opts, :error)
     {:ok, runner} = StubRunner.start_link(test: self(), error: error)
-    defaults = [operator_id: "wf-1", counters: Counters.new()]
+    defaults = [relay_id: "wf-1", counters: Counters.new()]
 
     {:ok, driver} =
       Driver.start_link(Keyword.merge(defaults, opts) ++ [spec: spec, runner: runner])
@@ -327,7 +327,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   # happens to be empty — under a loaded suite the two are not the same.
   defp drain(acc \\ []) do
     receive do
-      {:shipped, {:operator_completed, _}} = msg -> Enum.reverse([msg | acc])
+      {:shipped, {:relay_completed, _}} = msg -> Enum.reverse([msg | acc])
       msg -> drain([msg | acc])
     after
       5_000 -> Enum.reverse(acc)
@@ -340,7 +340,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
   defp completion(messages) do
     Enum.find_value(messages, fn
-      {:shipped, {:operator_completed, done}} -> done
+      {:shipped, {:relay_completed, done}} -> done
       _ -> nil
     end)
   end
@@ -359,7 +359,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   test "a spawn naming a flow factory resolves the controller's own code" do
     handle = Spawn.request(self(), false, "prices", "p", [], "")
     assert_receive {:"$gen_cast", {:spawn, _caller, spawn, "p", :deliver}}
-    refusal = Flezha.SDK.Error.new("operator.factory_not_steps", factory: "prices")
+    refusal = Flezha.SDK.Error.new("relay.factory_not_steps", factory: "prices")
     Spawn.answer(self(), %{spawn | claimed?: true}, {"", ""}, refusal)
     assert Spawn.await(handle, 1_000) == {:error, refusal}
   end
@@ -377,7 +377,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a stage commits the cell identities that ran" do
-    messages = drive(LinearFlow, operator_id: "wf-ids")
+    messages = drive(LinearFlow, relay_id: "wf-ids")
     assert [first | _] = commits(messages)
     assert [%{cell_id: identity}] = first.cells_ran
     assert is_binary(identity)
@@ -479,7 +479,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     assert_receive {:running, first, first_pid}, 5_000
     assert_receive {:running, second, second_pid}, 2_000
     assert Enum.sort([first, second]) == ["held_left", "held_right"]
-    assert {:ok, _cell} = Operator.Server.lookup(driver, "tagger", "")
+    assert {:ok, _cell} = Relay.Server.lookup(driver, "tagger", "")
 
     ref = Process.monitor(driver)
     Enum.each([first_pid, second_pid], &send(&1, :release))
@@ -718,7 +718,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a chained loop re-seeds each pass from the previous terminal batch" do
-    messages = drive(ChainedLoop, operator_id: "wf-loop", message: "3")
+    messages = drive(ChainedLoop, relay_id: "wf-loop", message: "3")
     assert %{status: "ok"} = completion(messages)
   end
 
@@ -732,7 +732,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a chained loop commits its message's offset once, and no offset for a carry-fed pass" do
-    driver = start_driver(JournaledChainedLoop, operator_id: "wf-countdown")
+    driver = start_driver(JournaledChainedLoop, relay_id: "wf-countdown")
     ref = Process.monitor(driver)
     Inbox.input(driver, "in", "2", %{"flz.offset" => "0"})
     assert_receive {:DOWN, ^ref, :process, ^driver, _reason}, 5_000
@@ -831,13 +831,13 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "an unreadable message parks under its channel, and the once pass runs on the next one" do
-    driver = start_driver(Strict, operator_id: "wf-strict", sleep_after_ms: 60_000)
+    driver = start_driver(Strict, relay_id: "wf-strict", sleep_after_ms: 60_000)
 
     Inbox.input(driver, "in", "bad", %{})
     assert_receive {:shipped, {:park_payload, park}}, 5_000
     assert park.channel == "in"
     assert park.error =~ "not readable"
-    refute_received {:shipped, {:operator_completed, _}}
+    refute_received {:shipped, {:relay_completed, _}}
 
     Inbox.input(driver, "in", "fine", %{})
     messages = drain()
@@ -863,7 +863,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
   test "a message its entry edge rejects parks under the channel, and the park releases it" do
     driver =
-      start_driver(EdgeStrict, operator_id: "wf-edge-strict", sleep_after_ms: 0, owed_inbox: 1)
+      start_driver(EdgeStrict, relay_id: "wf-edge-strict", sleep_after_ms: 0, owed_inbox: 1)
 
     Inbox.input(driver, "in", "bad", %{"flz.offset" => "5"})
     assert_receive {:shipped, {:park_payload, park}}, 5_000
@@ -874,7 +874,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
   test "an unreadable message a rebound run owed settles the tail, and the park releases it" do
     driver =
-      start_driver(Strict, operator_id: "wf-strict-owed", sleep_after_ms: 0, owed_inbox: 1)
+      start_driver(Strict, relay_id: "wf-strict-owed", sleep_after_ms: 0, owed_inbox: 1)
 
     Inbox.input(driver, "in", "bad", %{"flz.offset" => "4"})
     assert_receive {:shipped, {:park_payload, _park}}, 5_000
@@ -882,7 +882,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a once class started without a message parks after the idle window" do
-    driver = start_driver(LinearFlow, operator_id: "wf-once-parks", sleep_after_ms: 0)
+    driver = start_driver(LinearFlow, relay_id: "wf-once-parks", sleep_after_ms: 0)
     ref = Process.monitor(driver)
     assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
     assert reason in [:normal, :noproc]
@@ -892,11 +892,11 @@ defmodule Flezha.SDK.Steps.DriverTest do
     assert [{:shipped, {:iter_park, %{iter: 0}}}] =
              Enum.filter(messages, &match?({:shipped, {:iter_park, _}}, &1))
 
-    refute Enum.any?(messages, &match?({:shipped, {:operator_completed, _}}, &1))
+    refute Enum.any?(messages, &match?({:shipped, {:relay_completed, _}}, &1))
   end
 
   test "a once class that journals nothing waits for its message instead of parking" do
-    driver = start_driver(OptedOutFlow, operator_id: "wf-once-waits", sleep_after_ms: 0)
+    driver = start_driver(OptedOutFlow, relay_id: "wf-once-waits", sleep_after_ms: 0)
     _state = :sys.get_state(driver)
     refute_receive {:shipped, _}, 300
 
@@ -910,7 +910,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
   # after the bootstrap, so whatever the test sends next reaches a loop that has
   # already looked at its empty inbox.
   defp start_loop(module, opts) do
-    driver = start_driver(module, Keyword.merge([operator_id: "wf-chat"], opts))
+    driver = start_driver(module, Keyword.merge([relay_id: "wf-chat"], opts))
     _state = :sys.get_state(driver)
     driver
   end
@@ -930,15 +930,15 @@ defmodule Flezha.SDK.Steps.DriverTest do
   test "a per-input loop parks after its idle window with nothing to consume" do
     # Not `start_loop/2`: with no idle window the loop can park before a state
     # read is answered.
-    driver = start_driver(ChatLoop, operator_id: "wf-chat", sleep_after_ms: 0)
+    driver = start_driver(ChatLoop, relay_id: "wf-chat", sleep_after_ms: 0)
     ref = Process.monitor(driver)
     assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
     assert reason in [:normal, :noproc]
 
     messages = collect_all()
-    # A park is NOT a terminal outcome: no OperatorCompleted is shipped.
+    # A park is NOT a terminal outcome: no RelayCompleted is shipped.
     assert Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
-    refute Enum.any?(messages, &match?({:shipped, {:operator_completed, _}}, &1))
+    refute Enum.any?(messages, &match?({:shipped, {:relay_completed, _}}, &1))
     assert commits(messages) == []
   end
 
@@ -987,15 +987,15 @@ defmodule Flezha.SDK.Steps.DriverTest do
     Inbox.input(driver, "in", "after:30", %{})
     assert_receive {:armed, at}, 5_000
     assert %{trigger: nil} = await_commit(0)
-    assert handoff_of(await_commit(1)) == ["relay:armed:#{at}"]
+    assert handoff_of(await_commit(1)) == ["tock:armed:#{at}"]
     assert_receive {:shipped, {:iter_commit, %{iter: 0}}}, 5_000
 
     # With nothing sent, the firing opens a pass at `tick` and its commit names it.
     root = await_commit(0)
     assert %RunnerCommands.TimerTrigger{scheduled_at: ^at, event_time: false} = root.trigger
     assert handoff_of(root) == ["fired:#{at}"]
-    assert %{trigger: nil} = relay = await_commit(1)
-    assert handoff_of(relay) == ["relay:fired:#{at}"]
+    assert %{trigger: nil} = tock = await_commit(1)
+    assert handoff_of(tock) == ["tock:fired:#{at}"]
     assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
     Driver.stop_steps(driver)
   end
@@ -1010,7 +1010,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
     root = await_commit(1)
     assert %RunnerCommands.TimerTrigger{scheduled_at: ^at} = root.trigger
-    assert handoff_of(await_commit(2)) == ["relay:fired:#{at}"]
+    assert handoff_of(await_commit(2)) == ["tock:fired:#{at}"]
     assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
     refute_received {:shipped, {:task_commit, %{task_idx: 0, iter: 1}}}
     Driver.stop_steps(driver)
@@ -1021,7 +1021,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
     Inbox.input(driver, "in", "after-slow:30", %{})
     assert_receive {:armed, at}, 5_000
-    # Due while `relay` lingers; the message comes after it is due.
+    # Due while `tock` lingers; the message comes after it is due.
     Process.sleep(80)
     Inbox.input(driver, "in", "later", %{})
 
@@ -1070,7 +1070,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     ]
 
     driver = start_loop(TimerLoop, sleep_after_ms: 60_000, journal: journal)
-    assert handoff_of(await_commit(1)) == ["relay:fired:123"]
+    assert handoff_of(await_commit(1)) == ["tock:fired:123"]
     assert_receive {:shipped, {:iter_commit, %{iter: 1}}}, 5_000
     refute_received {:shipped, {:task_commit, %{task_idx: 0}}}
     Driver.stop_steps(driver)
@@ -1107,8 +1107,8 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a stateless stage Cell of a journaling class restores from its records" do
-    driver = start_driver(HybridFlow, operator_id: "wf-stateless-restore")
-    assert {:ok, cell} = Operator.Server.lookup(driver, "tagger", "")
+    driver = start_driver(HybridFlow, relay_id: "wf-stateless-restore")
+    assert {:ok, cell} = Relay.Server.lookup(driver, "tagger", "")
     assert {:ok, _terminal, false} = Flezha.SDK.Cell.restore(cell, <<>>, <<>>, <<>>, 0)
     Driver.stop_steps(driver)
   end
@@ -1119,7 +1119,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
   # --- crash resume ---
 
-  defp resume(module, journal), do: drive(module, operator_id: "wf-resume", journal: journal)
+  defp resume(module, journal), do: drive(module, relay_id: "wf-resume", journal: journal)
 
   test "a committed tasklet is skipped and its child re-seeds from the journal" do
     messages =
@@ -1354,7 +1354,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
         result: "turns:2"
       })
 
-    messages = drive(ClosingLoop, operator_id: "wf-resume", journal: journal, sleep_after_ms: 0)
+    messages = drive(ClosingLoop, relay_id: "wf-resume", journal: journal, sleep_after_ms: 0)
     assert commits(messages) == []
     refute Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
     assert %{status: "ok", result: "turns:2"} = completion(messages)
@@ -1388,7 +1388,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     # says so: without the owed count the loop could park before it lands.
     messages =
       drive(ClosingLoop,
-        operator_id: "wf-resume",
+        relay_id: "wf-resume",
         journal: journal,
         sleep_after_ms: 0,
         owed_inbox: 1
@@ -1404,7 +1404,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     journal = Codec.journal_facts(%RunnerCommands.TaskJournalState{iter: 3})
 
     driver =
-      start_driver(ClosingLoop, operator_id: "wf-resume", journal: journal, sleep_after_ms: 0)
+      start_driver(ClosingLoop, relay_id: "wf-resume", journal: journal, sleep_after_ms: 0)
 
     ref = Process.monitor(driver)
     assert_receive {:DOWN, ^ref, :process, ^driver, reason}, 5_000
@@ -1412,7 +1412,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
     messages = collect_all()
     assert Enum.any?(messages, &match?({:shipped, {:iter_park, _}}, &1))
-    refute Enum.any?(messages, &match?({:shipped, {:operator_completed, _}}, &1))
+    refute Enum.any?(messages, &match?({:shipped, {:relay_completed, _}}, &1))
   end
 
   # --- keyed tasklets ---
@@ -1559,10 +1559,10 @@ defmodule Flezha.SDK.Steps.DriverTest do
     def channels(c), do: Flezha.SDK.Steps.DriverTest.keyed_loop_channels(c)
   end
 
-  defp identity(operator_id, tasklet, key), do: Park.identity(operator_id, tasklet, key)
+  defp identity(relay_id, tasklet, key), do: Park.identity(relay_id, tasklet, key)
 
   test "a keyed stage mints a Cell per key on dispatch, and its commit names each once" do
-    messages = drive(KeyedFlow, operator_id: "wf-keyed", message: "a,b,a")
+    messages = drive(KeyedFlow, relay_id: "wf-keyed", message: "a,b,a")
     assert %{status: "ok"} = completion(messages)
     assert [_split, keyed] = commits(messages)
 
@@ -1575,13 +1575,13 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "a keyed stage is undone once per key" do
-    messages = drive(KeyedSagaFlow, operator_id: "wf-keyed-saga", message: "a,b,c")
+    messages = drive(KeyedSagaFlow, relay_id: "wf-keyed-saga", message: "a,b,c")
     assert %{status: "error"} = completion(messages)
     assert Enum.sort(for {:undone_key, "keyed_undo", key} <- messages, do: key) == ~w(a b c)
   end
 
   test "a Cell that emitted nothing is recorded and undone; one that received nothing is neither" do
-    messages = drive(SilentFlow, operator_id: "wf-silent")
+    messages = drive(SilentFlow, relay_id: "wf-silent")
     assert %{status: "error"} = completion(messages)
     ran = for c <- commits(messages), not c.compensating, %{cell_id: id} <- c.cells_ran, do: id
     assert identity("wf-silent", "silent", "a") in ran
@@ -1595,7 +1595,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
           {KeyedLoopKeepProgress, "wf-sweep-kp", false}
         ] do
       handler = attach_dynamic(id)
-      driver = start_loop(class, operator_id: id)
+      driver = start_loop(class, relay_id: id)
       Inbox.input(driver, "in", "a", %{})
       assert_receive {:plain_ran, "a:a"}, 5_000
       # The one-second TTL passes with the loop waiting for its next message;
@@ -1605,10 +1605,10 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
       :telemetry.detach(handler)
 
-      assert match?({:ok, _}, Operator.Server.lookup(driver, "keyed_undo", "a")) == kept,
+      assert match?({:ok, _}, Relay.Server.lookup(driver, "keyed_undo", "a")) == kept,
              "#{id}: the compensable keyed Cell"
 
-      assert Operator.Server.lookup(driver, "keyed_plain", "a:a") == {:error, :cell_evicted},
+      assert Relay.Server.lookup(driver, "keyed_plain", "a:a") == {:error, :cell_evicted},
              "#{id}: the hookless keyed Cell"
 
       Driver.stop_steps(driver)
@@ -1619,7 +1619,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
   test "no keyed Cell is swept while a pass runs" do
     handler = attach_dynamic("wf-sweep-block")
-    driver = start_driver(KeyedBlockFlow, operator_id: "wf-sweep-block")
+    driver = start_driver(KeyedBlockFlow, relay_id: "wf-sweep-block")
     Inbox.input(driver, nil, "a", %{})
     assert_receive {:blocking, blocker}, 5_000
     # The keyed Cell sits idle past its one-second TTL, and sweep ticks queue
@@ -1633,16 +1633,16 @@ defmodule Flezha.SDK.Steps.DriverTest do
     refute {:dynamic, :evicted} in messages
   end
 
-  # Every `[:flezha, :sdk, :dynamic]` event of one operator, sent to the test.
-  defp attach_dynamic(operator_id) do
+  # Every `[:flezha, :sdk, :dynamic]` event of one relay, sent to the test.
+  defp attach_dynamic(relay_id) do
     test = self()
-    handler = "#{operator_id}-#{inspect(test)}"
+    handler = "#{relay_id}-#{inspect(test)}"
 
     :telemetry.attach(
       handler,
       [:flezha, :sdk, :dynamic],
-      fn _event, _measure, %{operator_id: oid, event: event}, _ ->
-        if oid == operator_id, do: send(test, {:dynamic, event})
+      fn _event, _measure, %{relay_id: oid, event: event}, _ ->
+        if oid == relay_id, do: send(test, {:dynamic, event})
       end,
       nil
     )
@@ -1651,8 +1651,8 @@ defmodule Flezha.SDK.Steps.DriverTest do
   end
 
   test "every restore frame the bind owed opens the gate, whether or not a Cell took it" do
-    driver = start_driver(KeyedFlow, operator_id: "wf-gate", resume_cell_count: 2)
-    s = %{operators: %{"wf-gate" => {driver, "keyed_flow"}}}
+    driver = start_driver(KeyedFlow, relay_id: "wf-gate", resume_cell_count: 2)
+    s = %{relays: %{"wf-gate" => {driver, "keyed_flow"}}}
     test = self()
 
     for {tasklet, key} <- [{"keyed_undo", "k"}, {"a_tasklet_the_class_dropped", ""}] do
@@ -1676,7 +1676,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
       assert_receive {:restore, _status}, 2_000
     end
 
-    assert {:ok, _} = Operator.Server.lookup(driver, "keyed_undo", "k"),
+    assert {:ok, _} = Relay.Server.lookup(driver, "keyed_undo", "k"),
            "the frame minted its keyed Cell"
 
     Inbox.input(driver, nil, "a", %{})
@@ -1711,8 +1711,8 @@ defmodule Flezha.SDK.Steps.DriverTest do
   def entry_keyed_channels(c), do: entry_keyed(c)
 
   defp partitioned_add(factory_id) do
-    %RunnerCommands.AddOperator{
-      operator_id: "p#p1",
+    %RunnerCommands.AddRelay{
+      relay_id: "p#p1",
       factory_id: factory_id,
       run: "steps",
       partition_index: 1,
@@ -1733,7 +1733,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
 
     for {factory, mode} <- [{"entry_keyed_once", "once"}, {"entry_keyed_chained", "chained"}] do
       assert {:error, %{code: "topology.partitions_without_per_input_loop", message: reason}, ^s} =
-               Operators.add(s, partitioned_add(factory))
+               Relays.add(s, partitioned_add(factory))
 
       assert reason =~ factory
       assert reason =~ "(each #{mode})"
@@ -1742,7 +1742,7 @@ defmodule Flezha.SDK.Steps.DriverTest do
     end
 
     assert {:error, %{code: "topology.partitions_without_keyed_tasklet"}, ^s} =
-             Operators.add(s, partitioned_add("chat_loop"))
+             Relays.add(s, partitioned_add("chat_loop"))
 
     assert Declarations.for(topologies["chat_loop"])["each"] == "per_input"
   end

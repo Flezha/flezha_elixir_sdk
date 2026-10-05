@@ -1,7 +1,7 @@
 defmodule Agentdesk.Application do
   @moduledoc """
   Starts the desk's runner: the process that connects to the controller and
-  serves agentdesk's operators, in the `agents` namespace.
+  serves agentdesk's relays, in the `agents` namespace.
   """
   use Application
 
@@ -11,7 +11,7 @@ defmodule Agentdesk.Application do
       # `:uds` because this node is not the controller's.
       {Flezha.SDK,
        namespace: "agents",
-       operators: [Agentdesk.AgentOperator, Agentdesk.GatewayOperator],
+       relays: [Agentdesk.AgentRelay, Agentdesk.GatewayRelay],
        transport: :uds}
     ]
 

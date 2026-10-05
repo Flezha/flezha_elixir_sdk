@@ -1,7 +1,7 @@
-defmodule ElixirRunner.OperatorCall do
+defmodule ElixirRunner.RelayCall do
   @moduledoc """
-  Operator call fixtures (`operator_call`): operators that call another
-  operator from their graph and read the outcome as a `Flezha.SDK.Response`.
+  Relay call fixtures (`relay_call`): relays that call another
+  relay from their graph and read the outcome as a `Flezha.SDK.Response`.
 
     * `call_pricing`: a flow callee answering `price:<input>` through
       `response/1`; an input starting `silent` is never answered.
@@ -42,8 +42,8 @@ defmodule ElixirRunner.OperatorCall do
   end
 
   @doc "What a caller's tasklet emits: a turn as it came, an outcome as its prefixed line."
-  def relay(%Response{} = response), do: @outcome <> render(response)
-  def relay(turn), do: turn
+  def pass(%Response{} = response), do: @outcome <> render(response)
+  def pass(turn), do: turn
 
   def turn?(line), do: not outcome?(line) and not resume?(line)
   def resume?(line), do: String.starts_with?(line, @resume)
@@ -91,7 +91,7 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(response, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.render(response))
+      emit(ctx, ElixirRunner.RelayCall.render(response))
       {:ok, state}
     end
   end
@@ -121,7 +121,7 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(input, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.relay(input))
+      emit(ctx, ElixirRunner.RelayCall.pass(input))
       {:ok, state}
     end
   end
@@ -132,7 +132,7 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(line, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.unprefixed(line))
+      emit(ctx, ElixirRunner.RelayCall.unprefixed(line))
       {:ok, state}
     end
   end
@@ -143,7 +143,7 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(line, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.unprefixed(line))
+      emit(ctx, ElixirRunner.RelayCall.unprefixed(line))
       {:ok, state}
     end
   end
@@ -154,7 +154,7 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(input, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.relay(input))
+      emit(ctx, ElixirRunner.RelayCall.pass(input))
       {:ok, state}
     end
   end
@@ -165,14 +165,14 @@ defmodule ElixirRunner.OperatorCall do
 
     @impl true
     def run(line, state, ctx) do
-      emit(ctx, ElixirRunner.OperatorCall.unprefixed(line))
+      emit(ctx, ElixirRunner.RelayCall.unprefixed(line))
       {:ok, state}
     end
   end
 
   defmodule PricingOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "call_pricing"
     def channels(c), do: c |> input("in") |> into(PricingQuote) |> response()
@@ -180,9 +180,9 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule OrdersOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
-    alias ElixirRunner.OperatorCall
+    alias ElixirRunner.RelayCall
     def factory_id, do: "call_orders"
 
     def channels(c) do
@@ -190,7 +190,7 @@ defmodule ElixirRunner.OperatorCall do
       |> input("in")
       |> into(OrderAsk)
       |> named("order")
-      |> call("pricing", deadline_ms: OperatorCall.deadline_ms())
+      |> call("pricing", deadline_ms: RelayCall.deadline_ms())
       |> into(OrderPriced)
       |> sink("priced")
     end
@@ -198,7 +198,7 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule AgentSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "call_agent"
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
@@ -209,9 +209,9 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule GatewayOp do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
-    alias ElixirRunner.OperatorCall
+    alias ElixirRunner.RelayCall
     def factory_id, do: "call_gateway"
     def run, do: {:flow, exactly: :effectively_once}
 
@@ -219,22 +219,22 @@ defmodule ElixirRunner.OperatorCall do
       account = c |> input("in") |> into(GatewayAccount) |> named("gateway")
 
       account
-      |> filter(&OperatorCall.turn?/1)
-      |> key_by(&OperatorCall.session/1)
-      |> call(factory: "call_agent", deadline_ms: OperatorCall.deadline_ms())
+      |> filter(&RelayCall.turn?/1)
+      |> key_by(&RelayCall.session/1)
+      |> call(factory: "call_agent", deadline_ms: RelayCall.deadline_ms())
       |> into(GatewayAccount)
 
       account
-      |> filter(&OperatorCall.resume?/1)
+      |> filter(&RelayCall.resume?/1)
       |> into(GatewayResume)
       |> named("resume")
-      |> key_by(&OperatorCall.session/1)
-      |> call(factory: "call_agent", deadline_ms: OperatorCall.deadline_ms(), create: false)
+      |> key_by(&RelayCall.session/1)
+      |> call(factory: "call_agent", deadline_ms: RelayCall.deadline_ms(), create: false)
       |> into(GatewayAccount)
 
       account
-      |> filter(&OperatorCall.outcome?/1)
-      |> key_by(&OperatorCall.session/1)
+      |> filter(&RelayCall.outcome?/1)
+      |> key_by(&RelayCall.session/1)
       |> into(GatewayLog)
       |> keyed()
       |> sink("gateway_out")
@@ -243,9 +243,9 @@ defmodule ElixirRunner.OperatorCall do
 
   defmodule ToolSessionSteps do
     @moduledoc false
-    @behaviour Flezha.SDK.Operator
+    @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
-    alias ElixirRunner.OperatorCall
+    alias ElixirRunner.RelayCall
     def factory_id, do: "call_tool_session"
     def run, do: {:steps, each: :per_input}
     def durable, do: ElixirRunner.fixture_durable()
@@ -255,11 +255,11 @@ defmodule ElixirRunner.OperatorCall do
       turn = c |> input("turn") |> into(ToolTurn) |> named("tool")
 
       turn
-      |> filter(&(not OperatorCall.outcome?(&1)))
-      |> call("pricing", deadline_ms: OperatorCall.deadline_ms())
+      |> filter(&(not RelayCall.outcome?(&1)))
+      |> call("pricing", deadline_ms: RelayCall.deadline_ms())
       |> into(ToolTurn)
 
-      turn |> filter(&OperatorCall.outcome?/1) |> into(ToolLog) |> sink("tool_out")
+      turn |> filter(&RelayCall.outcome?/1) |> into(ToolLog) |> sink("tool_out")
     end
   end
 

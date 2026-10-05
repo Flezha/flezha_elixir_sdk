@@ -3,13 +3,13 @@ defmodule Tradedesk.TradeWatcher do
   The desk's stream: trades in, each price compared with its symbol's recent
   average, and an order started when a price jumps far enough above it.
 
-  A flow operator runs for as long as the desk does. The exchange sends
+  A flow relay runs for as long as the desk does. The exchange sends
   other messages beside its trades and delivers several trades in one message,
   so the wiring keeps the trade messages, splits each into its trades before
   anything else sees them, drops what the desk does not follow, and routes the
   rest to a cell per symbol.
   """
-  use Flezha.SDK.Operator, factory_id: "trade_watcher"
+  use Flezha.SDK.Relay, factory_id: "trade_watcher"
 
   @doc """
   Four transforms on the wiring, then two tasklets, and one place output

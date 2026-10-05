@@ -99,7 +99,7 @@ end
 
 defmodule ElixirRunner.Conformance.Row do
   @moduledoc false
-  @behaviour Flezha.SDK.Operator
+  @behaviour Flezha.SDK.Relay
 
   # The class every interpreted row registers: the steps it declares are the
   # row the interpreter is driving, so the settings tree a row writes comes
@@ -116,7 +116,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupFlow do
   @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "plain", sink: "out"
+  use Flezha.SDK.Relay, factory_id: "plain", sink: "out"
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -126,7 +126,7 @@ end
 
 defmodule ElixirRunner.ShorthandDupSteps do
   @moduledoc false
-  use Flezha.SDK.Operator, factory_id: "plain", sink: "twin_sink", run: :steps
+  use Flezha.SDK.Relay, factory_id: "plain", sink: "twin_sink", run: :steps
 
   def run(input, state, ctx) do
     emit(ctx, input)
@@ -368,7 +368,7 @@ defmodule ElixirRunner.Conformance do
 
       _pair ->
         case drive_duplicate() do
-          :ok -> die("#{row.topology}: the runner accepted a second operator under one id")
+          :ok -> die("#{row.topology}: the runner accepted a second relay under one id")
           {:error, name} -> die("#{row.topology}: #{name}")
         end
     end

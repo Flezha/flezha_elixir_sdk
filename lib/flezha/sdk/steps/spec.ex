@@ -2,7 +2,7 @@ defmodule Flezha.SDK.Steps.Spec do
   @moduledoc """
   The frozen registration-time result of authoring a class that runs in
   steps: a validated tasklet DAG, plus the class's settings tree
-  (`Flezha.SDK.Operator`), which holds its loop shape, failure mode and
+  (`Flezha.SDK.Relay`), which holds its loop shape, failure mode and
   durability.
 
   A steps class authors in `channels/1` on the same builder a flow class
@@ -28,14 +28,14 @@ defmodule Flezha.SDK.Steps.Spec do
   once — and reported as `{:error, {:invalid_steps, issues}}`.
   """
 
-  alias Flezha.SDK.{CallEnd, Graph, Operator, Tasklet, Topology}
+  alias Flezha.SDK.{CallEnd, Graph, Relay, Tasklet, Topology}
 
   @enforce_keys [:factory_id, :module]
   defstruct factory_id: nil,
             module: nil,
             topology: nil,
             dag: nil,
-            settings: %Operator{run: :steps}
+            settings: %Relay{run: :steps}
 
   @type t :: %__MODULE__{}
 
@@ -69,17 +69,17 @@ defmodule Flezha.SDK.Steps.Spec do
   from the module when not given), or refuse it. A class that declares no
   `channels/1` has no body to run and is refused `NoStepsBody`.
   """
-  @spec build(module(), Operator.t() | nil) :: {:ok, t()} | {:error, Flezha.SDK.Error.t()}
+  @spec build(module(), Relay.t() | nil) :: {:ok, t()} | {:error, Flezha.SDK.Error.t()}
   def build(module, settings \\ nil)
 
   def build(module, nil) do
-    case Operator.settings(module) do
+    case Relay.settings(module) do
       {:ok, settings} -> build(module, settings)
       {:error, issue} -> refuse([issue])
     end
   end
 
-  def build(module, %Operator{} = settings) do
+  def build(module, %Relay{} = settings) do
     base = %__MODULE__{factory_id: module.factory_id(), module: module, settings: settings}
 
     if Tasklet.exports?(module, :channels, 1),
@@ -116,7 +116,7 @@ defmodule Flezha.SDK.Steps.Spec do
     {dag, Enum.reverse(CallEnd.outside_per_input_loop(topo.routes, settings.each)) ++ issues}
   end
 
-  # A steps operator's messages arrive on its entry channels; a class with none
+  # A steps relay's messages arrive on its entry channels; a class with none
   # has nothing its messages could arrive on.
   defp check_entry(is, factory_id, topo) do
     if map_size(topo.entries) == 0, do: [{:NoEntryChannel, factory_id} | is], else: is

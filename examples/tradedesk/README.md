@@ -5,17 +5,17 @@ standalone project. It depends on `flezha_sdk` and Jason alone, the way your own
 project would; until `flezha_sdk` is released, `mix.exs` names it by a path into
 this checkout ([Building from a checkout](#building-from-a-checkout)).
 
-It holds the desk's two operators and the runner that serves them, a separate
+It holds the desk's two relays and the runner that serves them, a separate
 BEAM node that connects to a controller over its socket. The guides write them
 one tasklet at a time.
 
 | File | What is in it |
 |---|---|
 | `lib/tradedesk/application.ex` | the runner: this node joins the `trading` namespace and registers both factories |
-| `lib/tradedesk/trade_watcher.ex` | the ETL stream, a flow operator: the exchange's trade messages in, a cell per symbol, buy signals out |
+| `lib/tradedesk/trade_watcher.ex` | the ETL stream, a flow relay: the exchange's trade messages in, a cell per symbol, buy signals out |
 | `lib/tradedesk/track_prices.ex` | keeps each symbol's last ten prices, and compares a new price with their average |
 | `lib/tradedesk/buy_above_average.ex` | starts an order when a price is 2 % or more above its average |
-| `lib/tradedesk/order_executor.ex` | the workflow, a steps operator: two steps in order, then two more on the same placed order. The order an instance is started with is its `OrderTicket` |
+| `lib/tradedesk/order_executor.ex` | the workflow, a steps relay: two steps in order, then two more on the same placed order. The order an instance is started with is its `OrderTicket` |
 | `lib/tradedesk/reserve_funds.ex` | step one: puts the money aside, and releases it again if the order is undone |
 | `lib/tradedesk/place_order.ex` | step two: places the paper order, and cancels it if the order is undone |
 | `lib/tradedesk/confirm_fill.ex` | waits ten seconds for the exchange, confirms the fill and ends the order with its result, and refuses an order above the exchange's limit |
@@ -55,7 +55,7 @@ One instance of `order_executor` is one order. `--text` carries the order on the
 `order` channel:
 
 ```sh
-flz operator start order_executor --id order_by_hand --namespace trading \
+flz relay start order_executor --id order_by_hand --namespace trading \
   --text '{"symbol": "EUR/USD", "quantity": 10}' --channel order
 ```
 
@@ -67,15 +67,15 @@ The runner's terminal shows the order being booked at once, while
 ```
 
 About ten seconds later, once `confirm_fill` has its answer from the exchange,
-the instance ends. `flz operator info` shows how the order ended:
+the instance ends. `flz relay info` shows how the order ended:
 
 ```sh
-flz operator info order_by_hand --namespace trading
+flz relay info order_by_hand --namespace trading
 ```
 
 ```
 ...
-Operator: order_by_hand
+Relay: order_by_hand
   Run: steps
   Phase: finished
   Status: ok
@@ -88,7 +88,7 @@ The paper exchange fills at most 100 at a time, so `confirm_fill` refuses a
 larger order. Start one the same way, with a quantity above the limit:
 
 ```sh
-flz operator start order_executor --id order_too_big --namespace trading \
+flz relay start order_executor --id order_too_big --namespace trading \
   --text '{"symbol": "EUR/USD", "quantity": 500}' --channel order
 ```
 
@@ -112,12 +112,12 @@ the booking stays. The tries are logged at the `debug` level, which a
 ```
 
 ```sh
-flz operator info order_too_big --namespace trading
+flz relay info order_too_big --namespace trading
 ```
 
 ```
 ...
-Operator: order_too_big
+Relay: order_too_big
   Run: steps
   Phase: finished
   Status: error
@@ -144,4 +144,4 @@ package's socket client with a Rust toolchain, so it takes a few minutes.
 
 The echo in [`../echo`](../echo/README.md) is the Part 1 project, and
 [`docs/guides/runner_deployment.md`](../../../../docs/guides/runner_deployment.md)
-walks through what a tasklet, an operator and a runner each are.
+walks through what a tasklet, a relay and a runner each are.

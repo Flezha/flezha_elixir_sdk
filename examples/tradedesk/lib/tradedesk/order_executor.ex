@@ -1,9 +1,9 @@
 defmodule Tradedesk.OrderExecutor do
   @moduledoc """
-  The desk's steps operator: one instance per order, which runs its steps
+  The desk's steps relay: one instance per order, which runs its steps
   once and then ends.
 
-  A steps operator declares its steps the way a flow operator declares
+  A steps relay declares its steps the way a flow relay declares
   its graph, on the same builder, and the controller schedules, restarts and
   relocates it in the same way. What differs is the lifecycle: each step's
   output is written down as it commits, so an instance that is interrupted
@@ -16,7 +16,7 @@ defmodule Tradedesk.OrderExecutor do
   is released. A step with no `compensate/3` is skipped, which is why the
   desk's book is left alone.
   """
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "order_executor",
     # one instance per order; each step runs once
     # a failed step undoes the finished ones
@@ -53,7 +53,7 @@ defmodule Tradedesk.OrderExecutor do
   refusal of the fill unwinds the steps before it.
 
   Nothing ends on a sink: the last step ends the instance with its result,
-  which `flz operator info` shows.
+  which `flz relay info` shows.
   """
   @impl true
   def channels(c) do

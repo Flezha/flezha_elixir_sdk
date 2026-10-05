@@ -6,7 +6,7 @@ defmodule Flezha.SDK.Cell do
   `Flezha.SDK.Cell.Room` arrives as a cast, so its pusher never waits on a
   Cell that is mid-run; one that finds none arrives as a `GenServer.call` the
   Cell answers only when a slot frees — never dropped, never refused (the
-  caller, the Operator router, waits, which is the documented co-tenancy
+  caller, the Relay router, waits, which is the documented co-tenancy
   cost); `:drop_newest`/`:drop_oldest` arrive as casts. A completed dispatch bumps `dispatches`; an exhausted ladder parks
   the input and HOLDS the Cell until the controller's `ParkPayloadAck`.
 
@@ -16,15 +16,15 @@ defmodule Flezha.SDK.Cell do
   offset rather than only changes — is the writer of it: after a successful dispatch it ships one
   `cell_state_change` frame per recorded change at the next seq on one
   secondary stream, before the dispatch's outputs leave, then writes its
-  `{state, seq}` into the Operator's slot table so a replacement started
+  `{state, seq}` into the Relay's slot table so a replacement started
   after an untrappable kill continues on the same seq line. A frame no stream
   will take is held and replayed by `rebind/2`, so "before the outputs leave"
   survives a reconnect as well; an eviction hands what is still held, and the
-  delete it owes, to the Operator, because a hold that dies with the process
+  delete it owes, to the Relay, because a hold that dies with the process
   that owned it is not a hold. It answers a restore (fold, re-arm), a
   compaction (the snapshot after its records), a live read and a state apply,
   each in mailbox order so no dispatch interleaves. With the class's persistence off the seq advances and nothing
-  ships. Its outputs reach the Operator with their metadata, their keys and
+  ships. Its outputs reach the Relay with their metadata, their keys and
   the seq the dispatch started at — what a keyed sink's stamps read.
 
   Its timers fire through the same queue and ladder as its inputs, with
@@ -46,7 +46,7 @@ defmodule Flezha.SDK.Cell do
 
   alias Flezha.SDK.{Call, Counters, Ctx, Error, Hold, Knob, Park, Prefix, Tasklet, Timers}
   alias Flezha.SDK.Cell.{Clock, Records, Room, State, Tier}
-  alias Flezha.SDK.Operator.Inbox
+  alias Flezha.SDK.Relay.Inbox
 
   # The live read's two verdicts. Every other refusal is `Flezha.SDK.Call`'s.
   @read_verdict %{timeout: {:error, :busy}, other: {:error, :gone}}
@@ -99,9 +99,9 @@ defmodule Flezha.SDK.Cell do
     defstruct [:value, :offset, :call, :replay, forwarded?: false]
   end
 
-  # --- API (used by the Operator router) ---
+  # --- API (used by the Relay router) ---
 
-  @doc "Start a Cell, unlinked: its Operator monitors it, and it monitors its Operator."
+  @doc "Start a Cell, unlinked: its Relay monitors it, and it monitors its Relay."
   def start(opts), do: GenServer.start(__MODULE__, opts)
 
   @doc """
@@ -220,20 +220,20 @@ defmodule Flezha.SDK.Cell do
   @doc """
   Evict a Cell the caller proved idle: it ships `delete_cell_state` when
   it persists, drops its slot so a successor is a cold start, and stops. What
-  no stream would take goes to the Operator before the reply, so the caller
+  no stream would take goes to the Relay before the reply, so the caller
   knows the handoff is queued there by the time it sees `:evicted`.
   """
   @spec evict(pid()) :: :evicted | :busy | :gone
   def evict(pid), do: Call.cell(pid, :evict, on_error: %{timeout: :busy, other: :gone})
 
   @doc """
-  A Cell's slot identity in `Flezha.SDK.Counters`. Its Operator computes the
+  A Cell's slot identity in `Flezha.SDK.Counters`. Its Relay computes the
   same value to release the slot of a Cell that died mid-dispatch — the one
   unwind an `after` inside the Cell cannot reach.
   """
   @spec identity(binary(), term(), term()) :: term()
-  def identity(operator_id, node_ref, cell_key),
-    do: {operator_id, node_ref, cell_key}
+  def identity(relay_id, node_ref, cell_key),
+    do: {relay_id, node_ref, cell_key}
 
   @doc """
   Bind the Cell onto fresh secondaries and replay the records it held while
@@ -255,20 +255,20 @@ defmodule Flezha.SDK.Cell do
   def init(opts) do
     module = Keyword.fetch!(opts, :module)
     cell_key = Keyword.get(opts, :cell_key)
-    operator_id = Keyword.fetch!(opts, :operator_id)
-    identity = Park.identity(operator_id, module.name(), cell_key || "")
+    relay_id = Keyword.fetch!(opts, :relay_id)
+    identity = Park.identity(relay_id, module.name(), cell_key || "")
     changeful? = Tasklet.changeful?(module)
     tier = Map.merge(%State{}.tier, Keyword.get(opts, :tier, %{}))
     slots = Keyword.get(opts, :slots)
     slot = Records.seed(slots, identity, module, cell_key)
-    operator = Keyword.fetch!(opts, :operator)
+    relay = Keyword.fetch!(opts, :relay)
     counters = Keyword.fetch!(opts, :counters)
     credit = Keyword.get(opts, :credit)
-    Process.monitor(operator)
+    Process.monitor(relay)
 
     state = %State{
-      operator: operator,
-      operator_id: operator_id,
+      relay: relay,
+      relay_id: relay_id,
       node_ref: Keyword.fetch!(opts, :node_ref),
       node_name: Keyword.get(opts, :node_name),
       input_channel: Keyword.get(opts, :input_channel),
@@ -283,10 +283,10 @@ defmodule Flezha.SDK.Cell do
       park: %{%State{}.park | enabled?: Keyword.get(opts, :park_on_exhaustion, true)},
       slots: slots,
       credit: credit,
-      # The ctx's static facts, built once; the node's come from the Operator.
+      # The ctx's static facts, built once; the node's come from the Relay.
       ctx:
         Ctx.template(module, cell_key, identity, [
-          {:operator_id, operator_id},
+          {:relay_id, relay_id},
           {:counters, counters} | Keyword.get(opts, :ctx_opts, [])
         ]),
       timers: Clock.seed(module, slot, firing_gate(opts)),
@@ -340,7 +340,7 @@ defmodule Flezha.SDK.Cell do
       # An accepted-but-unqueued push is invisible to `dispatches` and to the
       # handout report, so it carries its own: the age reported is the oldest
       # one's, which is why marking is idempotent while any is held.
-      Counters.deferred_started(s.counters, identity(s.operator_id, s.node_ref, s.cell_key))
+      Counters.deferred_started(s.counters, identity(s.relay_id, s.node_ref, s.cell_key))
       {:noreply, %{s | waiters: :queue.in({from, value}, s.waiters)}}
     end
   end
@@ -367,7 +367,7 @@ defmodule Flezha.SDK.Cell do
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.task_state, s.change_seq}, s}
 
-  # What a sleeping steps operator wakes at: the earliest processing-time timer.
+  # What a sleeping steps relay wakes at: the earliest processing-time timer.
   def handle_call(:earliest_timer, _from, %State{} = s),
     do: {:reply, List.first(Timers.all(s.timers.pending, :processing_time)), s}
 
@@ -447,7 +447,7 @@ defmodule Flezha.SDK.Cell do
   def handle_info({:timer_due, at}, %State{timers: %{gate: gate}} = s) when gate != nil do
     if Timers.contains?(s.timers.pending, :processing_time, at),
       do:
-        Inbox.firing_due(s.operator, s.node_ref, s.cell_key, %Fire{
+        Inbox.firing_due(s.relay, s.node_ref, s.cell_key, %Fire{
           kind: :processing_time,
           at: at
         })
@@ -458,7 +458,7 @@ defmodule Flezha.SDK.Cell do
   def handle_info({:timer_due, at}, %State{} = s) do
     if Room.free(s.room) < 1 do
       # A due message that finds no room comes back later, never drops.
-      Process.send_after(self(), {:timer_due, at}, Knob.arm(:cell_wake_retry, 1, s.operator_id))
+      Process.send_after(self(), {:timer_due, at}, Knob.arm(:cell_wake_retry, 1, s.relay_id))
       {:noreply, s}
     else
       upto = max(at, System.system_time(:millisecond))
@@ -472,10 +472,10 @@ defmodule Flezha.SDK.Cell do
     end
   end
 
-  # The Operator is gone — stopped or crashed — so this Cell ends with it,
+  # The Relay is gone — stopped or crashed — so this Cell ends with it,
   # quietly, through `terminate/2`. Not a link: a link discards a `:normal`
-  # exit signal, which is exactly how a removed operator's Cells outlived it.
-  def handle_info({:DOWN, _ref, :process, operator, _reason}, %State{operator: operator} = s),
+  # exit signal, which is exactly how a removed relay's Cells outlived it.
+  def handle_info({:DOWN, _ref, :process, relay, _reason}, %State{relay: relay} = s),
     do: {:stop, :normal, s}
 
   # The interval's delay elapsed: the close goes on the queue rather than
@@ -502,7 +502,7 @@ defmodule Flezha.SDK.Cell do
 
   def handle_info(_msg, s), do: {:noreply, s}
 
-  # Evicted, or its Operator gone: the armed timers go with the process.
+  # Evicted, or its Relay gone: the armed timers go with the process.
   @impl true
   def terminate(_reason, %State{} = s), do: s |> Tier.cancel_deadline() |> Clock.disarm_all()
 
@@ -580,7 +580,7 @@ defmodule Flezha.SDK.Cell do
   # Release this Cell's deferred-push slot: nothing is held any more.
   # Idempotent, so the drain need not know whether one was ever taken.
   defp note_no_deferral(%State{} = s) do
-    Counters.deferred_finished(s.counters, identity(s.operator_id, s.node_ref, s.cell_key))
+    Counters.deferred_finished(s.counters, identity(s.relay_id, s.node_ref, s.cell_key))
     s
   end
 
@@ -601,7 +601,7 @@ defmodule Flezha.SDK.Cell do
     %{s | tier: %{s.tier | written: nil}}
   end
 
-  # The Operator pushes every member before it sends the close, and one
+  # The Relay pushes every member before it sends the close, and one
   # sender's messages arrive in order, so the members are ahead of the close
   # in the mailbox; queueing the close keeps it behind them until they have
   # been dispatched into the slice.
@@ -675,7 +675,7 @@ defmodule Flezha.SDK.Cell do
   # (raise, throw, exit) must release its slot on the way out or the runner
   # would report a stall that healed long ago.
   defp dispatch(%State{} = s, item, input) do
-    identity = identity(s.operator_id, s.node_ref, s.cell_key)
+    identity = identity(s.relay_id, s.node_ref, s.cell_key)
     Counters.dispatch_started(s.counters, identity)
     s = take(s, input)
     offset = input && input.offset
@@ -728,7 +728,7 @@ defmodule Flezha.SDK.Cell do
   defp request_completion(%State{} = s, nil), do: s
 
   defp request_completion(%State{} = s, result) do
-    Inbox.completed(s.operator, s.node_ref, s.cell_key, result)
+    Inbox.completed(s.relay, s.node_ref, s.cell_key, result)
     s
   end
 
@@ -751,7 +751,7 @@ defmodule Flezha.SDK.Cell do
       else: flush_emits(s, facts.emits, handout_seq, {offset, facts.call}, report)
   end
 
-  # A steps operator firing's removal is durable when the stage that served it
+  # A steps relay firing's removal is durable when the stage that served it
   # commits, as a message leaves the input log at the commit that consumed it:
   # it stays out of this dispatch's record until the driver's release.
   defp hold_removal(%State{timers: %{gate: :held}} = s, %Fire{kind: kind, at: at}, facts) do
@@ -908,11 +908,11 @@ defmodule Flezha.SDK.Cell do
     )
 
     :telemetry.execute([:flezha, :sdk, :retry], %{count: 1}, %{
-      operator_id: s.operator_id,
+      relay_id: s.relay_id,
       attempt: attempt
     })
 
-    Knob.wait(:sdk_retry, attempt, s.operator_id, base: s.retry_backoff_ms)
+    Knob.wait(:sdk_retry, attempt, s.relay_id, base: s.retry_backoff_ms)
     run_ladder(s, value, seed, attempt + 1)
   end
 
@@ -921,11 +921,11 @@ defmodule Flezha.SDK.Cell do
   # nothing is held — the record is the durability, so there is no ack to wait
   # for.
   # A steps stage's Cell does not park: its exhausted ladder fails the
-  # tasklet, and the driver unwinds the run. A flow operator's Cell parks to the
-  # DLQ, which is the only behaviour that existed before steps operators.
+  # tasklet, and the driver unwinds the run. A flow relay's Cell parks to the
+  # DLQ, which is the only behaviour that existed before steps relays.
   defp exhausted(%State{park: %{enabled?: false}} = s, _value, error, attempts, _input) do
     GenServer.cast(
-      s.operator,
+      s.relay,
       {:stage_failed, s.node_ref, format_error(error), attempts, s.cell_key || ""}
     )
 
@@ -949,9 +949,9 @@ defmodule Flezha.SDK.Cell do
     body = Park.body(park_id, park_channel(s), error, attempts, value, call)
 
     Park.ship(
-      s.operator,
+      s.relay,
       self(),
-      Park.identity(s.operator_id, s.module.name(), s.cell_key),
+      Park.identity(s.relay_id, s.module.name(), s.cell_key),
       body
     )
 
@@ -966,10 +966,10 @@ defmodule Flezha.SDK.Cell do
     parked_event(s)
   end
 
-  defp park_channel(%State{} = s), do: s.input_channel || s.node_name || s.operator_id
+  defp park_channel(%State{} = s), do: s.input_channel || s.node_name || s.relay_id
 
   defp parked_event(%State{} = s) do
-    :telemetry.execute([:flezha, :sdk, :parked], %{count: 1}, %{operator_id: s.operator_id})
+    :telemetry.execute([:flezha, :sdk, :parked], %{count: 1}, %{relay_id: s.relay_id})
     s
   end
 
@@ -978,7 +978,7 @@ defmodule Flezha.SDK.Cell do
 
   defp flush_emits(%State{} = s, emits, handout_seq, input, report) do
     {s, report} = routing_report(s, report)
-    Inbox.emitted(s.operator, s.node_ref, s.cell_key, emits, handout_seq, input, report)
+    Inbox.emitted(s.relay, s.node_ref, s.cell_key, emits, handout_seq, input, report)
     s
   end
 
@@ -1001,7 +1001,7 @@ defmodule Flezha.SDK.Cell do
     if is_struct(dropped, Input), do: Prefix.release(s.tier.prefix, dropped.offset)
 
     :telemetry.execute([:flezha, :sdk, :mailbox], %{count: 1}, %{
-      operator_id: s.operator_id,
+      relay_id: s.relay_id,
       policy: policy
     })
   end

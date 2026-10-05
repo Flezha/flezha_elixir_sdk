@@ -268,49 +268,49 @@
     },
     "call.absorbed": {
       "class": "conflict",
-      "message": "operator '{operator}' took the call's input without running it: it was a duplicate, or an input hook filtered it out, so no answer will come",
-      "details": ["operator"]
+      "message": "relay '{relay}' took the call's input without running it: it was a duplicate, or an input hook filtered it out, so no answer will come",
+      "details": ["relay"]
     },
     "call.busy": {
       "class": "unavailable",
-      "message": "operator '{operator}' already owes answers to {pending_max} waiting callers; nothing was sent, try again later",
-      "hint": "raise FLEZHA_CALL_PENDING_MAX if the operator is meant to hold more waiting callers",
-      "details": ["operator", "pending_max"]
+      "message": "relay '{relay}' already owes answers to {pending_max} waiting callers; nothing was sent, try again later",
+      "hint": "raise FLEZHA_CALL_PENDING_MAX if the relay is meant to hold more waiting callers",
+      "details": ["relay", "pending_max"]
     },
     "call.callee_ended": {
       "class": "unavailable",
-      "message": "operator '{operator}' ended ({status}) before it answered the call",
-      "details": ["operator", "status"]
+      "message": "relay '{relay}' ended ({status}) before it answered the call",
+      "details": ["relay", "status"]
     },
     "call.failed": {
       "class": "unavailable",
-      "message": "operator '{operator}' dead-lettered the call's input as '{dlq_ref}': {error}",
-      "hint": "flz dlq list {operator}",
-      "details": ["operator", "dlq_ref", "error"]
+      "message": "relay '{relay}' dead-lettered the call's input as '{dlq_ref}': {error}",
+      "hint": "flz dlq list {relay}",
+      "details": ["relay", "dlq_ref", "error"]
     },
     "call.not_accepted": {
       "class": "conflict",
-      "message": "operator '{operator}' runs once over one input and has already taken it, so it cannot take the call's input",
-      "details": ["operator"]
+      "message": "relay '{relay}' runs once over one input and has already taken it, so it cannot take the call's input",
+      "details": ["relay"]
     },
     "call.target_unkeyed": {
       "class": "invalid",
-      "message": "'{operator}' is a partition group; name the key whose member should take the input, or one of its members: {members}",
+      "message": "'{relay}' is a partition group; name the key whose member should take the input, or one of its members: {members}",
       "hint": "pass --key <key>",
-      "details": ["operator", "members"],
+      "details": ["relay", "members"],
       "reasons": [
-        {"tag": "unkeyed", "args": ["operator", "members"]}
+        {"tag": "unkeyed", "args": ["relay", "members"]}
       ]
     },
     "call.timeout": {
       "class": "unavailable",
-      "message": "operator '{operator}' did not answer within {deadline_ms} ms; the input stays accepted and its turn still runs",
-      "details": ["operator", "deadline_ms"]
+      "message": "relay '{relay}' did not answer within {deadline_ms} ms; the input stays accepted and its turn still runs",
+      "details": ["relay", "deadline_ms"]
     },
     "call.unavailable": {
       "class": "unavailable",
-      "message": "operator '{operator}' cannot answer the call: {reason}",
-      "details": ["operator", "reason"]
+      "message": "relay '{relay}' cannot answer the call: {reason}",
+      "details": ["relay", "reason"]
     },
     "cli.auth_dir_missing": {
       "class": "not_found",
@@ -339,10 +339,10 @@
     },
     "commit.not_owner": {
       "class": "conflict",
-      "message": "this controller does not own operator '{operator}', so its commit is refused",
-      "details": ["operator"],
+      "message": "this controller does not own relay '{relay}', so its commit is refused",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "not_owner", "args": ["operator"]}
+        {"tag": "not_owner", "args": ["relay"]}
       ]
     },
     "commit.oversized_handoff": {
@@ -454,7 +454,7 @@
     },
     "dlq.bad_entry_ref": {
       "class": "invalid",
-      "message": "'{entry}' is not an entry reference; write it as <operator>/<tasklet>/<entry-id>",
+      "message": "'{entry}' is not an entry reference; write it as <relay>/<tasklet>/<entry-id>",
       "hint": "flz dlq list",
       "details": ["entry"],
       "reasons": [
@@ -481,16 +481,16 @@
     },
     "durability.sync_ship_failed": {
       "class": "unavailable",
-      "message": "operator '{operator}' declares durable: remote, and shipping its state to the durability backend failed: {reason}",
-      "details": ["operator", "reason"],
+      "message": "relay '{relay}' declares durable: remote, and shipping its state to the durability backend failed: {reason}",
+      "details": ["relay", "reason"],
       "reasons": [
-        {"tag": "sync_ship_failed", "args": ["operator", "reason"]}
+        {"tag": "sync_ship_failed", "args": ["relay", "reason"]}
       ]
     },
     "http.answer_invalid": {
       "class": "invalid",
-      "message": "operator '{operator}' answered the request with something that is not an HTTP answer envelope: {reason}",
-      "details": ["operator", "reason"]
+      "message": "relay '{relay}' answered the request with something that is not an HTTP answer envelope: {reason}",
+      "details": ["relay", "reason"]
     },
     "http.body_timeout": {
       "class": "invalid",
@@ -528,8 +528,8 @@
     },
     "http.streams_full": {
       "class": "unavailable",
-      "message": "operator '{operator}' already has {max_streams} streams open; try again",
-      "details": ["operator", "max_streams"]
+      "message": "relay '{relay}' already has {max_streams} streams open; try again",
+      "details": ["relay", "max_streams"]
     },
     "http.tls_required": {
       "class": "invalid",
@@ -552,9 +552,9 @@
     },
     "input.dead_lettered": {
       "class": "unavailable",
-      "message": "an input of operator '{operator}' on channel '{channel}' was dead-lettered as '{entry}' after {attempts} attempt(s): {error}",
+      "message": "an input of relay '{relay}' on channel '{channel}' was dead-lettered as '{entry}' after {attempts} attempt(s): {error}",
       "hint": "flz dlq show {entry}",
-      "details": ["operator", "channel", "entry", "tasklet", "attempts", "error"]
+      "details": ["relay", "channel", "entry", "tasklet", "attempts", "error"]
     },
     "internal.uncatalogued": {
       "class": "internal",
@@ -563,14 +563,14 @@
     },
     "listener.detached": {
       "class": "conflict",
-      "message": "the listener on operator '{operator}' was disabled by another caller",
-      "details": ["operator"]
+      "message": "the listener on relay '{relay}' was disabled by another caller",
+      "details": ["relay"]
     },
     "listener.overrun": {
       "class": "unavailable",
-      "message": "the listener on operator '{operator}' fell more than {bytes} bytes or {frames} frames behind and was ended",
-      "hint": "flz operator listen {operator} again, or raise FLEZHA_LISTENER_PENDING_BYTES",
-      "details": ["operator", "bytes", "frames"]
+      "message": "the listener on relay '{relay}' fell more than {bytes} bytes or {frames} frames behind and was ended",
+      "hint": "flz relay listen {relay} again, or raise FLEZHA_LISTENER_PENDING_BYTES",
+      "details": ["relay", "bytes", "frames"]
     },
     "mcp.unknown_code": {
       "class": "not_found",
@@ -652,7 +652,7 @@
     },
     "namespace.unknown_quota_field": {
       "class": "invalid",
-      "message": "'{field}' is not a quota field; the fields are max_operators, max_cells_per_operator, max_mailbox_bytes_total, max_message_rate_per_second, max_state_bytes and max_runners",
+      "message": "'{field}' is not a quota field; the fields are max_relays, max_cells_per_relay, max_mailbox_bytes_total, max_message_rate_per_second, max_state_bytes and max_runners",
       "details": ["field"],
       "reasons": [
         {"tag": "unknown_quota_field", "args": ["field"]}
@@ -683,24 +683,24 @@
         {"tag": "pubsub_sink_disabled"}
       ]
     },
-    "operator.already_running": {
+    "relay.already_running": {
       "class": "conflict",
-      "message": "operator '{operator}' is already running",
-      "hint": "flz operator list",
-      "details": ["operator"],
+      "message": "relay '{relay}' is already running",
+      "hint": "flz relay list",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "id_in_use", "args": ["operator"]}
+        {"tag": "id_in_use", "args": ["relay"]}
       ]
     },
-    "operator.busy": {
+    "relay.busy": {
       "class": "conflict",
-      "message": "the operator is busy moving to another runner; try again",
+      "message": "the relay is busy moving to another runner; try again",
       "details": [],
       "reasons": [
         {"tag": "busy"}
       ]
     },
-    "operator.channel_without_text": {
+    "relay.channel_without_text": {
       "class": "invalid",
       "message": "--channel names the entry channel of a first message, and no --text was given",
       "details": [],
@@ -708,7 +708,7 @@
         {"tag": "channel_without_text"}
       ]
     },
-    "operator.factory_run_ambiguous": {
+    "relay.factory_run_ambiguous": {
       "class": "conflict",
       "message": "factory '{factory}' in namespace '{namespace}' is announced as both flow and steps, and neither is established; serve it from runners that agree on how it runs",
       "details": ["namespace", "factory"],
@@ -716,7 +716,7 @@
         {"tag": "factory_run_ambiguous", "args": ["namespace", "factory"]}
       ]
     },
-    "operator.factory_run_undeclared": {
+    "relay.factory_run_undeclared": {
       "class": "unavailable",
       "message": "factory '{factory}' in namespace '{namespace}' is served only by runners that announce no run for it, or a run that is neither flow nor steps, and such a runner is never placed on",
       "details": ["namespace", "factory"],
@@ -724,7 +724,7 @@
         {"tag": "factory_run_undeclared", "args": ["namespace", "factory"]}
       ]
     },
-    "operator.factory_run_unserved": {
+    "relay.factory_run_unserved": {
       "class": "unavailable",
       "message": "factory '{factory}' in namespace '{namespace}' is established as {run}, and every runner serving it announces the other run",
       "details": ["namespace", "factory", "run"],
@@ -732,7 +732,7 @@
         {"tag": "factory_run_unserved", "args": ["namespace", "factory", "run"]}
       ]
     },
-    "operator.factory_language_ambiguous": {
+    "relay.factory_language_ambiguous": {
       "class": "conflict",
       "message": "factory '{factory}' in namespace '{namespace}' is served in more than one SDK language and none is established; run one language's runners, or clear the factory's durable state",
       "details": ["namespace", "factory"],
@@ -740,7 +740,7 @@
         {"tag": "factory_language_ambiguous", "args": ["namespace", "factory"]}
       ]
     },
-    "operator.factory_language_undeclared": {
+    "relay.factory_language_undeclared": {
       "class": "unavailable",
       "message": "factory '{factory}' in namespace '{namespace}' is served only by runners that declare no SDK language, and such a runner is never placed on",
       "details": ["namespace", "factory"],
@@ -748,7 +748,7 @@
         {"tag": "factory_language_undeclared", "args": ["namespace", "factory"]}
       ]
     },
-    "operator.factory_language_unserved": {
+    "relay.factory_language_unserved": {
       "class": "unavailable",
       "message": "factory '{factory}' in namespace '{namespace}' is established in SDK language {language}, and no connected runner of that language serves it; start one, or clear the factory's durable state",
       "details": ["namespace", "factory", "language"],
@@ -756,32 +756,32 @@
         {"tag": "factory_language_unserved", "args": ["namespace", "factory", "language"]}
       ]
     },
-    "operator.factory_mismatch": {
+    "relay.factory_mismatch": {
       "class": "conflict",
-      "message": "'{operator}' in namespace '{namespace}' is an operator of factory '{actual}', not of '{factory}', so a call to factory '{factory}' cannot reach it",
-      "details": ["namespace", "operator", "factory", "actual"],
+      "message": "'{relay}' in namespace '{namespace}' is a relay of factory '{actual}', not of '{factory}', so a call to factory '{factory}' cannot reach it",
+      "details": ["namespace", "relay", "factory", "actual"],
       "reasons": [
-        {"tag": "factory_mismatch", "args": ["namespace", "operator", "factory", "actual"]}
+        {"tag": "factory_mismatch", "args": ["namespace", "relay", "factory", "actual"]}
       ]
     },
-    "operator.factory_not_steps": {
+    "relay.factory_not_steps": {
       "class": "invalid",
-      "message": "factory '{factory}' is a flow operator, and only a steps one can be spawned or scheduled",
+      "message": "factory '{factory}' is a flow relay, and only a steps one can be spawned or scheduled",
       "details": ["factory", "namespace"],
       "reasons": [
         {"tag": ["factory_run_mismatch", "steps"], "args": ["namespace", "factory", "_"]},
         {"tag": "unschedulable_run", "args": ["factory"]}
       ]
     },
-    "operator.factory_not_flow": {
+    "relay.factory_not_flow": {
       "class": "invalid",
-      "message": "factory '{factory}' is a steps operator, and only a flow one is started here",
+      "message": "factory '{factory}' is a steps relay, and only a flow one is started here",
       "details": ["factory", "namespace"],
       "reasons": [
         {"tag": ["factory_run_mismatch", "flow"], "args": ["namespace", "factory", "_"]}
       ]
     },
-    "operator.factory_unknown": {
+    "relay.factory_unknown": {
       "class": "not_found",
       "message": "no runner in namespace '{namespace}' serves factory '{factory}'",
       "hint": "flz runner list --namespace {namespace}",
@@ -790,7 +790,7 @@
         {"tag": "factory_unknown", "args": ["namespace", "factory"]}
       ]
     },
-    "operator.first_message_not_text": {
+    "relay.first_message_not_text": {
       "class": "invalid",
       "message": "a first message and its channel must be text",
       "details": [],
@@ -798,41 +798,41 @@
         {"tag": "first_message_not_text"}
       ]
     },
-    "operator.group_base_taken": {
+    "relay.group_base_taken": {
       "class": "conflict",
-      "message": "'{operator}' names a partition group of {members} live members; start it with --partitions {partitions} to converge it, or stop the group first",
-      "details": ["operator", "members", "partitions"],
+      "message": "'{relay}' names a partition group of {members} live members; start it with --partitions {partitions} to converge it, or stop the group first",
+      "details": ["relay", "members", "partitions"],
       "reasons": [
-        {"tag": "group_base_claim", "args": ["operator", "members", "partitions"]}
+        {"tag": "group_base_claim", "args": ["relay", "members", "partitions"]}
       ]
     },
-    "operator.group_id_too_long": {
+    "relay.group_id_too_long": {
       "class": "invalid",
-      "message": "group id '{operator}' is too long for {partitions} partitions: the member suffix leaves at most {max} bytes for it",
-      "details": ["operator", "partitions", "max"],
+      "message": "group id '{relay}' is too long for {partitions} partitions: the member suffix leaves at most {max} bytes for it",
+      "details": ["relay", "partitions", "max"],
       "reasons": [
-        {"tag": "group_id_too_long", "args": ["operator", "partitions", "max"]}
+        {"tag": "group_id_too_long", "args": ["relay", "partitions", "max"]}
       ]
     },
-    "operator.group_not_found": {
+    "relay.group_not_found": {
       "class": "not_found",
       "message": "no partition group '{group}' in namespace '{namespace}'",
-      "hint": "flz operator list --namespace {namespace}",
+      "hint": "flz relay list --namespace {namespace}",
       "details": ["namespace", "group"],
       "reasons": [
         {"tag": "group_not_found", "args": ["namespace", "group"]}
       ]
     },
-    "operator.group_partition_mismatch": {
+    "relay.group_partition_mismatch": {
       "class": "conflict",
       "message": "group '{group}' cannot converge to {partitions} partitions: its live member '{member}' declares {declared}, and a start never moves Cell state",
-      "hint": "flz operator scale {group} {partitions}",
+      "hint": "flz relay scale {group} {partitions}",
       "details": ["group", "partitions", "member", "declared"],
       "reasons": [
         {"tag": "group_partition_mismatch", "args": ["group", "partitions", "member", "declared"]}
       ]
     },
-    "operator.group_stop_partial": {
+    "relay.group_stop_partial": {
       "class": "unavailable",
       "message": "partition group '{group}' did not stop completely: {failed} did not stop",
       "details": ["group", "failed"],
@@ -840,23 +840,23 @@
         {"tag": "group_stop_partial", "args": ["group", "failed"]}
       ]
     },
-    "operator.id_too_long": {
+    "relay.id_too_long": {
       "class": "invalid",
-      "message": "operator id '{operator}' is longer than {limit} bytes",
-      "details": ["operator", "limit"],
+      "message": "relay id '{relay}' is longer than {limit} bytes",
+      "details": ["relay", "limit"],
       "reasons": [
-        {"tag": "id_too_long", "args": ["operator", "limit"]}
+        {"tag": "id_too_long", "args": ["relay", "limit"]}
       ]
     },
-    "operator.input_refused": {
+    "relay.input_refused": {
       "class": "unavailable",
-      "message": "operator '{operator}' refused the input because its durable append failed",
-      "details": ["operator"],
+      "message": "relay '{relay}' refused the input because its durable append failed",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "input_refused", "args": ["operator"]}
+        {"tag": "input_refused", "args": ["relay"]}
       ]
     },
-    "operator.iteration_not_committed": {
+    "relay.iteration_not_committed": {
       "class": "invalid",
       "message": "iteration {iteration} has not committed, so there is no boundary to rewind to there",
       "details": ["iteration", "committed"],
@@ -864,7 +864,7 @@
         {"tag": "uncommitted_iteration", "args": ["iteration", "committed"]}
       ]
     },
-    "operator.member_unreadable": {
+    "relay.member_unreadable": {
       "class": "unavailable",
       "message": "partition member '{member}' could not be read to rescale from",
       "details": ["member", "reason"],
@@ -872,32 +872,32 @@
         {"tag": "member_unreadable", "args": ["member", "reason"]}
       ]
     },
-    "operator.missing_fields": {
+    "relay.missing_fields": {
       "class": "invalid",
-      "message": "an operator start needs {fields}",
+      "message": "a relay start needs {fields}",
       "details": ["fields"],
       "reasons": [
         {"tag": "missing_fields", "args": ["fields"]}
       ]
     },
-    "operator.no_free_id": {
+    "relay.no_free_id": {
       "class": "conflict",
-      "message": "no free operator id was found for factory '{factory}' in {draws} draws",
-      "hint": "flz operator start {factory} --id <id>",
+      "message": "no free relay id was found for factory '{factory}' in {draws} draws",
+      "hint": "flz relay start {factory} --id <id>",
       "details": ["factory", "draws"],
       "reasons": [
         {"tag": "no_free_id", "args": ["factory", "draws"]}
       ]
     },
-    "operator.no_runner": {
+    "relay.no_runner": {
       "class": "unavailable",
-      "message": "the operator has no runner bound to it yet",
+      "message": "the relay has no runner bound to it yet",
       "details": [],
       "reasons": [
         {"tag": "no_runner"}
       ]
     },
-    "operator.no_runners": {
+    "relay.no_runners": {
       "class": "unavailable",
       "message": "no runner is connected in namespace '{namespace}'",
       "hint": "flz runner list --namespace {namespace}",
@@ -906,33 +906,33 @@
         {"tag": "no_runners", "args": ["namespace"]}
       ]
     },
-    "operator.not_accepting_input": {
+    "relay.not_accepting_input": {
       "class": "unavailable",
-      "message": "operator '{operator}' is not ready to accept input yet",
-      "details": ["operator"],
+      "message": "relay '{relay}' is not ready to accept input yet",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "not_accepting_input", "args": ["operator"]}
+        {"tag": "not_accepting_input", "args": ["relay"]}
       ]
     },
-    "operator.not_found": {
+    "relay.not_found": {
       "class": "not_found",
-      "message": "operator '{operator}' is not running in namespace '{namespace}'",
-      "hint": "flz operator list --namespace {namespace}",
-      "details": ["namespace", "operator"],
+      "message": "relay '{relay}' is not running in namespace '{namespace}'",
+      "hint": "flz relay list --namespace {namespace}",
+      "details": ["namespace", "relay"],
       "reasons": [
-        {"tag": "operator_not_found", "args": ["namespace", "operator"]}
+        {"tag": "relay_not_found", "args": ["namespace", "relay"]}
       ]
     },
-    "operator.not_running": {
+    "relay.not_running": {
       "class": "unavailable",
-      "message": "operator '{operator}' is not running; start it first",
-      "hint": "flz operator list",
-      "details": ["operator"],
+      "message": "relay '{relay}' is not running; start it first",
+      "hint": "flz relay list",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "operator_not_running", "args": ["operator"]}
+        {"tag": "relay_not_running", "args": ["relay"]}
       ]
     },
-    "operator.outside_retention": {
+    "relay.outside_retention": {
       "class": "invalid",
       "message": "seq {target} of Cell '{cell}' is older than its retention window; the earliest point kept is seq {earliest}",
       "details": ["cell", "target", "earliest"],
@@ -940,7 +940,7 @@
         {"tag": "outside_retention", "args": ["cell", "target", "earliest"]}
       ]
     },
-    "operator.partitioned_first_message": {
+    "relay.partitioned_first_message": {
       "class": "invalid",
       "message": "a partitioned start carries no first message, because a group's message reaches its member by key; send it through a keyed forward, or to a member id such as '{member}' once the group runs",
       "details": ["member"],
@@ -948,7 +948,7 @@
         {"tag": "partitioned_first_message", "args": ["member"]}
       ]
     },
-    "operator.partitions_out_of_range": {
+    "relay.partitions_out_of_range": {
       "class": "invalid",
       "message": "partitions must be between 2 and {max}, one per key group; got {partitions}",
       "details": ["partitions", "max"],
@@ -956,16 +956,16 @@
         {"tag": "partitions_out_of_range", "args": ["partitions", "max"]}
       ]
     },
-    "operator.replay_steps": {
+    "relay.replay_steps": {
       "class": "invalid",
-      "message": "'{cell}' is a Cell of a steps operator, whose baseline is a committed iteration across every Cell rather than one Cell's WAL seq, so it cannot be replayed; take the loop back with a rewind",
-      "hint": "flz operator rewind <operator> --to-iteration <n>",
+      "message": "'{cell}' is a Cell of a steps relay, whose baseline is a committed iteration across every Cell rather than one Cell's WAL seq, so it cannot be replayed; take the loop back with a rewind",
+      "hint": "flz relay rewind <relay> --to-iteration <n>",
       "details": ["cell"],
       "reasons": [
         {"tag": "steps_cell", "args": ["cell"]}
       ]
     },
-    "operator.rescale_id_held": {
+    "relay.rescale_id_held": {
       "class": "unavailable",
       "message": "the rescale stopped before anything moved: '{member}' still holds its id {timeout_ms} ms after it was stopped; retry once it has gone",
       "details": ["member", "timeout_ms"],
@@ -973,7 +973,7 @@
         {"tag": "member_id_held", "args": ["member", "timeout_ms"]}
       ]
     },
-    "operator.rescale_move_failed": {
+    "relay.rescale_move_failed": {
       "class": "internal",
       "message": "the rescale stopped: a Cell move failed, so the group is stopped with no member started; run the scale again to finish the remaining moves",
       "details": ["source", "destination", "reason"],
@@ -981,7 +981,7 @@
         {"tag": "cell_move_failed", "args": ["source", "destination", "reason"]}
       ]
     },
-    "operator.rescale_parked_entries": {
+    "relay.rescale_parked_entries": {
       "class": "conflict",
       "message": "the group holds parked DLQ entries ({entries}); replay or drop them before a rescale",
       "hint": "flz dlq list",
@@ -990,7 +990,7 @@
         {"tag": "parked_entries", "args": ["entries"]}
       ]
     },
-    "operator.remote_without_backend": {
+    "relay.remote_without_backend": {
       "class": "unavailable",
       "message": "factory '{factory}' declares durable: remote, and this controller has no durability backend; set FLEZHA_DURABILITY_BACKEND, or declare durable: local",
       "details": ["factory"],
@@ -998,7 +998,7 @@
         {"tag": "remote_without_backend", "args": ["factory"]}
       ]
     },
-    "operator.rescale_quiesce_timeout": {
+    "relay.rescale_quiesce_timeout": {
       "class": "unavailable",
       "message": "the rescale stopped before anything moved: '{member}' has not consumed its input log within the timeout; retry with a longer timeout, or let a checkpoint or a pass commit advance it",
       "details": ["member", "run", "watermark", "last_offset"],
@@ -1006,7 +1006,7 @@
         {"tag": "quiesce_timeout", "args": ["member", "run", "progress"]}
       ]
     },
-    "operator.rescale_running": {
+    "relay.rescale_running": {
       "class": "conflict",
       "message": "a rescale of '{group}' in namespace '{namespace}' is already running; wait for it to finish",
       "details": ["namespace", "group"],
@@ -1014,7 +1014,7 @@
         {"tag": "rescale_running", "args": ["namespace", "group"]}
       ]
     },
-    "operator.rewind_uncovered": {
+    "relay.rewind_uncovered": {
       "class": "conflict",
       "message": "a rewind to iteration {iteration} would unwind output on {channels}, written by a tasklet that declares no compensate hook, so it is refused",
       "details": ["iteration", "channels"],
@@ -1022,66 +1022,66 @@
         {"tag": "uncovered", "args": ["iteration", "channels"]}
       ]
     },
-    "operator.start_failed": {
+    "relay.start_failed": {
       "class": "internal",
-      "message": "operator '{operator}' did not start; the controller's log names the cause",
-      "details": ["operator", "reason"],
+      "message": "relay '{relay}' did not start; the controller's log names the cause",
+      "details": ["relay", "reason"],
       "reasons": [
-        {"tag": "start_failed", "args": ["operator", "reason"]}
+        {"tag": "start_failed", "args": ["relay", "reason"]}
       ]
     },
-    "operator.state_claimed": {
+    "relay.state_claimed": {
       "class": "conflict",
-      "message": "the durable state of '{operator}' belongs to namespace '{owner}'",
-      "details": ["operator", "owner"],
+      "message": "the durable state of '{relay}' belongs to namespace '{owner}'",
+      "details": ["relay", "owner"],
       "reasons": [
-        {"tag": "namespace_conflict", "args": ["operator", "owner"]}
+        {"tag": "namespace_conflict", "args": ["relay", "owner"]}
       ]
     },
-    "operator.stop_failed": {
+    "relay.stop_failed": {
       "class": "internal",
-      "message": "operator '{operator}' did not stop: its {step} step failed; the controller's log names the cause",
-      "details": ["operator", "step", "reason"],
+      "message": "relay '{relay}' did not stop: its {step} step failed; the controller's log names the cause",
+      "details": ["relay", "step", "reason"],
       "reasons": [
-        {"tag": "stop_failed", "args": ["operator", "step", "reason"]}
+        {"tag": "stop_failed", "args": ["relay", "step", "reason"]}
       ]
     },
-    "operator.stop_timeout": {
+    "relay.stop_timeout": {
       "class": "unavailable",
-      "message": "operator '{operator}' did not finish stopping in time; the steps {skipped} were skipped",
-      "details": ["operator", "skipped"],
+      "message": "relay '{relay}' did not finish stopping in time; the steps {skipped} were skipped",
+      "details": ["relay", "skipped"],
       "reasons": [
-        {"tag": "stop_timeout", "args": ["operator", "skipped"]}
+        {"tag": "stop_timeout", "args": ["relay", "skipped"]}
       ]
     },
-    "operator.unknown_fields": {
+    "relay.unknown_fields": {
       "class": "invalid",
-      "message": "an operator start does not read {fields}",
+      "message": "a relay start does not read {fields}",
       "details": ["fields"],
       "reasons": [
         {"tag": "unknown_fields", "args": ["fields"]}
       ]
     },
-    "operator.unknown_opts": {
+    "relay.unknown_opts": {
       "class": "invalid",
-      "message": "the operator options {opts} are not ones Flezha reads",
+      "message": "the relay options {opts} are not ones Flezha reads",
       "details": ["opts"],
       "reasons": [
         {"tag": "unknown_opts", "args": ["opts"]}
       ]
     },
-    "operator.unpartitioned_running": {
+    "relay.unpartitioned_running": {
       "class": "conflict",
-      "message": "'{operator}' is already running as an unpartitioned operator, which a partitioned start cannot converge; stop it first or choose another group id",
-      "hint": "flz operator stop {operator}",
-      "details": ["operator"],
+      "message": "'{relay}' is already running as an unpartitioned relay, which a partitioned start cannot converge; stop it first or choose another group id",
+      "hint": "flz relay stop {relay}",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "unpartitioned_running", "args": ["operator"]}
+        {"tag": "unpartitioned_running", "args": ["relay"]}
       ]
     },
-    "operator.unresponsive": {
+    "relay.unresponsive": {
       "class": "unavailable",
-      "message": "the operator did not answer; try again",
+      "message": "the relay did not answer; try again",
       "details": ["reason"],
       "reasons": [
         {"tag": "overwatch_unavailable", "args": ["reason"]}
@@ -1089,9 +1089,9 @@
     },
     "part.no_sink": {
       "class": "invalid",
-      "message": "tasklet '{tasklet}' of operator '{operator}' sent a part, but its output channel '{channel}' has no sink",
+      "message": "tasklet '{tasklet}' of relay '{relay}' sent a part, but its output channel '{channel}' has no sink",
       "hint": "declare a sink on the tasklet's channel",
-      "details": ["tasklet", "operator", "channel"]
+      "details": ["tasklet", "relay", "channel"]
     },
     "part.outside_invocation": {
       "class": "invalid",
@@ -1116,7 +1116,7 @@
     },
     "plugin.already_attached": {
       "class": "conflict",
-      "message": "plugin '{plugin}' is already attached to this operator",
+      "message": "plugin '{plugin}' is already attached to this relay",
       "hint": "flz plugin list",
       "details": ["plugin"],
       "reasons": [
@@ -1149,7 +1149,7 @@
     },
     "plugin.channel_unused": {
       "class": "invalid",
-      "message": "option '{option}' names a channel this {provider} plugin never uses: it neither feeds the operator on it nor reads it through an on_input or on_output hook",
+      "message": "option '{option}' names a channel this {provider} plugin never uses: it neither feeds the relay on it nor reads it through an on_input or on_output hook",
       "details": ["provider", "option", "job"],
       "reasons": [
         {"tag": "channel_unused", "args": ["provider", "option", "job"]}
@@ -1318,7 +1318,7 @@
     },
     "plugin.forward_across_namespaces": {
       "class": "denied",
-      "message": "target_operator_id '{target}' runs in namespace '{target_namespace}', across the namespace boundary",
+      "message": "target_relay_id '{target}' runs in namespace '{target_namespace}', across the namespace boundary",
       "details": ["target", "target_namespace"],
       "reasons": [
         {"tag": "forward_across_namespaces", "args": ["target", "target_namespace"]}
@@ -1326,7 +1326,7 @@
     },
     "plugin.forward_to_self": {
       "class": "invalid",
-      "message": "target_operator_id '{target}' is the operator the plugin is attached to",
+      "message": "target_relay_id '{target}' is the relay the plugin is attached to",
       "details": ["target"],
       "reasons": [
         {"tag": "forward_to_self", "args": ["target"]}
@@ -1444,8 +1444,8 @@
     },
     "plugin.init_after_start": {
       "class": "invalid",
-      "message": "an on_operator_init plugin can only be attached when its operator starts",
-      "hint": "flz operator start <factory> --plugins '<json-array>'",
+      "message": "an on_relay_init plugin can only be attached when its relay starts",
+      "hint": "flz relay start <factory> --plugins '<json-array>'",
       "details": [],
       "reasons": [
         {"tag": "init_plugin_after_start"}
@@ -1519,7 +1519,7 @@
     },
     "plugin.not_bindable": {
       "class": "invalid",
-      "message": "plugin '{plugin}' is a controller plugin, which is bound to no operator",
+      "message": "plugin '{plugin}' is a controller plugin, which is bound to no relay",
       "hint": "flz plugin update <name> --hook <hook>",
       "details": ["plugin"],
       "reasons": [
@@ -1537,11 +1537,11 @@
     },
     "plugin.not_bound": {
       "class": "not_found",
-      "message": "operator '{operator}' is not bound to plugin '{plugin}'",
+      "message": "relay '{relay}' is not bound to plugin '{plugin}'",
       "hint": "flz plugin list",
-      "details": ["plugin", "operator"],
+      "details": ["plugin", "relay"],
       "reasons": [
-        {"tag": "plugin_not_bound", "args": ["plugin", "operator"]}
+        {"tag": "plugin_not_bound", "args": ["plugin", "relay"]}
       ]
     },
     "plugin.not_installed": {
@@ -1563,19 +1563,19 @@
     },
     "plugin.not_shareable": {
       "class": "conflict",
-      "message": "plugin '{plugin}' cannot be shared, and operator '{operator}' is already bound to it",
-      "hint": "enable another plugin of the same provider for this operator",
-      "details": ["plugin", "operator"],
+      "message": "plugin '{plugin}' cannot be shared, and relay '{relay}' is already bound to it",
+      "hint": "enable another plugin of the same provider for this relay",
+      "details": ["plugin", "relay"],
       "reasons": [
-        {"tag": "plugin_not_shareable", "args": ["plugin", "operator"]}
+        {"tag": "plugin_not_shareable", "args": ["plugin", "relay"]}
       ]
     },
-    "plugin.operator_not_declared": {
+    "plugin.relay_not_declared": {
       "class": "not_found",
-      "message": "the plugin's operator is not declared in its namespace, so nothing records the plugin",
+      "message": "the plugin's relay is not declared in its namespace, so nothing records the plugin",
       "details": [],
       "reasons": [
-        {"tag": "operator_not_declared"}
+        {"tag": "relay_not_declared"}
       ]
     },
     "plugin.option_above_maximum": {
@@ -1649,16 +1649,16 @@
     },
     "plugin.partitioned_host": {
       "class": "invalid",
-      "message": "a {provider} plugin cannot be enabled on '{operator}', a member of a partition group: it cannot tell which member a record's key belongs to",
-      "hint": "enable it on an operator that is not partitioned",
-      "details": ["provider", "operator"],
+      "message": "a {provider} plugin cannot be enabled on '{relay}', a member of a partition group: it cannot tell which member a record's key belongs to",
+      "hint": "enable it on a relay that is not partitioned",
+      "details": ["provider", "relay"],
       "reasons": [
         {"tag": "partitioned_host", "args": ["details"]}
       ]
     },
     "plugin.prepare_failed": {
       "class": "invalid",
-      "message": "plugin '{plugin}' was refused while its operator started, so the operator did not start",
+      "message": "plugin '{plugin}' was refused while its relay started, so the relay did not start",
       "details": ["plugin", "reason"],
       "reasons": [
         {"tag": "plugin_prepare_failed", "args": ["plugin", "reason"]}
@@ -1733,7 +1733,7 @@
     },
     "plugin.registry_unavailable": {
       "class": "unavailable",
-      "message": "the operator registry of the plugin's namespace did not answer; try again",
+      "message": "the relay registry of the plugin's namespace did not answer; try again",
       "details": [],
       "reasons": [
         {"tag": "registry_unavailable", "at": ["plugin.enable", "plugin.disable"]},
@@ -1833,10 +1833,10 @@
     },
     "plugin.target_missing": {
       "class": "invalid",
-      "message": "a plugin needs the namespace and the operator it attaches to",
-      "details": ["namespace", "operator"],
+      "message": "a plugin needs the namespace and the relay it attaches to",
+      "details": ["namespace", "relay"],
       "reasons": [
-        {"tag": "plugin_target_missing", "args": ["namespace", "operator"]}
+        {"tag": "plugin_target_missing", "args": ["namespace", "relay"]}
       ]
     },
     "plugin.template_missing_placeholder": {
@@ -1942,7 +1942,7 @@
     },
     "plugin.write_failed": {
       "class": "internal",
-      "message": "the plugin could not be recorded on its operator; the controller's log names the cause",
+      "message": "the plugin could not be recorded on its relay; the controller's log names the cause",
       "details": ["reason"],
       "reasons": [
         {"tag": "declared_mutate_failed", "args": ["reason"]}
@@ -2083,7 +2083,7 @@
     },
     "runner.hub_unavailable": {
       "class": "unavailable",
-      "message": "the operator hub of namespace '{namespace}' could not be started for the runner; try again",
+      "message": "the relay hub of namespace '{namespace}' could not be started for the runner; try again",
       "details": ["namespace", "reason"],
       "reasons": [
         {"tag": "hub_unavailable", "args": ["namespace", "reason"]}
@@ -2190,17 +2190,17 @@
     },
     "runtime.channel_undeclared": {
       "class": "not_found",
-      "message": "operator '{operator}' has no {kind} channel '{channel}'; it declares {channels}",
-      "details": ["operator", "channel", "kind", "channels"]
+      "message": "relay '{relay}' has no {kind} channel '{channel}'; it declares {channels}",
+      "details": ["relay", "channel", "kind", "channels"]
     },
     "runtime.channel_wrong_kind": {
       "class": "invalid",
-      "message": "operator '{operator}' channel '{channel}' is a {declared} channel, not a {kind} one",
-      "details": ["operator", "channel", "declared", "kind"]
+      "message": "relay '{relay}' channel '{channel}' is a {declared} channel, not a {kind} one",
+      "details": ["relay", "channel", "declared", "kind"]
     },
     "runtime.class_not_registered": {
       "class": "not_found",
-      "message": "no operator class is registered as '{factory}' on this runner",
+      "message": "no relay class is registered as '{factory}' on this runner",
       "details": ["factory"]
     },
     "runtime.command_crashed": {
@@ -2320,8 +2320,8 @@
     },
     "runtime.local_run_busy": {
       "class": "unavailable",
-      "message": "operator '{operator}' was still working after {budget_ms} ms",
-      "details": ["operator", "budget_ms"]
+      "message": "relay '{relay}' was still working after {budget_ms} ms",
+      "details": ["relay", "budget_ms"]
     },
     "runtime.local_run_unanswered": {
       "class": "unavailable",
@@ -2343,9 +2343,9 @@
       "message": "there is no local run on this context: start one before feeding it",
       "details": []
     },
-    "runtime.no_operators": {
+    "runtime.no_relays": {
       "class": "invalid",
-      "message": "the runner declares no operator; register one before starting it",
+      "message": "the runner declares no relay; register one before starting it",
       "details": []
     },
     "runtime.no_output_channel": {
@@ -2363,30 +2363,30 @@
       "message": "the Cell is not run by a host, so it has no host crossing",
       "details": []
     },
-    "runtime.operator_busy": {
+    "runtime.relay_busy": {
       "class": "unavailable",
-      "message": "operator '{operator}' did not answer in time; try again",
-      "details": ["operator"]
+      "message": "relay '{relay}' did not answer in time; try again",
+      "details": ["relay"]
     },
-    "runtime.operator_message_unsupported": {
+    "runtime.relay_message_unsupported": {
       "class": "unavailable",
-      "message": "operator '{operator}' does not handle direct messages",
-      "details": ["operator"]
+      "message": "relay '{relay}' does not handle direct messages",
+      "details": ["relay"]
     },
-    "runtime.operator_not_found": {
+    "runtime.relay_not_found": {
       "class": "not_found",
-      "message": "no instance of operator '{operator}' runs on this runner",
-      "details": ["operator"]
+      "message": "no instance of relay '{relay}' runs on this runner",
+      "details": ["relay"]
     },
-    "runtime.operator_not_local": {
+    "runtime.relay_not_local": {
       "class": "not_found",
-      "message": "operator '{operator}' is not bound on this runner",
+      "message": "relay '{relay}' is not bound on this runner",
       "hint": "send without the local option, through the controller",
-      "details": ["operator"]
+      "details": ["relay"]
     },
-    "runtime.operator_type_in_use": {
+    "runtime.relay_type_in_use": {
       "class": "conflict",
-      "message": "factory '{factory_id}' has {live_instances} live operator instance(s); stop them before removing the type",
+      "message": "factory '{factory_id}' has {live_instances} live relay instance(s); stop them before removing the type",
       "details": ["factory_id", "live_instances"]
     },
     "runtime.plugin_serializer_panicked": {
@@ -2396,7 +2396,7 @@
     },
     "runtime.prepare_unknown_channel": {
       "class": "invalid",
-      "message": "the prepare answer names a channel the operator does not declare",
+      "message": "the prepare answer names a channel the relay does not declare",
       "details": []
     },
     "runtime.reserved_metadata_key": {
@@ -2481,7 +2481,7 @@
     },
     "runtime.unknown_channel": {
       "class": "not_found",
-      "message": "channel '{channel}' is not declared on this operator",
+      "message": "channel '{channel}' is not declared on this relay",
       "details": ["channel"]
     },
     "runtime.unknown_channel_id": {
@@ -2555,7 +2555,7 @@
     },
     "schedule.invalid_name": {
       "class": "invalid",
-      "message": "schedule name '{schedule}' must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most {max} bytes, so that each firing's '<name>@<slot>' fits an operator id",
+      "message": "schedule name '{schedule}' must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most {max} bytes, so that each firing's '<name>@<slot>' fits a relay id",
       "details": ["schedule", "max"],
       "reasons": [
         {"tag": "invalid_schedule_name", "args": ["schedule", "max"]}
@@ -2612,7 +2612,7 @@
     },
     "shutdown.partial_drain": {
       "class": "unavailable",
-      "message": "the shutdown drained partially: operators were still on this node when its timeout ran out",
+      "message": "the shutdown drained partially: relays were still on this node when its timeout ran out",
       "details": ["still_local"],
       "reasons": [
         {"tag": "partial_drain", "args": ["still_local"]}
@@ -2635,12 +2635,12 @@
     },
     "state.apply_not_supported": {
       "class": "unavailable",
-      "message": "this runner does not apply state to a live operator",
+      "message": "this runner does not apply state to a live relay",
       "details": []
     },
     "state.bad_cell_path": {
       "class": "invalid",
-      "message": "'{path}' is not a Cell path; write it as <operator>/<tasklet>/<cell_key>",
+      "message": "'{path}' is not a Cell path; write it as <relay>/<tasklet>/<cell_key>",
       "details": ["path"],
       "reasons": [
         {"tag": "bad_cell_path", "args": ["path"]}
@@ -2648,7 +2648,7 @@
     },
     "state.bad_live_path": {
       "class": "invalid",
-      "message": "'{path}' is not a live state path; write it as <operator>/<tasklet>[/<cell_key>]",
+      "message": "'{path}' is not a live state path; write it as <relay>/<tasklet>[/<cell_key>]",
       "details": ["path"],
       "reasons": [
         {"tag": "bad_live_path", "args": ["path"]}
@@ -2662,7 +2662,7 @@
     "state.cell_evicted": {
       "class": "not_found",
       "message": "Cell '{cell_key}' of tasklet '{tasklet}' was idle-evicted; eviction is destructive, so there is no durable value to serve",
-      "hint": "flz state at <operator>/{tasklet}/{cell_key} <seq|ts>",
+      "hint": "flz state at <relay>/{tasklet}/{cell_key} <seq|ts>",
       "details": ["tasklet", "cell_key"]
     },
     "state.cell_key_without_tasklet": {
@@ -2673,7 +2673,7 @@
     "state.cell_not_found": {
       "class": "not_found",
       "message": "tasklet '{tasklet}' holds no Cell keyed '{cell_key}'",
-      "hint": "flz state at <operator>/{tasklet}/{cell_key} <seq|ts>",
+      "hint": "flz state at <relay>/{tasklet}/{cell_key} <seq|ts>",
       "details": ["tasklet", "cell_key"]
     },
     "state.cell_not_live": {
@@ -2704,27 +2704,27 @@
       "message": "the migrated state is not UTF-8 text: {reason}",
       "details": ["reason"]
     },
-    "state.no_operator": {
+    "state.no_relay": {
       "class": "not_found",
-      "message": "no running operator '{operator}' in any namespace",
-      "hint": "flz operator list",
-      "details": ["operator"],
+      "message": "no running relay '{relay}' in any namespace",
+      "hint": "flz relay list",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "no_operator", "args": ["operator"]}
+        {"tag": "no_relay", "args": ["relay"]}
       ]
     },
     "state.no_owning_runner": {
       "class": "unavailable",
-      "message": "no connected runner owns operator '{operator}', so nothing can compact its Cell",
-      "details": ["operator"],
+      "message": "no connected runner owns relay '{relay}', so nothing can compact its Cell",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "no_owning_runner", "args": ["operator"]}
+        {"tag": "no_owning_runner", "args": ["relay"]}
       ]
     },
     "state.no_persisted_state": {
       "class": "not_found",
       "message": "Cell '{cell}' has no persisted state",
-      "hint": "flz state list <operator>",
+      "hint": "flz state list <relay>",
       "details": ["cell"],
       "reasons": [
         {"tag": "no_persisted_state", "args": ["cell"]}
@@ -2732,17 +2732,17 @@
     },
     "state.not_resident": {
       "class": "unavailable",
-      "message": "operator '{operator}' is {state}, so no Cell of it is held in memory; read its durable state instead",
-      "hint": "flz state at <operator>/<tasklet>/<cell_key> <seq>",
-      "details": ["operator", "state"],
+      "message": "relay '{relay}' is {state}, so no Cell of it is held in memory; read its durable state instead",
+      "hint": "flz state at <relay>/<tasklet>/<cell_key> <seq>",
+      "details": ["relay", "state"],
       "reasons": [
-        {"tag": "not_resident", "args": ["state", "operator"]}
+        {"tag": "not_resident", "args": ["state", "relay"]}
       ]
     },
     "state.oversized_read": {
       "class": "invalid",
       "message": "the selected state is {bytes} bytes, over the {limit}-byte read ceiling; narrow the read to one cell key",
-      "hint": "flz state get <operator>/<tasklet>/<cell_key>",
+      "hint": "flz state get <relay>/<tasklet>/<cell_key>",
       "details": ["bytes", "limit"],
       "reasons": [
         {"tag": "oversized_state", "args": ["bytes", "limit"]}
@@ -2750,10 +2750,10 @@
     },
     "state.persistence_off": {
       "class": "conflict",
-      "message": "operator '{operator}' declares persistence off, so its Cells hold no durable state and live reads are refused",
-      "details": ["operator"],
+      "message": "relay '{relay}' declares persistence off, so its Cells hold no durable state and live reads are refused",
+      "details": ["relay"],
       "reasons": [
-        {"tag": "persistence_off", "args": ["operator"]}
+        {"tag": "persistence_off", "args": ["relay"]}
       ]
     },
     "state.restore_failed": {
@@ -2773,8 +2773,8 @@
     },
     "state.tasklet_not_found": {
       "class": "not_found",
-      "message": "operator '{operator}' has no tasklet named '{tasklet}'",
-      "details": ["operator", "tasklet"]
+      "message": "relay '{relay}' has no tasklet named '{tasklet}'",
+      "details": ["relay", "tasklet"]
     },
     "topology.at_checkpoint_without_max_delay": {
       "class": "invalid",
@@ -2798,12 +2798,12 @@
     },
     "topology.call_outside_per_input_loop": {
       "class": "invalid",
-      "message": "channel '{channel}' ends in a call, and only a :per_input steps operator reads the later message its Response is; declare the class :per_input, or make the call from a flow operator",
+      "message": "channel '{channel}' ends in a call, and only a :per_input steps relay reads the later message its Response is; declare the class :per_input, or make the call from a flow relay",
       "details": ["channel"]
     },
     "topology.call_response_unread": {
       "class": "invalid",
-      "message": "channel '{channel}' calls another operator and its Response channel '{response}' feeds no tasklet, so every outcome would be journaled and read by nobody; wire the Response channel into a tasklet, or forward with operator_forward when no outcome is wanted",
+      "message": "channel '{channel}' calls another relay and its Response channel '{response}' feeds no tasklet, so every outcome would be journaled and read by nobody; wire the Response channel into a tasklet, or forward with relay_forward when no outcome is wanted",
       "details": ["channel", "response"]
     },
     "topology.call_without_key": {
@@ -2848,7 +2848,7 @@
     },
     "topology.checkpoint_every_zero": {
       "class": "invalid",
-      "message": "the operator declares checkpoint_every(0); an interval that closes every zero inputs is not an interval, so omit it to close only on an explicit checkpoint call",
+      "message": "the relay declares checkpoint_every(0); an interval that closes every zero inputs is not an interval, so omit it to close only on an explicit checkpoint call",
       "details": []
     },
     "topology.checkpoint_max_delay_zero": {
@@ -2873,17 +2873,17 @@
     },
     "topology.correction_window_zero": {
       "class": "invalid",
-      "message": "the operator declares correction_window(0); a zero window can correct nothing",
+      "message": "the relay declares correction_window(0); a zero window can correct nothing",
       "details": []
     },
     "topology.correction_without_event_time": {
       "class": "invalid",
-      "message": "the operator declares correction_window but tasklet '{tasklet}' declares clock '{clock_type}'; correction orders a replayed slice by event time, which only an event-time clock yields",
+      "message": "the relay declares correction_window but tasklet '{tasklet}' declares clock '{clock_type}'; correction orders a replayed slice by event time, which only an event-time clock yields",
       "details": ["tasklet", "clock_type"]
     },
     "topology.cycle": {
       "class": "invalid",
-      "message": "tasklet '{tasklet}' is on a cycle; an operator topology is a DAG, so a node's output may never reach its own input",
+      "message": "tasklet '{tasklet}' is on a cycle; a relay topology is a DAG, so a node's output may never reach its own input",
       "details": ["tasklet"]
     },
     "topology.dangling_transform_chain": {
@@ -2898,17 +2898,17 @@
     },
     "topology.deferred_builder_surface": {
       "class": "invalid",
-      "message": "operator '{module}' uses a builder call this SDK does not have yet: {reason}",
+      "message": "relay '{module}' uses a builder call this SDK does not have yet: {reason}",
       "details": ["module", "reason"]
     },
     "topology.dropping_policy_under_effectively_once": {
       "class": "invalid",
-      "message": "channel '{channel}' declares on_full({policy}) on an operator that declares effectively_once; a shed input's offset is still advanced past by the tier's watermark, so the loss is permanent and reported nowhere. Declare one or the other, not both (a correction window implies the tier, so it is refused here too)",
+      "message": "channel '{channel}' declares on_full({policy}) on a relay that declares effectively_once; a shed input's offset is still advanced past by the tier's watermark, so the loss is permanent and reported nowhere. Declare one or the other, not both (a correction window implies the tier, so it is refused here too)",
       "details": ["channel", "policy"]
     },
     "topology.duplicate_channel": {
       "class": "invalid",
-      "message": "channel '{channel}' is declared more than once on this operator",
+      "message": "channel '{channel}' is declared more than once on this relay",
       "details": ["channel"]
     },
     "topology.duplicate_factory_id": {
@@ -2938,7 +2938,7 @@
     },
     "topology.duplicate_sink_name": {
       "class": "invalid",
-      "message": "channel '{channel}' is named by two plugin sinks; a sink names the channel it terminates, so two channels cannot name one sink. Give each its own name; a plugin still reaches both by attaching to the operator with no channel filter",
+      "message": "channel '{channel}' is named by two plugin sinks; a sink names the channel it terminates, so two channels cannot name one sink. Give each its own name; a plugin still reaches both by attaching to the relay with no channel filter",
       "details": ["channel"]
     },
     "topology.edge_already_wired": {
@@ -2968,7 +2968,7 @@
     },
     "topology.invalid_mode": {
       "class": "invalid",
-      "message": "operator '{factory_id}' sets {knob} to {value}, which is not one of its modes",
+      "message": "relay '{factory_id}' sets {knob} to {value}, which is not one of its modes",
       "details": ["factory_id", "knob", "value"]
     },
     "topology.invalid_setting": {
@@ -3023,8 +3023,8 @@
     },
     "topology.missing_factory_id": {
       "class": "invalid",
-      "message": "operator '{operator}' declares no factory id, and every operator needs one",
-      "details": ["operator"]
+      "message": "relay '{relay}' declares no factory id, and every relay needs one",
+      "details": ["relay"]
     },
     "topology.multiple_output_channels": {
       "class": "invalid",
@@ -3051,9 +3051,9 @@
       "message": "the steps class declares no entry channel for its messages to arrive on",
       "details": []
     },
-    "topology.no_operator_exported": {
+    "topology.no_relay_exported": {
       "class": "invalid",
-      "message": "module '{module}' exports no operator declaration",
+      "message": "module '{module}' exports no relay declaration",
       "details": ["module"]
     },
     "topology.no_tasklets": {
@@ -3063,12 +3063,12 @@
     },
     "topology.node_identity_collision": {
       "class": "invalid",
-      "message": "node identity '{name}' is declared by two distinct nodes; a node name must be unique per operator and distinct from every tasklet name",
+      "message": "node identity '{name}' is declared by two distinct nodes; a node name must be unique per relay and distinct from every tasklet name",
       "details": ["name"]
     },
-    "topology.operator_field_on_tasklet": {
+    "topology.relay_field_on_tasklet": {
       "class": "invalid",
-      "message": "tasklet '{tasklet}' declares {fields}, which an operator declaration carries; declare the short form with {instead}",
+      "message": "tasklet '{tasklet}' declares {fields}, which a relay declaration carries; declare the short form with {instead}",
       "details": ["tasklet", "fields", "instead"]
     },
     "topology.partitions_without_keyed_tasklet": {
@@ -3129,22 +3129,22 @@
     },
     "topology.short_form_field_on_full_form": {
       "class": "invalid",
-      "message": "operator '{factory_id}' declares {fields} beside its channels body; a full form wires entry channels, codecs and sinks in channels and declares each tasklet's fields on the tasklet",
+      "message": "relay '{factory_id}' declares {fields} beside its channels body; a full form wires entry channels, codecs and sinks in channels and declares each tasklet's fields on the tasklet",
       "details": ["factory_id", "fields"]
     },
     "topology.short_form_name_mismatch": {
       "class": "invalid",
-      "message": "'{class}' declares operator id '{factory_id}' and tasklet name '{name}'; a short form's tasklet is named after its id, so the two must be equal",
+      "message": "'{class}' declares relay id '{factory_id}' and tasklet name '{name}'; a short form's tasklet is named after its id, so the two must be equal",
       "details": ["class", "factory_id", "name"]
     },
     "topology.short_form_not_a_tasklet": {
       "class": "invalid",
-      "message": "'{class}' is declared a short-form operator with {annotation} but is not a tasklet",
+      "message": "'{class}' is declared a short-form relay with {annotation} but is not a tasklet",
       "details": ["class", "annotation"]
     },
     "topology.short_form_with_topology": {
       "class": "invalid",
-      "message": "operator '{factory_id}' is a single-tasklet short form and also declares a channels body; declare one or the other",
+      "message": "relay '{factory_id}' is a single-tasklet short form and also declares a channels body; declare one or the other",
       "details": ["factory_id"]
     },
     "topology.sink_on_entry": {
@@ -3154,7 +3154,7 @@
     },
     "topology.sink_without_output": {
       "class": "invalid",
-      "message": "operator '{factory_id}' names a sink, and its tasklet declares no output to feed it",
+      "message": "relay '{factory_id}' names a sink, and its tasklet declares no output to feed it",
       "details": ["factory_id"]
     },
     "topology.state_not_constructible": {
@@ -3199,7 +3199,7 @@
     },
     "topology.unkeyed_channel_under_effectively_once": {
       "class": "invalid",
-      "message": "channel '{channel}' has a plugin wire but is not declared keyed; the effectively-once tier deduplicates by output identity, so every plugin-bound channel of an effectively_once operator must opt in with keyed",
+      "message": "channel '{channel}' has a plugin wire but is not declared keyed; the effectively-once tier deduplicates by output identity, so every plugin-bound channel of an effectively_once relay must opt in with keyed",
       "details": ["channel"]
     },
     "topology.unkeyed_edge_into_dynamic_tasklet": {
@@ -3219,7 +3219,7 @@
     },
     "topology.unknown_sdk_lang": {
       "class": "invalid",
-      "message": "sdk_lang {sdk_lang} is not an allocated SDK language; every class declares the byte its SDK holds in the allocation table, because the controller places an operator only on a runner of its factory's language",
+      "message": "sdk_lang {sdk_lang} is not an allocated SDK language; every class declares the byte its SDK holds in the allocation table, because the controller places a relay only on a runner of its factory's language",
       "details": ["sdk_lang"]
     },
     "topology.unreachable_tasklet": {
@@ -3365,7 +3365,7 @@
     "runner_not_found", "running", "same_node", "send_buffer_full", "send_crashed", "send_failed",
     "service_account_path_missing", "shipper_unavailable", "short_entry", "short_read",
     "sink_start_failed", "spki_decode_failed", "split_state_key", "stale_writer", "start_crashed",
-    "start_operator_failed", "startup_failed", "stream_unbound", "struct_build_failed",
+    "start_relay_failed", "startup_failed", "stream_unbound", "struct_build_failed",
     "subject_decode_failed", "superseded", "symlink", "table_missing", "task_exit", "too_long", "too_many_links",
     "too_short", "topic_already_exists", "trusted_keys_empty", "unavailable", "unbound",
     "undisabled", "unexpected_start_result", "unknown_discovery_handler", "unknown_entry_type",

@@ -11,7 +11,7 @@ defmodule Flezha.SDK do
   a host application's supervision tree.
   """
 
-  alias Flezha.SDK.{Codec, Error, Operator, RunnerServer, Topology}
+  alias Flezha.SDK.{Codec, Error, Relay, RunnerServer, Topology}
   alias Flezha.SDK.Steps.Spec
 
   @enforce_keys [:namespace]
@@ -40,7 +40,7 @@ defmodule Flezha.SDK do
   end
 
   @doc """
-  Declare an operator: a module of the `Flezha.SDK.Operator` behaviour. Legal
+  Declare a relay: a module of the `Flezha.SDK.Relay` behaviour. Legal
   before and after `start/1`.
 
   Its settings tree is read and checked here, and a class that runs in steps
@@ -51,7 +51,7 @@ defmodule Flezha.SDK do
   def register_factory({:error, _} = e, _module), do: e
 
   def register_factory(%__MODULE__{} = h, module) do
-    with :ok <- operator?(module),
+    with :ok <- relay?(module),
          {:ok, class} <- build_class(module),
          :ok <- not_duplicate(h, class.factory_id) do
       if h.server do
@@ -65,7 +65,7 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc "Remove a declared operator — the inverse of `register_factory/2`, taking what it took."
+  @doc "Remove a declared relay — the inverse of `register_factory/2`, taking what it took."
   @spec unregister_factory(result(), module()) :: result()
   def unregister_factory({:error, _} = e, _module), do: e
 
@@ -134,57 +134,57 @@ defmodule Flezha.SDK do
   def server(%__MODULE__{server: pid}), do: {:ok, pid}
 
   @doc """
-  Send `message` to the entry channel `channel` of `operator_id`.
+  Send `message` to the entry channel `channel` of `relay_id`.
 
   Through the controller by default, under the same role check as
-  `Flezha.SDK.Control`, answering its verdict: `{:ok, %{"to" => operator,
+  `Flezha.SDK.Control`, answering its verdict: `{:ok, %{"to" => relay,
   "verdict" => "delivered" | "absorbed" | "suspended"}}`. Options:
 
-    * `msg_id:` the message's id, stamped as `flz.msg_id`: an operator whose
+    * `msg_id:` the message's id, stamped as `flz.msg_id`: a relay whose
       input log still holds an input of this id absorbs the repeat.
     * `key:` the partition key whose member of a partition group takes it.
     * `local: true` in process, without the controller: the message is on no
-      disk, is lost if the runner stops before handling it, and an operator's
+      disk, is lost if the runner stops before handling it, and a relay's
       input log does not cover it. Answers `{:ok, nil}`; refused with
-      `runtime.operator_not_local` for an operator this runner does not hold,
+      `runtime.relay_not_local` for a relay this runner does not hold,
       and with `usage.options_conflict` beside `msg_id:` or `key:`.
 
   `runner` is a handle, or the runner server's pid or name.
   """
   @spec send(result() | pid() | atom(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, Error.t()}
-  def send(runner, operator_id, message, channel, opts \\ []) do
+  def send(runner, relay_id, message, channel, opts \\ []) do
     fields = Flezha.SDK.Control.given(%{}, opts, [:msg_id, :key])
 
     cond do
       not Keyword.get(opts, :local, false) ->
-        args = [operator_id, message, channel | if(fields == %{}, do: [], else: [fields])]
-        Flezha.SDK.Control.call(runner, "Operator.send", args)
+        args = [relay_id, message, channel | if(fields == %{}, do: [], else: [fields])]
+        Flezha.SDK.Control.call(runner, "Relay.send", args)
 
       fields != %{} ->
         other = Enum.find(["msg_id", "key"], &Map.has_key?(fields, &1))
         {:error, Error.new("usage.options_conflict", option: "local", other: other)}
 
       true ->
-        send_local(runner, operator_id, message, channel)
+        send_local(runner, relay_id, message, channel)
     end
   end
 
   @doc """
-  The ids of the operator instances bound on this runner now, a partition
+  The ids of the relay instances bound on this runner now, a partition
   member by its member id, read without the controller.
   """
-  @spec operators(result() | pid() | atom()) :: {:ok, [String.t()]} | {:error, Error.t()}
-  def operators(runner) do
-    with {:ok, server} <- server(runner), do: RunnerServer.operators(server)
+  @spec relays(result() | pid() | atom()) :: {:ok, [String.t()]} | {:error, Error.t()}
+  def relays(runner) do
+    with {:ok, server} <- server(runner), do: RunnerServer.relays(server)
   end
 
   # Enters where a frame off a data stream enters, `Flezha.SDK.DataStream`.
-  defp send_local(runner, operator_id, message, channel) do
+  defp send_local(runner, relay_id, message, channel) do
     with {:ok, server} <- server(runner),
-         {:ok, pid, topology} <- RunnerServer.local_target(server, operator_id),
-         :ok <- Flezha.SDK.Local.declared(topology, operator_id, channel, :entry) do
-      Flezha.SDK.Operator.Inbox.input(pid, channel, message, %{"channel" => channel})
+         {:ok, pid, topology} <- RunnerServer.local_target(server, relay_id),
+         :ok <- Flezha.SDK.Local.declared(topology, relay_id, channel, :entry) do
+      Flezha.SDK.Relay.Inbox.input(pid, channel, message, %{"channel" => channel})
       {:ok, nil}
     end
   end
@@ -244,7 +244,7 @@ defmodule Flezha.SDK do
       id: Keyword.get(opts, :id, __MODULE__),
       start: {__MODULE__, :start_link, [opts]},
       restart: Keyword.get(opts, :restart, :permanent),
-      # A graceful stop serialises every operator and waits for the
+      # A graceful stop serialises every relay and waits for the
       # controller's acks; the budget covers both inside a container's grace
       # period.
       shutdown: Keyword.get(opts, :shutdown, 10_000),
@@ -259,7 +259,7 @@ defmodule Flezha.SDK do
 
     handle =
       Enum.reduce(
-        Keyword.get(opts, :operators, []),
+        Keyword.get(opts, :relays, []),
         create_runner(namespace, transport: transport),
         fn module, acc -> register_factory(acc, module) end
       )
@@ -273,21 +273,21 @@ defmodule Flezha.SDK do
   # --- helpers ---
 
   # The `@behaviour` the `use` macro sets and a hand-written module writes.
-  defp operator?(module) do
+  defp relay?(module) do
     declared =
       if Code.ensure_loaded?(module),
         do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten(),
         else: []
 
-    if Operator in declared,
+    if Relay in declared,
       do: :ok,
-      else: {:error, Error.new("topology.no_operator_exported", module: inspect(module))}
+      else: {:error, Error.new("topology.no_relay_exported", module: inspect(module))}
   end
 
   # The tree decides the class: a steps spec, or a flow topology.
   defp build_class(module) do
-    case Operator.settings(module) do
-      {:ok, %Operator{run: :steps} = settings} -> Spec.build(module, settings)
+    case Relay.settings(module) do
+      {:ok, %Relay{run: :steps} = settings} -> Spec.build(module, settings)
       {:ok, settings} -> Topology.build(module, settings)
       {:error, issue} -> {:error, Topology.refusal([issue])}
     end

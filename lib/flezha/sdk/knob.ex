@@ -52,7 +52,7 @@ defmodule Flezha.SDK.Knob do
     {:reconnect_ring_capacity, "FLEZHA_RECONNECT_RING_CAPACITY", :positive_int, 1_024},
     {:runner_id_path, "FLEZHA_RUNNER_ID_PATH", :path, "/var/lib/flezha-runner/id"},
     # A call into one of the runner's own control processes: the RunnerServer, an
-    # Operator, a local run. None of them runs author code on the answering
+    # Relay, a local run. None of them runs author code on the answering
     # clause, so a wait here is a wedged process rather than a busy one.
     {:sdk_control_call_ms, nil, :ms, 5_000},
     # A call into a Cell that answers from its queue rather than its state.

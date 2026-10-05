@@ -14,8 +14,8 @@ defmodule Flezha.SDK.Cell.State do
   """
 
   defstruct [
-    :operator,
-    :operator_id,
+    :relay,
+    :relay_id,
     :node_ref,
     :node_name,
     :input_channel,
@@ -45,9 +45,9 @@ defmodule Flezha.SDK.Cell.State do
       held: []
     },
     # One field again, for the same reason: whether the Cell writes effect
-    # records (the effectively-once tier, or a durable steps operator), its
+    # records (the effectively-once tier, or a durable steps relay), its
     # checkpoint policy, the node's sink routes the Cell captures its outputs
-    # through, whether it has an inter-tasklet edge, whether it is a steps operator
+    # through, whether it has an inter-tasklet edge, whether it is a steps relay
     # stage's Cell and the records it wrote since its stage's last barrier, the
     # open interval, the consumed floor, the armed deadline, the records owed
     # to an edge report, the declared correction policy, the replay slice
@@ -93,8 +93,8 @@ defmodule Flezha.SDK.Cell.State do
     waiters: :queue.new()
   ]
 
-  @doc "`<operator>/<node>/<key>` — the Cell's name in logs and park ids."
-  def label(%__MODULE__{operator_id: oid, node_name: name, cell_key: key}) do
+  @doc "`<relay>/<node>/<key>` — the Cell's name in logs and park ids."
+  def label(%__MODULE__{relay_id: oid, node_name: name, cell_key: key}) do
     "#{oid}/#{name || "node"}/#{key || "single"}"
   end
 end

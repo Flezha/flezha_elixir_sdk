@@ -1,9 +1,9 @@
-defmodule Agentdesk.GatewayOperator do
+defmodule Agentdesk.GatewayRelay do
   @moduledoc """
-  The HTTP side of the desk: a flow operator that carries the HTTP
+  The HTTP side of the desk: a flow relay that carries the HTTP
   plugin, answers every request, and calls the session a message is for.
   """
-  use Flezha.SDK.Operator,
+  use Flezha.SDK.Relay,
     factory_id: "gateway",
     # each request and answer on disk before it runs
     run: {:flow, exactly: :effectively_once}
@@ -46,7 +46,7 @@ defmodule Agentdesk.GatewayOperator do
     |> map(& &1.message)
     # the user's session
     |> key_by(& &1.user)
-    # call the "agent" operator; its answer comes back here
+    # call the "agent" relay; its answer comes back here
     |> call(
       factory: "agent",
       channel: "message",
