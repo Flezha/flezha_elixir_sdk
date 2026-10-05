@@ -49,6 +49,9 @@ message CommandRequest {
         AdminResponse admin_response = 37;
         RelayExited relay_exited = 38;
         ConnectRefused connect_refused = 39;
+        EffectResult effect_result = 40;
+        EffectResultAck effect_result_ack = 41;
+        EffectResults effect_results = 42;
     }
 }
 
@@ -131,6 +134,11 @@ message AddRelay {
     // Without it a steps driver ends the instance on a failed turn, because
     // an older controller would journal the commit and drop the message.
     bool dead_letter_turns = 12;
+    // Effect results the Controller ships as `EffectResults` after this bind:
+    // the ones it keeps for the instance's inputs above its floor. A steps
+    // driver holds its first Tasklet until they have landed, as it does for
+    // `resume_cell_count`; a flow relay's re-forwarded input follows them.
+    uint32 effect_result_count = 13;
 }
 
 // SDK -> Controller, as the CommandResponse raw_data of AddRelay.
@@ -686,6 +694,38 @@ message SpawnStepsRequest {
     bytes payload = 3;
     string if_running = 4;
     string identity = 5;
+}
+
+// SDK -> Controller. A tasklet's `ctx.effect` result, which the Controller
+// keeps in the instance's effect log, synced, before it answers
+// `EffectResultAck` under the same reference_id. `identity` names the call
+// across re-runs of the invocation; `offset` is the input-log offset the
+// invocation was taking, and the result is kept exactly as long as that input;
+// `cell_identity` is the Cell that made the call.
+message EffectResult {
+    string relay_id = 1;
+    string identity = 2;
+    uint64 offset = 3;
+    string name = 4;
+    bytes payload = 5;
+    bytes cell_identity = 6;
+}
+
+// Controller -> SDK reply to EffectResult. `error` is the refusal, absent once
+// the result is kept. `first` is set when the identity was already kept with
+// another payload: `payload` is then that first result, which the call returns.
+message EffectResultAck {
+    Error error = 1;
+    bool first = 2;
+    bytes payload = 3;
+}
+
+// Controller -> SDK, after a bind: the effect results the instance keeps for
+// its inputs above its floor, in batches each under the frame cap. Answered
+// with a CommandResponse once the batch is stored.
+message EffectResults {
+    string relay_id = 1;
+    repeated EffectResult results = 2;
 }
 
 // Controller -> SDK reply to SpawnStepsRequest, carrying the originating

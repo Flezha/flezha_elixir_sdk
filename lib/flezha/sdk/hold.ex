@@ -97,6 +97,7 @@ defmodule Flezha.SDK.Hold do
     update_factories: :control,
     admin_request: :control,
     spawn_steps_request: :control,
+    effect_result: :control,
     task_commit: :control,
     iter_commit: :control,
     iter_park: :control,

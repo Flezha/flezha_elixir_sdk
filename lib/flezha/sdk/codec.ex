@@ -174,6 +174,30 @@ defmodule Flezha.SDK.Codec do
   end
 
   @doc """
+  The `EffectResult` command tuple: a `ctx.effect` result for the controller
+  to keep under `identity`, for the input at `offset` the Cell `cell` took.
+  """
+  @spec effect_result_command(
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          String.t(),
+          binary(),
+          binary()
+        ) :: {atom(), struct()}
+  def effect_result_command(relay_id, identity, offset, name, payload, cell) do
+    {:effect_result,
+     %RunnerCommands.EffectResult{
+       relay_id: relay_id,
+       identity: identity,
+       offset: offset,
+       name: name,
+       payload: payload,
+       cell_identity: cell
+     }}
+  end
+
+  @doc """
   The `RelayExited` command tuple for an instance whose process exited
   abnormally; the reason is rendered for a log line, bounded.
   """

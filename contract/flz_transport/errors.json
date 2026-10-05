@@ -487,6 +487,45 @@
         {"tag": "sync_ship_failed", "args": ["relay", "reason"]}
       ]
     },
+    "effect.bad_name": {
+      "class": "invalid",
+      "message": "an effect's name must be a non-empty string of at most 255 bytes, and {name} is not",
+      "hint": "name the call after what it reaches, for example \"model\" or \"search\"",
+      "details": ["name"]
+    },
+    "effect.nested": {
+      "class": "invalid",
+      "message": "effect {name} was called inside the function of another effect",
+      "hint": "call ctx.effect once for the whole outside call, or one after the other",
+      "details": ["name"]
+    },
+    "effect.not_recorded": {
+      "class": "unavailable",
+      "message": "the controller did not keep the result of effect {name}: {reason}",
+      "hint": "the invocation runs again; give the outside service ctx.stable_id() as an idempotency key",
+      "details": ["name", "reason"]
+    },
+    "effect.outside_invocation": {
+      "class": "invalid",
+      "message": "effect {name} was called through a context whose invocation has already returned",
+      "hint": "call ctx.effect from run or compensate, before it returns",
+      "details": ["name"]
+    },
+    "effect.refused": {
+      "class": "invalid",
+      "message": "the controller keeps no result of {bytes} bytes for input {offset}: it is over the size cap, past the input log's last input, or one result too many for that input",
+      "hint": "keep a reference to the result rather than the result, or raise FLEZHA_EFFECT_MAX_BYTES",
+      "details": ["offset", "bytes"],
+      "reasons": [
+        {"tag": "effect_refused", "args": ["offset", "bytes"]}
+      ]
+    },
+    "effect.too_large": {
+      "class": "invalid",
+      "message": "the result of effect {name} is {bytes} bytes, over the {limit}-byte limit",
+      "hint": "keep a reference to the result rather than the result, or raise FLEZHA_EFFECT_MAX_BYTES",
+      "details": ["name", "bytes", "limit"]
+    },
     "http.answer_invalid": {
       "class": "invalid",
       "message": "relay '{relay}' answered the request with something that is not an HTTP answer envelope: {reason}",

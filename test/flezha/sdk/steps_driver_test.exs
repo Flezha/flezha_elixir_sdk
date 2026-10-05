@@ -1683,6 +1683,15 @@ defmodule Flezha.SDK.Steps.DriverTest do
     assert %{status: "ok"} = completion(drain())
   end
 
+  test "the effect results the bind shipped open the gate with the restores" do
+    driver = start_driver(KeyedFlow, relay_id: "wf-effect-gate", resume_cell_count: 2)
+    Inbox.input(driver, nil, "a", %{})
+    refute_receive {:shipped, _}, 300
+
+    send(driver, {:effect_results_landed, 2})
+    assert %{status: "ok"} = completion(drain())
+  end
+
   # --- partitions ---
 
   defp entry_keyed(c),

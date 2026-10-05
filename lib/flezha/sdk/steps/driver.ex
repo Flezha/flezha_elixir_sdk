@@ -86,8 +86,10 @@ defmodule Flezha.SDK.Steps.Driver do
       # the firing a timer-fed pass runs the tasklet chain of, with the carry
       # it leaves as it stood; `nil` for a message- or carry-fed pass
       origin: nil,
-      # the input-log offset of the input this pass consumed, `nil` for none
+      # the input-log offset of the input this pass consumed, `nil` for none,
+      # and the slot its stage Cells' `effect` reads it from (-1 for none)
       consumed_offset: nil,
+      pass: nil,
       # the outside call that input carried, which every output
       # of the pass answers; `nil` for a timer- or carry-fed pass
       pass_call: nil,
@@ -129,10 +131,13 @@ defmodule Flezha.SDK.Steps.Driver do
     # Cells are minted before anything runs, so a `RestoreInitState` frame
     # arriving right after the `AddRelay` ack always finds a declared one
     # registered; a keyed one the frame names is minted by its lookup.
+    pass = :atomics.new(1, signed: true)
+    :atomics.put(pass, 1, -1)
+
     cells =
       opts
-      |> Keyword.take([:relay_id, :range, :counters, :runner, :secondaries, :credit])
-      |> Keyword.merge(topology: spec.topology, run: :steps)
+      |> Keyword.take([:relay_id, :range, :counters, :runner, :effects, :secondaries, :credit])
+      |> Keyword.merge(topology: spec.topology, run: :steps, pass: pass)
       |> Cells.new()
       |> Cells.schedule_reap()
 
@@ -148,6 +153,7 @@ defmodule Flezha.SDK.Steps.Driver do
       pass_channel: journaled_channel(spec, journal),
       runner: Keyword.fetch!(opts, :runner),
       cells: cells,
+      pass: pass,
       resume_owed: Keyword.get(opts, :resume_cell_count, 0)
     }
 
@@ -187,20 +193,21 @@ defmodule Flezha.SDK.Steps.Driver do
   def handle_call({:restore_landed, identity, intent, done}, _from, %State{} = s) do
     s = %{s | instance: Instance.note_compensation(s.instance, identity, intent, done)}
 
-    case s.resume_owed do
-      0 ->
-        {:reply, :ok, s}
-
-      1 ->
-        case settle(resume_bound(s)) do
-          {:noreply, s} -> {:reply, :ok, s}
-          {:stop, reason, s} -> {:stop, reason, :ok, s}
-        end
-
-      owed ->
-        {:reply, :ok, %{s | resume_owed: owed - 1}}
+    case landed(s, 1) do
+      {:noreply, s} -> {:reply, :ok, s}
+      {:stop, reason, s} -> {:stop, reason, :ok, s}
     end
   end
+
+  # `count` more of what the bind announced has landed; the run starts once
+  # all of it has.
+  defp landed(%State{resume_owed: 0} = s, _count), do: {:noreply, s}
+
+  defp landed(%State{resume_owed: owed} = s, count) when owed <= count,
+    do: settle(resume_bound(s))
+
+  defp landed(%State{resume_owed: owed} = s, count),
+    do: {:noreply, %{s | resume_owed: owed - count}}
 
   # A Cell finished one invocation. Its outputs are collected for the stage
   # rather than routed: a steps relay hands a batch on at the barrier, not per
@@ -326,6 +333,10 @@ defmodule Flezha.SDK.Steps.Driver do
   end
 
   def handle_info({:sleep_due, ref}, %State{idle: ref} = s), do: settle(park(%{s | idle: nil}))
+
+  # The effect results the bind shipped landed: the gate counts them with
+  # the Cell restores.
+  def handle_info({:effect_results_landed, count}, %State{} = s), do: landed(s, count)
 
   def handle_info({:secondaries, secondaries}, %State{} = s),
     do: {:noreply, %{s | cells: Cells.rebind(s.cells, secondaries)}}
@@ -541,6 +552,9 @@ defmodule Flezha.SDK.Steps.Driver do
     do: complete(s, "cancelled", "")
 
   defp open_timer_pass(%State{} = s, %Instance.Firing{} = firing) do
+    # A firing took no input of its own, so its stages' effects keep nothing.
+    publish_offset(s.pass, nil)
+
     s = %{
       fresh_iteration(s)
       | origin: %{firing: firing, carry: s.carry},
@@ -624,7 +638,7 @@ defmodule Flezha.SDK.Steps.Driver do
         cond do
           message_fed?(s) -> :wait
           s.carry in [nil, []] -> {:done, s}
-          true -> {:carry, %{s | carry: nil, consumed_offset: nil, pass_call: nil}, s.carry}
+          true -> {:carry, %{take_offset(s, nil) | carry: nil, pass_call: nil}, s.carry}
         end
     end
   end
@@ -640,7 +654,17 @@ defmodule Flezha.SDK.Steps.Driver do
   end
 
   defp message_pass(%State{} = s, instance, item),
-    do: %{s | instance: instance, consumed_offset: item.offset, pass_call: item.call}
+    do: %{take_offset(s, item.offset) | instance: instance, pass_call: item.call}
+
+  # The pass's input-log offset, also where its stage Cells' `effect` reads it:
+  # a Cell asking this process would wait on it while it waits on that Cell's
+  # full mailbox.
+  defp take_offset(%State{pass: pass} = s, offset) do
+    publish_offset(pass, offset)
+    %{s | consumed_offset: offset}
+  end
+
+  defp publish_offset(pass, offset), do: :atomics.put(pass, 1, offset || -1)
 
   # Every pass of a `:per_input` loop takes a message; any loop's first pass
   # does; a chained loop's later passes are carry-fed.

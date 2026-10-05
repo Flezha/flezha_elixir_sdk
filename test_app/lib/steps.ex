@@ -188,6 +188,29 @@ defmodule ElixirRunner.Steps do
     end
   end
 
+  # `effect_block_steps`: the one tasklet calls an outside function through
+  # `effect/3`, then blocks until released. The input names a file the
+  # function appends one line to per run, so a SIGKILL after the effect and a
+  # resume on a released runner shows whether the function ran again.
+  defmodule EffectBlock do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "effect_block"
+
+    @impl true
+    def run(path, state, ctx) do
+      with {:ok, _answer} <- effect(ctx, "model", fn -> count_run(path) end) do
+        Gate.block_until_released()
+        {:ok, state}
+      end
+    end
+
+    @doc false
+    def count_run(path) do
+      File.write!(path, "ran\n", [:append])
+      "answer"
+    end
+  end
+
   defmodule KeySplit do
     @moduledoc false
     use Flezha.SDK.Tasklet, name: "key_split"
@@ -411,6 +434,49 @@ defmodule ElixirRunner.Steps do
       |> into(ElixirRunner.Steps.CommitA)
       |> named("mid")
       |> into(ElixirRunner.Steps.BlockB)
+    end
+  end
+
+  # `effect_flow`: the same call in a flow relay at the default tier, which
+  # keeps no input log, so nothing re-runs an input and nothing is kept.
+  defmodule EffectOnce do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "effect_once"
+
+    @impl true
+    def run(path, state, ctx) do
+      with {:ok, _answer} <- effect(ctx, "model", fn -> EffectBlock.count_run(path) end),
+           do: {:ok, state}
+    end
+  end
+
+  defmodule EffectFlow do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "effect_flow"
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Steps.EffectOnce)
+    end
+  end
+
+  defmodule EffectBlockSteps do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    def run, do: :steps
+    def durable, do: ElixirRunner.fixture_durable()
+    def factory_id, do: "effect_block_steps"
+
+    def channels(c) do
+      import Flezha.SDK.Channels
+
+      c
+      |> input("in")
+      |> into(ElixirRunner.Steps.EffectBlock)
     end
   end
 
@@ -862,6 +928,8 @@ defmodule ElixirRunner.Steps do
       StaticCellSteps,
       TypedOnceSteps,
       CommitBlockSteps,
+      EffectBlockSteps,
+      EffectFlow,
       SyncDurableSteps,
       OptOutCommitBlockSteps,
       TierCommitBlockSteps,

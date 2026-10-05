@@ -12,7 +12,7 @@ defmodule Flezha.SDK.Relays do
 
   require Logger
 
-  alias Flezha.SDK.{Codec, Commands, Declarations, Error, KeyGroup, Relay}
+  alias Flezha.SDK.{Codec, Commands, Declarations, Effects, Error, KeyGroup, Relay}
   alias Flezha.SDK.Steps.{Driver, Spec}
 
   @doc """
@@ -117,6 +117,7 @@ defmodule Flezha.SDK.Relays do
   defp drop(s, oid) do
     {entry, relays} = Map.pop(s.relays, oid)
     :ets.delete(s.registry, oid)
+    Effects.forget(s.effects, oid)
     {entry, %{s | relays: relays}}
   end
 
@@ -132,6 +133,7 @@ defmodule Flezha.SDK.Relays do
         range: range,
         counters: s.counters,
         runner: self(),
+        effects: s.effects,
         secondaries: s.secondaries,
         credit: s.credit,
         owed_inbox: add.inbox_tail_count || 0
@@ -148,10 +150,12 @@ defmodule Flezha.SDK.Relays do
         range: range,
         journal: Codec.journal_facts(add.task_journal),
         owed_inbox: add.inbox_tail_count || 0,
-        resume_cell_count: add.resume_cell_count || 0,
+        # The gate counts the effect results the bind ships with its restores.
+        resume_cell_count: (add.resume_cell_count || 0) + (add.effect_result_count || 0),
         dead_letter_turns: add.dead_letter_turns || false,
         counters: s.counters,
         runner: self(),
+        effects: s.effects,
         secondaries: s.secondaries,
         credit: s.credit
       )

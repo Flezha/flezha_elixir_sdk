@@ -51,9 +51,24 @@ defmodule Flezha.SDK.Ctx do
   `spawn_steps/4` asks the runner for a steps instance and answers a
   `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
   nothing. `complete/2` rides the dictionary too, and is taken with the emits.
+
+  `effect/4` runs an outside call once per re-run of the invocation, keeping
+  its result through the runner (`Flezha.SDK.Effects`); its per-name count and
+  the name whose function is running ride the dictionary under the ref.
   """
 
-  alias Flezha.SDK.{Counters, Error, Hold, Knob, Tasklet, Spawn, Timers}
+  alias Flezha.SDK.{
+    Codec,
+    Counters,
+    Effects,
+    Error,
+    Hold,
+    Knob,
+    RunnerServer,
+    Tasklet,
+    Spawn,
+    Timers
+  }
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -70,7 +85,11 @@ defmodule Flezha.SDK.Ctx do
     :relay_id,
     :counters,
     :preview,
+    :effects,
+    :pass,
+    :owner,
     identity: <<>>,
+    phase: :run,
     hold: nil,
     attempt: 1,
     seq: 0,
@@ -124,6 +143,8 @@ defmodule Flezha.SDK.Ctx do
       relay_id: Keyword.get(opts, :relay_id),
       counters: Keyword.get(opts, :counters),
       preview: Keyword.get(opts, :preview),
+      effects: Keyword.get(opts, :effects),
+      pass: Keyword.get(opts, :pass),
       identity: Keyword.get(opts, :identity, <<>>),
       seq: Keyword.get(opts, :seq, 0),
       replay?: Keyword.get(opts, :replay, false),
@@ -137,10 +158,13 @@ defmodule Flezha.SDK.Ctx do
   # updated per invocation with that invocation's own fields.
   @spec template(module(), term(), binary(), keyword()) :: t()
   def template(module, cell_key, identity, opts) do
-    new(module, cell_key, 0, [
-      {:timer_policy, Tasklet.timer_policy(module)},
-      {:identity, identity} | opts
-    ])
+    ctx =
+      new(module, cell_key, 0, [
+        {:timer_policy, Tasklet.timer_policy(module)},
+        {:identity, identity} | opts
+      ])
+
+    %{ctx | owner: self()}
   end
 
   @doc """
@@ -247,17 +271,176 @@ defmodule Flezha.SDK.Ctx do
   # it, and two of its inputs with one payload are two requests.
   defp spawn_identity(%__MODULE__{origin: {cell, offset}, ref: ref}, factory_id, payload)
        when is_binary(factory_id) and is_binary(payload) do
-    position = Process.get(spawn_key(ref), 0)
-    Process.put(spawn_key(ref), position + 1)
+    position = next_position(ref, :spawn)
+    origin_hash(cell, offset, [<<position::32-big>>, factory_id, payload])
+  end
 
-    [cell, <<offset::64-big>>, <<position::32-big>>, factory_id, payload]
+  defp spawn_identity(%__MODULE__{}, _factory_id, _payload), do: ""
+
+  # The next place of a call counted under `counted` in this invocation: a
+  # spawn's position, an effect's ordinal by name.
+  defp next_position(ref, counted) do
+    position = Map.get(Process.get(positions_key(ref), %{}), counted, 0)
+    counted(ref, counted, position + 1)
+    position
+  end
+
+  defp counted(ref, counted, next),
+    do:
+      Process.put(
+        positions_key(ref),
+        Map.put(Process.get(positions_key(ref), %{}), counted, next)
+      )
+
+  # The cell, the offset and `parts`, each length-prefixed, as the shared core
+  # names a call from its invocation's origin.
+  defp origin_hash(cell, offset, parts) do
+    [cell, <<offset::64-big>> | parts]
     |> Enum.reduce(@fnv128_offset_basis, fn part, hash ->
       hash |> fnv1a128(<<byte_size(part)::64-big>>) |> fnv1a128(part)
     end)
     |> hex128()
   end
 
-  defp spawn_identity(%__MODULE__{}, _factory_id, _payload), do: ""
+  @doc """
+  Run `fun`, a call to anything outside the instance (a model, a tool, a
+  service), and keep its result: when this invocation runs again (a crash
+  re-run, a replay, a wake, a move), the call answers the kept result and
+  `fun` does not run. The result is kept, synced on the controller, before
+  this returns; a crash between `fun` finishing and that point runs `fun`
+  again, so give the outside service `stable_id/1` as an idempotency key where
+  it takes one.
+
+  `name` names the call: a non-empty string of at most 255 bytes, counted per
+  invocation, so a call of another name added before this one leaves its kept
+  result where it was. One call runs at a time; a concurrent one is refused. The
+  result is encoded as `spawn_steps/4` encodes its payload and read back as
+  JSON, else as the binary; `codec`, an `{encode, decode}` pair of one-argument
+  functions, replaces both. The call answers the result as it reads back, on a
+  first run and a re-run alike.
+
+  An invocation that took no input-log offset (local mode, a relay with no
+  input log) runs `fun` each time and keeps nothing. A raise in `fun`
+  propagates and nothing is kept. Answers `{:ok, result}`, or `{:error, reason}`
+  for `run/3` to return as it is: `{:non_retryable, error}` for
+  `effect.bad_name`, `effect.nested`, `effect.outside_invocation` and
+  `effect.too_large`, and the retryable `effect.not_recorded` error.
+  """
+  @spec effect(t(), String.t(), (-> term()), {(term() -> binary()), (binary() -> term())} | nil) ::
+          {:ok, term()} | {:error, Error.t() | {:non_retryable, Error.t()}}
+  def effect(%__MODULE__{} = ctx, name, fun, codec \\ nil) when is_function(fun, 0) do
+    {encode, decode} = codec || {&plain_payload/1, &plain_value/1}
+
+    with :ok <- effect_callable(ctx, name) do
+      case effect_origin(ctx) do
+        nil -> {:ok, fun |> run_effect(ctx, name) |> encode.() |> decode.()}
+        {cell, offset} -> kept_or_run(ctx, name, cell, offset, fun, encode, decode)
+      end
+    end
+  end
+
+  defp effect_callable(%__MODULE__{} = ctx, name) do
+    cond do
+      not is_binary(name) or name == "" or byte_size(name) > 255 ->
+        refuse("effect.bad_name", name: inspect(name))
+
+      ctx.owner != nil and ctx.owner != self() ->
+        refuse("effect.outside_invocation", name: name)
+
+      Process.get(effect_running_key(ctx.ref)) != nil ->
+        refuse("effect.nested", name: name)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp refuse(code, details), do: {:error, {:non_retryable, Error.new(code, details)}}
+
+  # A flow Cell's input carries its offset; a steps stage's pass holds it, and an
+  # undo runs in the pass that failed.
+  defp effect_origin(%__MODULE__{phase: :run, origin: {_cell, _offset} = origin}), do: origin
+
+  defp effect_origin(%__MODULE__{pass: pass, identity: cell}) when pass != nil do
+    case :atomics.get(pass, 1) do
+      offset when offset >= 0 -> {cell, offset}
+      _none -> nil
+    end
+  end
+
+  defp effect_origin(%__MODULE__{}), do: nil
+
+  defp kept_or_run(ctx, name, cell, offset, fun, encode, decode) do
+    from = Map.get(Process.get(positions_key(ctx.ref), %{}), {:effect, name}, 0)
+    phase = if ctx.phase == :compensate, do: 1, else: 0
+    identity_of = &origin_hash(cell, offset, ["effect", <<phase>>, name, <<&1::32-big>>])
+    at = {ctx.relay_id, cell, offset}
+
+    {ordinal, identity, kept} =
+      Effects.resolve(ctx.effects, at, identity_of, from, ctx.attempt)
+
+    counted(ctx.ref, {:effect, name}, ordinal + 1)
+
+    case kept do
+      {:ok, kept} ->
+        {:ok, decode.(kept)}
+
+      :none ->
+        encoded = fun |> run_effect(ctx, name) |> encode.()
+
+        with :ok <- effect_fits(name, encoded),
+             {:ok, kept} <- keep(ctx, name, cell, offset, identity, encoded) do
+          {:ok, decode.(kept)}
+        end
+    end
+  end
+
+  defp run_effect(fun, %__MODULE__{ref: ref}, name) do
+    Process.put(effect_running_key(ref), name)
+
+    try do
+      fun.()
+    after
+      Process.delete(effect_running_key(ref))
+    end
+  end
+
+  defp effect_fits(name, encoded) do
+    limit = Knob.get(:effect_max_bytes)
+
+    if byte_size(encoded) > limit,
+      do: refuse("effect.too_large", name: name, bytes: byte_size(encoded), limit: limit),
+      else: :ok
+  end
+
+  defp keep(%__MODULE__{runner: nil}, name, _cell, _offset, _identity, _encoded),
+    do:
+      {:error,
+       Error.new("effect.not_recorded", name: name, reason: "the runner has no control plane")}
+
+  defp keep(%__MODULE__{} = ctx, name, cell, offset, identity, encoded) do
+    command = Codec.effect_result_command(ctx.relay_id, identity, offset, name, encoded, cell)
+
+    case RunnerServer.keep_effect(ctx.runner, command) do
+      {:ok, first} ->
+        kept = first || encoded
+        Effects.put(ctx.effects, ctx.relay_id, cell, offset, identity, kept)
+        {:ok, kept}
+
+      {:error, %Error{code: "effect.not_recorded"} = refusal} ->
+        {:error, refusal}
+
+      {:error, %Error{} = refusal} ->
+        {:error, Error.new("effect.not_recorded", name: name, reason: refusal.message)}
+    end
+  end
+
+  defp plain_value(binary) do
+    case Jason.decode(binary) do
+      {:ok, value} -> value
+      {:error, _not_json} -> binary
+    end
+  end
 
   @doc """
   End the instance this tasklet runs in, with `result` as the result its
@@ -463,7 +646,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(timers_key(ref))
     Process.delete(checkpoint_key(ref))
     Process.delete(stable_id_key(ref))
-    Process.delete(spawn_key(ref))
+    Process.delete(positions_key(ref))
     Process.delete(completion_key(ref))
     Process.delete(part_key(ref))
   end
@@ -521,7 +704,8 @@ defmodule Flezha.SDK.Ctx do
   defp timers_key(ref), do: {__MODULE__, ref, :timers}
   defp checkpoint_key(ref), do: {__MODULE__, ref, :checkpoint}
   defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
-  defp spawn_key(ref), do: {__MODULE__, ref, :spawn}
+  defp positions_key(ref), do: {__MODULE__, ref, :positions}
+  defp effect_running_key(ref), do: {__MODULE__, ref, :effect_running}
   defp completion_key(ref), do: {__MODULE__, ref, :completion}
   defp part_key(ref), do: {__MODULE__, ref, :part}
 end

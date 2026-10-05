@@ -876,7 +876,7 @@ defmodule Flezha.SDK.Cell do
   # a `compensate` hook's context carries no timers. The change seq it starts at,
   # restored with the Cell, lets a re-run answer the stable ids the first did.
   defp ctx_seed(%State{} = s, %Undo{}, _input),
-    do: %{s.ctx | timers: :unavailable, seq: s.change_seq}
+    do: %{s.ctx | timers: :unavailable, seq: s.change_seq, phase: :compensate}
 
   defp ctx_seed(%State{} = s, item, input) do
     %{

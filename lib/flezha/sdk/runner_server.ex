@@ -27,6 +27,7 @@ defmodule Flezha.SDK.RunnerServer do
     Counters,
     Credit,
     DataStream,
+    Effects,
     Error,
     Cell,
     Hold,
@@ -70,6 +71,7 @@ defmodule Flezha.SDK.RunnerServer do
       :transport,
       :stable_id,
       :registry,
+      :effects,
       :counters,
       :payload,
       :credit,
@@ -133,11 +135,38 @@ defmodule Flezha.SDK.RunnerServer do
     ref = make_ref()
     GenServer.cast(server, {:admin, self(), ref, verb, args})
 
+    await_ack(ref, timeout, fn ->
+      Error.new("control.timeout", verb: verb, seconds: div(timeout, 1000))
+    end)
+  end
+
+  @doc """
+  Ship a `ctx.effect` result (`Codec.effect_result_command/6`) and wait for the
+  controller to keep it: `{:ok, nil}` when this result was kept, `{:ok, first}`
+  when the controller kept another first, which the call answers instead, or
+  the refusal. Waits the request deadline a spawn waits.
+  """
+  @spec keep_effect(GenServer.server(), {atom(), struct()}) ::
+          {:ok, binary() | nil} | {:error, Error.t()}
+  def keep_effect(server, {:effect_result, result} = command) do
+    ref = make_ref()
+    timeout = Knob.get(:sdk_spawn_reply_ms)
+    GenServer.cast(server, {:effect, self(), ref, command})
+
+    await_ack(ref, timeout, fn ->
+      Error.new("effect.not_recorded",
+        name: result.name,
+        reason: "no answer within #{div(timeout, 1000)}s"
+      )
+    end)
+  end
+
+  defp await_ack(ref, timeout, timed_out) do
     receive do
       {:reply_ack, ^ref, _result, %Flezha.SDK.Error{} = error} -> {:error, error}
       {:reply_ack, ^ref, result, nil} -> {:ok, result}
     after
-      timeout -> {:error, Error.new("control.timeout", verb: verb, seconds: div(timeout, 1000))}
+      timeout -> {:error, timed_out.()}
     end
   end
 
@@ -188,6 +217,7 @@ defmodule Flezha.SDK.RunnerServer do
       transport: Keyword.fetch!(opts, :transport),
       stable_id: stable_id,
       registry: :ets.new(:flezha_sdk_relays, [:public, :set, {:read_concurrency, true}]),
+      effects: Effects.new(),
       counters: counters,
       credit: credit,
       topologies: Keyword.fetch!(opts, :topologies),
@@ -427,6 +457,27 @@ defmodule Flezha.SDK.RunnerServer do
     end
   end
 
+  # A kept result is the answer the caller returns; with no control handle
+  # nothing would ever reply, so that case is answered at once.
+  def handle_cast({:effect, caller, ref, {:effect_result, result} = command}, %State{} = s) do
+    reference_id = request_ref("effect")
+
+    if s.control_handle != nil and ship_request(s, reference_id, command) == :ok do
+      {:noreply, await_reply(s, reference_id, caller, ref, :reply_ack)}
+    else
+      send(
+        caller,
+        {:reply_ack, ref, nil,
+         Error.new("effect.not_recorded",
+           name: result.name,
+           reason: "the runner has no control plane"
+         )}
+      )
+
+      {:noreply, s}
+    end
+  end
+
   def handle_cast({:claim_spawn, reference_id}, %State{} = s),
     do: {:noreply, %{s | waiters: Waiters.claim(s.waiters, reference_id)}}
 
@@ -559,6 +610,20 @@ defmodule Flezha.SDK.RunnerServer do
 
   defp dispatch({:admin_response, %{result: result, error: error}}, ref, s),
     do: settle(s, ref, result, Error.from_wire(error))
+
+  defp dispatch({:effect_result_ack, ack}, ref, s),
+    do: settle(s, ref, if(ack.first, do: ack.payload), Error.from_wire(ack.error))
+
+  defp dispatch({:effect_results, %{relay_id: relay_id, results: results}}, ref, s) do
+    count = Effects.landed(s.effects, relay_id, results)
+
+    case Map.get(s.relays, relay_id) do
+      {pid, _factory_id} -> send(pid, {:effect_results_landed, count})
+      nil -> :ok
+    end
+
+    reply_ok(s, ref)
+  end
 
   defp dispatch({:spawn_steps_response, answer}, ref, s),
     do:

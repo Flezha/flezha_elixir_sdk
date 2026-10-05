@@ -138,6 +138,7 @@ defmodule Flezha.SDK.Relay.Server do
         :range,
         :counters,
         :runner,
+        :effects,
         :secondaries,
         :credit
       ])

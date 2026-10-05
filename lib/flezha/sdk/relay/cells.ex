@@ -50,6 +50,8 @@ defmodule Flezha.SDK.Relay.Cells do
     :counters,
     :hold_cap,
     :runner,
+    :effects,
+    :pass,
     :secondaries,
     :slots,
     :credit,
@@ -67,8 +69,9 @@ defmodule Flezha.SDK.Relay.Cells do
   The Cell set of the calling process, its Single and owned Static Cells
   minted. `opts` carries `:relay_id`, `:topology`, `:run` (`:flow` |
   `:steps`), `:counters`, `:runner` and optionally `:range`, `:hold_cap`,
-  `:secondaries`, `:credit` and `:prefix`, the instance's processed-prefix
-  ledger.
+  `:secondaries`, `:credit`, `:prefix`, the instance's processed-prefix
+  ledger, `:effects`, the runner's kept effect results, and `:pass`, the slot a
+  steps driver publishes its pass's input-log offset in.
   """
   @spec new(keyword()) :: t()
   def new(opts) do
@@ -84,6 +87,8 @@ defmodule Flezha.SDK.Relay.Cells do
       counters: counters,
       hold_cap: hold_cap,
       runner: Keyword.get(opts, :runner),
+      effects: Keyword.get(opts, :effects),
+      pass: Keyword.get(opts, :pass),
       secondaries: Keyword.get(opts, :secondaries, []),
       # The slot survives the Cell: what a persistent Cell last shipped,
       # for the replacement of one killed untrappably.
@@ -508,7 +513,8 @@ defmodule Flezha.SDK.Relay.Cells do
       credit: c.credit,
       durable: topo.durable?,
       tier: tier_facts(c, topo, node_ref),
-      ctx_opts: [runner: c.runner] ++ ctx_opts(topo, node_ref, key)
+      ctx_opts:
+        [runner: c.runner, effects: c.effects, pass: c.pass] ++ ctx_opts(topo, node_ref, key)
     )
   end
 

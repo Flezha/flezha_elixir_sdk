@@ -195,6 +195,8 @@ defmodule Flezha.SDK.Tasklet do
     cell_key: 1,
     spawn_steps: 3,
     spawn_steps: 4,
+    effect: 3,
+    effect: 4,
     complete: 2,
     checkpoint: 1,
     stable_id: 1
