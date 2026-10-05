@@ -452,6 +452,110 @@
       "hint": "flz controller start",
       "details": ["socket"]
     },
+    "diagnose.asleep": {
+      "class": "unavailable",
+      "message": "relay '{relay}' is asleep, and the next message wakes it",
+      "details": ["relay"]
+    },
+    "diagnose.data_plane_wedge": {
+      "class": "unavailable",
+      "message": "relay '{relay}' has had its data plane wedged at the {layer} layer for {seconds}s",
+      "hint": "restart the runner it is bound to: flz runner list --namespace {namespace}",
+      "details": ["relay", "layer", "seconds", "namespace"]
+    },
+    "diagnose.dead_letters": {
+      "class": "conflict",
+      "message": "relay '{relay}' has dead letters: {count}, the newest {newest_s}s old",
+      "hint": "flz dlq list {class}",
+      "details": ["relay", "count", "newest_s", "errors", "class"]
+    },
+    "diagnose.finished": {
+      "class": "conflict",
+      "message": "relay '{relay}' finished as {status}",
+      "details": ["relay", "status", "error"]
+    },
+    "diagnose.healthy": {
+      "class": "unavailable",
+      "message": "relay '{relay}' is healthy, bound to runner '{runner}' on controller {node}",
+      "details": ["relay", "runner", "node"]
+    },
+    "diagnose.inputs_stuck": {
+      "class": "unavailable",
+      "message": "{count} inputs wait in relay '{relay}''s input log, and its watermark has not moved since the last sweep while the log grew to {size_bytes} bytes",
+      "hint": "act on the other findings, or restart the runner: flz runner list --namespace {namespace}",
+      "details": ["relay", "count", "size_bytes", "namespace"]
+    },
+    "diagnose.inputs_waiting": {
+      "class": "unavailable",
+      "message": "{count} inputs wait in relay '{relay}''s input log; a count that grows while nothing else changes means it is stuck",
+      "details": ["relay", "count"]
+    },
+    "diagnose.no_runner": {
+      "class": "unavailable",
+      "message": "no connected runner announces factory '{factory}', so relay '{relay}' has nowhere to run",
+      "hint": "start a runner that defines '{factory}', then check it with flz runner list --namespace {namespace}",
+      "details": ["relay", "factory", "namespace"]
+    },
+    "diagnose.output_stall": {
+      "class": "unavailable",
+      "message": "relay '{relay}' has had its outputs unread for {seconds}s",
+      "hint": "a listener or output plugin downstream is not reading: flz plugin list --namespace {namespace}",
+      "details": ["relay", "seconds", "namespace"]
+    },
+    "diagnose.parked": {
+      "class": "conflict",
+      "message": "relay '{relay}' has been parked for {seconds}s: {reason}",
+      "hint": "fix the cause named here; the controller retries the bind on its own, with a growing delay",
+      "details": ["relay", "seconds", "reason"]
+    },
+    "diagnose.plugin_missing": {
+      "class": "not_found",
+      "message": "plugin '{plugin}' bound to relay '{relay}' needs provider {provider}, which is not installed on controller {node}",
+      "hint": "install its package on that controller: flz plugin list --installed",
+      "details": ["relay", "plugin", "provider", "node"]
+    },
+    "diagnose.plugin_unhealthy": {
+      "class": "unavailable",
+      "message": "plugin '{plugin}' ({provider}) bound to relay '{relay}' is unhealthy: {reason}",
+      "hint": "flz plugin list --namespace {namespace}",
+      "details": ["relay", "plugin", "provider", "reason", "namespace"]
+    },
+    "diagnose.rebinding": {
+      "class": "unavailable",
+      "message": "the controller is binding relay '{relay}' to a runner again ({seconds}s so far), and it recovers by itself",
+      "hint": "wait, then flz relay diagnose {relay} --namespace {namespace}",
+      "details": ["relay", "seconds", "namespace"]
+    },
+    "diagnose.runner_disconnected": {
+      "class": "unreachable",
+      "message": "relay '{relay}' is bound to runner '{runner}', which has been gone for {seconds}s",
+      "hint": "check the runner's process and its log, then flz runner list --namespace {namespace}",
+      "details": ["relay", "runner", "seconds", "namespace"]
+    },
+    "diagnose.runner_mismatch": {
+      "class": "conflict",
+      "message": "runners announce factory '{factory}', but none can take relay '{relay}': {reason}",
+      "hint": "flz runner list --namespace {namespace}",
+      "details": ["relay", "factory", "reason", "namespace"]
+    },
+    "diagnose.stuck": {
+      "class": "unavailable",
+      "message": "relay '{relay}' takes input but has not moved forward for {seconds}s ({detail})",
+      "hint": "restart the runner it is bound to: flz runner list --namespace {namespace}",
+      "details": ["relay", "seconds", "detail", "namespace"]
+    },
+    "diagnose.unbound": {
+      "class": "unavailable",
+      "message": "relay '{relay}' has had no runner bound for {seconds}s, although a runner can take it",
+      "hint": "flz relay info --namespace {namespace}",
+      "details": ["relay", "seconds", "namespace"]
+    },
+    "diagnose.unknown": {
+      "class": "unavailable",
+      "message": "the controller has not judged relay '{relay}' yet",
+      "hint": "try again in a few seconds: flz relay diagnose {relay} --namespace {namespace}",
+      "details": ["relay", "namespace"]
+    },
     "dlq.bad_entry_ref": {
       "class": "invalid",
       "message": "'{entry}' is not an entry reference; write it as <relay>/<tasklet>/<entry-id>",
