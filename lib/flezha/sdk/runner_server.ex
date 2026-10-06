@@ -838,7 +838,13 @@ defmodule Flezha.SDK.RunnerServer do
       "factory_ids" => Enum.map(factories, &elem(&1, 0)),
       "factories" =>
         Enum.map(factories, fn {id, desc, run} ->
-          %{"id" => id, "description" => desc, "sdk_lang" => Codec.sdk_lang(), "run" => run.run}
+          %{
+            "id" => id,
+            "description" => desc,
+            "sdk_lang" => Codec.sdk_lang(),
+            "run" => run.run,
+            "api" => run.api
+          }
           |> put_steps(run)
         end),
       "stable_id" => stable_id,

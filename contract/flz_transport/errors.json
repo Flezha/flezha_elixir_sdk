@@ -630,6 +630,24 @@
       "hint": "keep a reference to the result rather than the result, or raise FLEZHA_EFFECT_MAX_BYTES",
       "details": ["name", "bytes", "limit"]
     },
+    "api.channel_unknown": {
+      "class": "not_found",
+      "message": "relay '{relay}' has no entry channel '{channel}'; its channels are {channels}",
+      "hint": "flz relay info {relay}",
+      "details": ["relay", "channel", "channels"]
+    },
+    "api.input_invalid": {
+      "class": "invalid",
+      "message": "the value for channel '{channel}' is not {expected}: {reason}",
+      "hint": "pass the payload as it is with --text",
+      "details": ["channel", "expected", "reason"]
+    },
+    "api.not_advertised": {
+      "class": "unavailable",
+      "message": "no connected runner has announced the API of factory '{factory}' in namespace '{namespace}'",
+      "hint": "connect a runner that declares factory '{factory}'",
+      "details": ["namespace", "factory"]
+    },
     "http.answer_invalid": {
       "class": "invalid",
       "message": "relay '{relay}' answered the request with something that is not an HTTP answer envelope: {reason}",
@@ -3093,6 +3111,12 @@
       "class": "invalid",
       "message": "exactly: effectively_once needs a durable other than false: the tier is durable state",
       "details": []
+    },
+    "topology.schema_invalid": {
+      "class": "invalid",
+      "message": "channel '{channel}' declares a schema that cannot be announced: {reason}",
+      "hint": "give a JSON Schema object with a type, for example {\"type\": \"object\"}, on a json channel",
+      "details": ["channel", "reason"]
     },
     "topology.entry_channel_with_producer": {
       "class": "invalid",

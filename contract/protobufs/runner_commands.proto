@@ -644,6 +644,24 @@ message FactoryDecl {
     // the failure mode ("undo_all", "keep_progress").
     string each = 5;
     string on_failure = 6;
+    // The factory's API: one entry per entry channel of its class. Empty from
+    // a runner that announces none, whose factory then has no API.
+    repeated ApiEntry api = 7;
+}
+
+// One entry channel of a factory's API, as its class declares it.
+message ApiEntry {
+    string channel = 1;
+    // The input's format: json, text, bytes, msgpack or custom.
+    string codec = 2;
+    // The JSON Schema of the input; empty for none.
+    string schema_json = 3;
+    // Empty for none.
+    string description = 4;
+    // The answer's format; empty when no output that answers is reachable
+    // from the channel.
+    string answer_codec = 5;
+    string answer_schema_json = 6;
 }
 
 // SDK -> Controller. Ships the runner's FULL current factory set after a

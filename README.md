@@ -75,6 +75,29 @@ Each outcome is a `%Flezha.SDK.Response{}`: `request` (the bytes sent),
 `result` (`{:ok, answer}` or `{:error, %Flezha.SDK.Error{}}`, a missed deadline
 being `call.timeout`), `target` (the callee's instance id) and `created`.
 
+## A relay's API
+
+Every entry channel is part of its relay's API, with its format and the output
+that answers it. `input/3` takes `codec:` (`:json`, the default, `:text`,
+`:bytes` or `:msgpack`), `description:`, and for a JSON channel `schema:`, a
+JSON Schema map with a `type`; the tasklet still receives the payload's bytes:
+
+```elixir
+c
+|> input("place", description: "Places an order", schema: %{"type" => "object"})
+|> into(Place)
+|> output("placed")
+```
+
+Application code calls a channel by value with `Flezha.SDK.call/4`, beside
+`Flezha.SDK.send/5`. The value is encoded as `output/2` encodes it, and the
+answer is a JSON value, a string for text, the bytes for the binary formats, or
+`%{"accepted" => true}` from a channel no output answers:
+
+```elixir
+{:ok, placed} = Flezha.SDK.call(runner, "orders-eu", "place", %{"pair" => "EUR/USD", "amount" => 1000})
+```
+
 ## The socket client
 
 `:uds` and `:quic` dial through a small native library, `Flezha.SDK.Native`. It

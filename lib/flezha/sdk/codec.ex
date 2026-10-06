@@ -102,7 +102,8 @@ defmodule Flezha.SDK.Codec do
 
   @doc """
   Build the `UpdateFactories` command tuple from a list of
-  `{id, description, run}`, `run` as `run/1` answers it.
+  `{id, description, run}`, `run` as `run/1` answers it with `:api` as
+  `api/1` answers it.
   """
   @spec update_factories_command([{String.t(), String.t() | nil, map()}]) ::
           {atom(), struct()}
@@ -115,7 +116,8 @@ defmodule Flezha.SDK.Codec do
           sdk_lang: @sdk_lang,
           run: run.run,
           each: run.each,
-          on_failure: run.on_failure
+          on_failure: run.on_failure,
+          api: run |> Map.get(:api, []) |> Enum.map(&struct(RunnerCommands.ApiEntry, &1))
         }
       end)
 
@@ -139,6 +141,60 @@ defmodule Flezha.SDK.Codec do
     }
 
   def run(%Topology{}), do: %{run: "flow", each: "", on_failure: ""}
+
+  @doc """
+  A registered class's API, as its announcement carries it: one entry per
+  entry channel that is not a call's Response channel, with the format, schema
+  and description it declares and the format of the outputs reachable from it
+  (`""` when none is, `"bytes"` when they disagree), the rule
+  `flz_core::relay::registry` builds a host's entries by.
+  """
+  @spec api(Spec.t() | Topology.t()) :: [map()]
+  def api(%Spec{topology: topology}), do: api(topology)
+
+  def api(%Topology{} = t) do
+    responses = for {_source, routes} <- t.routes, %{call: %{response: name}} <- routes, do: name
+
+    for name <- t.entry_order, name not in responses do
+      entry = Map.fetch!(t.entries, name)
+
+      %{
+        channel: name,
+        codec: entry.codec,
+        schema_json: if(entry.schema, do: Jason.encode!(entry.schema), else: ""),
+        description: entry.description,
+        answer_codec: answer_codec(t.routes, [{:entry, name}], MapSet.new(), MapSet.new()),
+        answer_schema_json: ""
+      }
+    end
+  end
+
+  # The outputs reachable from the pending sources along their consumer
+  # edges. An output names no schema in this SDK, so its format decides.
+  defp answer_codec(_routes, [], _seen, codecs) do
+    case MapSet.to_list(codecs) do
+      [] -> ""
+      [codec] -> codec
+      _disagree -> "bytes"
+    end
+  end
+
+  defp answer_codec(routes, [source | pending], seen, codecs) do
+    if source in seen do
+      answer_codec(routes, pending, seen, codecs)
+    else
+      here = Map.get(routes, source, [])
+
+      outputs =
+        for %{to: {:sink, _}, call: nil} = out <- here, into: codecs, do: output_codec(out)
+
+      next = for %{to: {:node, _} = node} <- here, do: node
+      answer_codec(routes, next ++ pending, MapSet.put(seen, source), outputs)
+    end
+  end
+
+  defp output_codec(%{serializer: serializer}),
+    do: if(serializer == (&Flezha.SDK.Channels.default_serialize/1), do: "json", else: "custom")
 
   @doc """
   The `AdminRequest` command tuple: the verb, and its arguments as a JSON

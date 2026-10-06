@@ -446,9 +446,12 @@ defmodule ElixirRunner.Conformance do
     Enum.reduce(context().steps, %{token: c, handles: %{}}, &step/2)
   end
 
+  # `<x>.schema(<json>)` is an `input` option here, so it is read with the entry.
   defp step("entry(" <> _ = step, acc) do
     name = argument(step)
-    %{acc | handles: Map.put(acc.handles, name, Channels.input(acc.token, name))}
+    schema = Enum.find_value(context().steps, &schema_of(&1, name))
+    input = Channels.input(acc.token, name, schema: schema)
+    %{acc | handles: Map.put(acc.handles, name, input)}
   end
 
   # `merge(<task>, <x>…)`: one identity mapping per listed source, a repeated
@@ -481,8 +484,10 @@ defmodule ElixirRunner.Conformance do
   # The class's settings, read off the context by the row class.
   defp dotted("class", [_setting], acc), do: acc
 
-  # A tasklet knob, read off the palette's own declaration rather than here.
+  # A tasklet knob, read off the palette's own declaration rather than here,
+  # and an entry's schema, read with its `entry` step.
   defp dotted(_head, ["mailbox(" <> _], acc), do: acc
+  defp dotted(_head, ["schema(" <> _], acc), do: acc
 
   defp dotted(head, links, acc), do: chain(head, links, acc)
 
@@ -605,6 +610,13 @@ defmodule ElixirRunner.Conformance do
 
   defp steps(row),
     do: row.steps |> String.split(";") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+  defp schema_of(step, name) do
+    case String.split(step, ".", parts: 2) do
+      [^name, "schema(" <> _ = link] -> link |> argument() |> Jason.decode!()
+      _other -> nil
+    end
+  end
 
   defp mailboxes(steps) do
     for step <- steps,

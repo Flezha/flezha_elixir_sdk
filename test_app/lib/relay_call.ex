@@ -15,6 +15,8 @@ defmodule ElixirRunner.RelayCall do
       its calling tasklet.
     * `call_tool_session`: a durable `:per_input` session calling `pricing`
       from a turn and reading the outcome as its next turn.
+    * `orders`: the `relay_api` fixture, a described JSON entry `place`
+      answering through `placed` and a text entry `audit` no output answers.
 
   Every outcome is written to an output as one line,
   `<request>=ok:<answer>@<target>/<created>` or
@@ -264,5 +266,47 @@ defmodule ElixirRunner.RelayCall do
     end
   end
 
-  def all, do: [PricingOp, OrdersOp, AgentSteps, GatewayOp, ToolSessionSteps]
+  defmodule PlaceOrder do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "place_order"
+
+    @impl true
+    def run(input, state, ctx) do
+      %{"pair" => pair, "amount" => amount} = Jason.decode!(input)
+      emit(ctx, %{"pair" => pair, "amount" => amount, "status" => "placed"})
+      {:ok, state}
+    end
+  end
+
+  defmodule AuditOrder do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "audit_order"
+
+    @impl true
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
+  defmodule ApiOrders do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    import Flezha.SDK.Channels
+    def factory_id, do: "orders"
+
+    @order %{
+      "type" => "object",
+      "properties" => %{"pair" => %{"type" => "string"}, "amount" => %{"type" => "number"}},
+      "required" => ["pair", "amount"]
+    }
+
+    def channels(c) do
+      c
+      |> input("place", description: "Places an order", schema: @order)
+      |> into(PlaceOrder)
+      |> output("placed")
+
+      c |> input("audit", codec: :text) |> into(AuditOrder)
+    end
+  end
+
+  def all, do: [PricingOp, OrdersOp, AgentSteps, GatewayOp, ToolSessionSteps, ApiOrders]
 end

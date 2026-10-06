@@ -171,6 +171,32 @@ defmodule Flezha.SDK do
   end
 
   @doc """
+  Call the entry channel `channel` of `relay_id` with `value`, through the
+  controller under the same role check as `send/5`, answering what the relay
+  answers: `{:ok, answer}` with a JSON value, a string for text, the bytes for
+  the binary formats, or `%{"accepted" => true}` from a channel no output
+  answers. `value` is encoded as an output with no serializer of its own
+  encodes it.
+
+  `runner` is a handle, or the runner server's pid or name.
+  """
+  @spec call(result() | pid() | atom(), String.t(), String.t(), term()) ::
+          {:ok, term()} | {:error, Error.t()}
+  def call(runner, relay_id, channel, value) do
+    payload = value |> Flezha.SDK.Channels.default_serialize() |> Base.encode64()
+    args = [relay_id, channel, payload, %{"payload" => "base64"}]
+
+    case Flezha.SDK.Control.call(runner, "Relay.call_channel", args) do
+      {:ok, %{"accepted" => true}} -> {:ok, %{"accepted" => true}}
+      {:ok, %{"answer" => answer, "answer_codec" => codec}} -> {:ok, answer(codec, answer)}
+      other -> other
+    end
+  end
+
+  defp answer(codec, answer) when codec in ["json", "text"], do: answer
+  defp answer(_binary, answer), do: Base.decode64!(answer)
+
+  @doc """
   The ids of the relay instances bound on this runner now, a partition
   member by its member id, read without the controller.
   """
@@ -303,6 +329,6 @@ defmodule Flezha.SDK do
     description =
       if function_exported?(module, :description, 0), do: module.description(), else: nil
 
-    {class.factory_id, description, Codec.run(class)}
+    {class.factory_id, description, Map.put(Codec.run(class), :api, Codec.api(class))}
   end
 end

@@ -82,21 +82,33 @@ defmodule ElixirRunner.Application do
   # The local-send drill: a JSON array of `{relay, channel, message, when}`
   # sends this app's own code makes with `local: true`, each once the file
   # `when` names exists, printing `local_send <relay> ok` or
-  # `local_send <relay> err <code>`.
+  # `local_send <relay> err <code>`. An entry with `call: true` carries
+  # `value` instead and calls the channel with `Flezha.SDK.call/4`, printing
+  # `call <relay> ok <answer JSON>` or `call <relay> err <code>`.
   defp local_sends(nil), do: :ok
 
   defp local_sends(script) do
     spawn(fn ->
-      for %{"relay" => relay, "channel" => channel, "message" => message, "when" => go} <-
+      for %{"relay" => relay, "channel" => channel, "when" => go} = entry <-
             Jason.decode!(script) do
         await_file(go)
-
-        case Flezha.SDK.send(Flezha.SDK.RunnerServer, relay, message, channel, local: true) do
-          {:ok, _} -> IO.puts("local_send #{relay} ok")
-          {:error, %{code: code}} -> IO.puts("local_send #{relay} err #{code}")
-        end
+        IO.puts(drill(entry, relay, channel))
       end
     end)
+  end
+
+  defp drill(%{"call" => true, "value" => value}, relay, channel) do
+    case Flezha.SDK.call(Flezha.SDK.RunnerServer, relay, channel, value) do
+      {:ok, answer} -> "call #{relay} ok #{Jason.encode!(answer)}"
+      {:error, %{code: code}} -> "call #{relay} err #{code}"
+    end
+  end
+
+  defp drill(%{"message" => message}, relay, channel) do
+    case Flezha.SDK.send(Flezha.SDK.RunnerServer, relay, message, channel, local: true) do
+      {:ok, _} -> "local_send #{relay} ok"
+      {:error, %{code: code}} -> "local_send #{relay} err #{code}"
+    end
   end
 
   defp await_file(path) do

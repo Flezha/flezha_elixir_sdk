@@ -91,24 +91,62 @@ defmodule Flezha.SDK.Channels do
 
   # --- openers ---
 
-  @doc "Bytes-passthrough entry channel."
-  def input(%__MODULE__{} = c, name) when is_binary(name),
-    do: input_with(c, name, &default_parse/1)
+  @doc """
+  Bytes-passthrough entry channel: its tasklet receives the payload as it
+  arrives. The options are announced in the relay's API: `codec:` the
+  payload's format (`:json`, the default, `:text`, `:bytes` or `:msgpack`),
+  `description:` what the channel is for, and `schema:` a `:json` channel's
+  JSON Schema, a map with a `type`; any other schema refuses the class as
+  `SchemaInvalid`.
+
+      c |> input("place", description: "Places an order", schema: %{"type" => "object"})
+  """
+  def input(%__MODULE__{} = c, name, opts \\ []) when is_binary(name) and is_list(opts) do
+    codec = Keyword.get(opts, :codec, :json)
+
+    unless codec in [:json, :text, :bytes, :msgpack],
+      do: raise(ArgumentError, "input codec: is one of :json, :text, :bytes or :msgpack")
+
+    api = %{
+      codec: Atom.to_string(codec),
+      schema: opts[:schema],
+      description: Keyword.get(opts, :description, "")
+    }
+
+    stream = open(c, name, &default_parse/1, api)
+
+    case schema_refusal(api) do
+      nil -> stream
+      reason -> refuse(stream, {:SchemaInvalid, name, reason})
+    end
+  end
 
   @doc "Entry channel with a custom parser; a parse failure rides the entry ladder."
-  def input_with(%__MODULE__{ref: ref}, name, parser)
-      when is_binary(name) and is_function(parser, 1) do
+  def input_with(%__MODULE__{} = c, name, parser)
+      when is_binary(name) and is_function(parser, 1),
+      do: open(c, name, parser, %{codec: "custom", schema: nil, description: ""})
+
+  # An entry channel and what the relay's API announces for it.
+  defp open(%__MODULE__{ref: ref}, name, parser, api) do
     update(ref, fn acc ->
+      entry = Map.merge(api, %{parser: parser, after_nodes: map_size(acc.nodes)})
+
       %{
         acc
-        | entries:
-            Map.put_new(acc.entries, name, %{parser: parser, after_nodes: map_size(acc.nodes)}),
+        | entries: Map.put_new(acc.entries, name, entry),
           entry_order: [name | acc.entry_order]
       }
     end)
 
     %Stream{builder: ref, source: {:entry, name}}
   end
+
+  # The rule `flz_core::host::register` judges a declared schema by.
+  defp schema_refusal(%{schema: nil}), do: nil
+  defp schema_refusal(%{codec: "json", schema: %{"type" => _}}), do: nil
+  defp schema_refusal(%{codec: "json", schema: %{type: _}}), do: nil
+  defp schema_refusal(%{codec: "json"}), do: "a schema is a JSON object with a type"
+  defp schema_refusal(_not_json), do: "only a json channel carries a schema"
 
   # --- edge transforms (fused into one closure per consumer edge) ---
 
@@ -214,7 +252,7 @@ defmodule Flezha.SDK.Channels do
   output at all. Returns the handle.
   """
   def output(%Stream{} = s, plugin \\ nil) when is_nil(plugin) or is_binary(plugin),
-    do: output_with(s, plugin, &default_serialize/1)
+    do: output_with(s, plugin, &__MODULE__.default_serialize/1)
 
   @doc """
   `output/2` with a custom serializer. Returns the handle, so a channel carrying
@@ -346,6 +384,8 @@ defmodule Flezha.SDK.Channels do
   defp default_parse(bytes) when is_binary(bytes), do: {:ok, bytes}
   defp default_parse(other), do: {:ok, other}
 
+  # `output/2`'s serializer, captured by its remote name so the API can tell an
+  # output that writes JSON from one with a serializer of its own.
   @doc false
   def default_serialize(v) when is_binary(v), do: v
   def default_serialize(v) when is_bitstring(v), do: v

@@ -141,6 +141,7 @@ defmodule Flezha.SDK.Topology do
     NodeIdentityCollision: [:name],
     RetiredCallback: [:tasklet, :callback, :instead],
     RetryMaxZero: [:channel],
+    SchemaInvalid: [:channel, :reason],
     TransformAfterKeyBy: [:channel],
     TransformAfterTerminal: [:channel],
     TwoClocks: [:tasklet],
