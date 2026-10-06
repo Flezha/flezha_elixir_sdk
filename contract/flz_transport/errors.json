@@ -2937,6 +2937,18 @@
       "message": "relay '{relay}' has no tasklet named '{tasklet}'",
       "details": ["relay", "tasklet"]
     },
+    "template.dir_not_empty": {
+      "class": "conflict",
+      "message": "the folder {dir} already holds files",
+      "hint": "name a new or empty folder",
+      "details": ["dir"]
+    },
+    "template.unknown": {
+      "class": "not_found",
+      "message": "the release carries no {example} template for {language}",
+      "hint": "flz template list",
+      "details": ["language", "example"]
+    },
     "topology.at_checkpoint_without_max_delay": {
       "class": "invalid",
       "message": "checkpoint_outputs at_checkpoint requires checkpoint_max_delay_ms: an interval that never closes would hold its outputs forever on a quiet Cell",
@@ -3476,6 +3488,12 @@
       "class": "invalid",
       "message": "{option} must be text, not {value}",
       "details": ["option", "value"]
+    },
+    "usage.tar_to_terminal": {
+      "class": "invalid",
+      "message": "--tar writes a tar stream, which a terminal cannot show",
+      "hint": "redirect it: flz template create <language> <dir> --tar | tar x",
+      "details": []
     },
     "usage.text_only": {
       "class": "invalid",

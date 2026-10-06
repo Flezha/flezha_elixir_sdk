@@ -13,6 +13,8 @@ defmodule Flezha.SDK.MixProject do
       source_url: @source_url,
       package: package(),
       elixirc_paths: elixirc_paths(Mix.env()),
+      # The starter example's test runs with the suite, against this checkout.
+      test_paths: ["test", "examples/starter/test"],
       deps: deps(),
       docs: [main: "Flezha.SDK", source_ref: "v#{@version}"]
     ]
@@ -20,7 +22,7 @@ defmodule Flezha.SDK.MixProject do
 
   def application, do: [extra_applications: [:logger]]
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "examples/starter/lib"]
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do

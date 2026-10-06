@@ -18,3 +18,6 @@ flezha_sdk-*.tar
 /checksum-Elixir.Flezha.SDK.Native.exs
 /native/flz_sdk_nif/Cargo.lock
 /tmp/
+
+# The starter is a project of its own and commits its lock; this repository does not.
+/examples/starter/mix.lock
