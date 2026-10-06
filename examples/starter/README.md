@@ -15,7 +15,7 @@ own, connecting to a controller over its socket.
 ## Run it
 
 You need a controller running and reachable, as
-[Start the controller](https://github.com/flezha/flezha/blob/main/docs/tutorials/echo/start_the_controller.md)
+[Start the controller](https://github.com/flezha/flezha/blob/main/docs/getting_started/up_and_running.md#start-the-controller)
 starts one. From this folder, fetch the SDK, run the test and start the runner:
 
 ```sh
