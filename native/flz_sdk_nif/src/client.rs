@@ -55,7 +55,7 @@ fn client_connect_uds<'a>(
         // are opened, and where a reconnect returns to — the same slot the
         // Rust client records.
         socket_dir::note_connected(&socket_path);
-        spawn_client_stream(FlezhaStream::Unix(stream), owner_pid)
+        spawn_client_stream(FlezhaStream::unix(stream), owner_pid)
     });
 
     #[cfg(not(unix))]
@@ -322,7 +322,7 @@ mod tests {
     fn writer_drops_a_refused_frame_and_keeps_the_connection() {
         let (near, far) = UnixStream::pair().unwrap();
         let (tx, rx) = unbounded();
-        spawn_writer(FlezhaStream::Unix(near), rx);
+        spawn_writer(FlezhaStream::unix(near), rx);
 
         let mut oversized = HashMap::new();
         oversized.insert("flz.key".to_string(), "v".repeat(256));
