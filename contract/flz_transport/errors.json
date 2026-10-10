@@ -2242,6 +2242,15 @@
       "message": "the runner could not open its data streams: {reason}",
       "details": ["reason"]
     },
+    "runner.dropped": {
+      "class": "denied",
+      "message": "runner '{runner}' was dropped from namespace '{namespace}', and this process is refused until a different one connects",
+      "hint": "flz runner readmit {runner} --namespace {namespace}",
+      "details": ["namespace", "runner"],
+      "reasons": [
+        {"tag": "runner_dropped", "args": ["namespace", "runner"]}
+      ]
+    },
     "runner.hub_unavailable": {
       "class": "unavailable",
       "message": "the relay hub of namespace '{namespace}' could not be started for the runner; try again",
@@ -2297,6 +2306,15 @@
         {"tag": "dead_runner"}
       ]
     },
+    "runner.not_found": {
+      "class": "not_found",
+      "message": "namespace '{namespace}' has no runner '{runner}'",
+      "hint": "flz runner list --namespace {namespace}",
+      "details": ["namespace", "runner"],
+      "reasons": [
+        {"tag": "runner_not_found", "args": ["namespace", "runner"]}
+      ]
+    },
     "runner.quic_addresses_invalid": {
       "class": "invalid",
       "message": "FLEZHA_QUIC_ADDRESSES cannot be read: {reason}",
@@ -2333,6 +2351,15 @@
       "message": "the UDS transport is not available on this platform",
       "hint": "FLEZHA_TRANSPORT=quic",
       "details": []
+    },
+    "runner.untrackable": {
+      "class": "invalid",
+      "message": "runner '{runner}' presents no stable identity or incarnation, so it could not be recognised when it reconnects; it was left connected",
+      "hint": "give the runner a writable FLEZHA_RUNNER_ID_PATH and restart it",
+      "details": ["runner"],
+      "reasons": [
+        {"tag": "runner_untrackable", "args": ["runner"]}
+      ]
     },
     "runtime.argument_not_utf8": {
       "class": "invalid",
@@ -3555,7 +3582,7 @@
     "too_short", "topic_already_exists", "trusted_keys_empty", "unavailable", "unbound",
     "undisabled", "unexpected_start_result", "unknown_discovery_handler", "unknown_entry_type",
     "unknown_file", "unknown_hub", "unknown_key", "unknown_stream_type", "unknown_topic_or_partition",
-    "unparseable", "unreachable", "unsafe_artifact_name", "unsupported_key_format", "unsupported_pem",
+    "unparseable", "unreachable", "unrebound", "unsafe_artifact_name", "unsupported_key_format", "unsupported_pem",
     "unsupported_pem_entry", "unsupported_spki", "wal_writer_unavailable", "worker_start_failed"
   ]
 }
