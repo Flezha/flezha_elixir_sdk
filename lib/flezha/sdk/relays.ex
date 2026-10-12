@@ -113,12 +113,21 @@ defmodule Flezha.SDK.Relays do
     end
   end
 
-  # Out of the relay map and the registry, so nothing is routed to it.
+  # Out of the relay map and the registry, so nothing is routed to it, with
+  # its parks: the controller acks a park only from the relay's own runner, so
+  # one kept for a relay gone from here would be re-sent forever.
   defp drop(s, oid) do
     {entry, relays} = Map.pop(s.relays, oid)
     :ets.delete(s.registry, oid)
     Effects.forget(s.effects, oid)
-    {entry, %{s | relays: relays}}
+    {gone, parks} = Map.split_with(s.parks, fn {_id, park} -> park.relay == oid end)
+
+    for {park_id, park} <- gone do
+      if park.timer, do: Process.cancel_timer(park.timer)
+      Logger.warning("[Flezha.SDK] park #{park_id} dropped unacked: its relay left this runner")
+    end
+
+    {entry, %{s | relays: relays, parks: parks}}
   end
 
   # An `AddRelay` or a `RemRelay` for the id is the controller's answer

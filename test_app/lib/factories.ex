@@ -466,6 +466,14 @@ defmodule ElixirRunner.WedgeProbeTask do
     end
   end
 
+  # Emits two seconds late, so the relay can be stopped or moved while the
+  # activation still runs.
+  def run("slow", s, ctx) do
+    Process.sleep(2_000)
+    emit(ctx, "ok:slow")
+    {:ok, s}
+  end
+
   def run(input, s, ctx),
     do:
       (

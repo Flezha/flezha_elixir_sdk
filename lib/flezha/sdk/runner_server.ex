@@ -37,7 +37,8 @@ defmodule Flezha.SDK.RunnerServer do
     Park,
     PersistentId,
     Spawn,
-    Transport
+    Transport,
+    Wire
   }
 
   alias Flezha.SDK.RunnerServer.Waiters
@@ -496,7 +497,8 @@ defmodule Flezha.SDK.RunnerServer do
         Knob.arm(:park_resend, 1, body.park_id)
       )
 
-    park = %{cell: cell_pid, identity: identity, body: body, resends: 0, timer: ref}
+    {:ok, {relay, _tasklet, _key}} = Wire.decode_cell_id(identity)
+    park = %{cell: cell_pid, relay: relay, identity: identity, body: body, resends: 0, timer: ref}
     {:noreply, %{s | parks: Map.put(s.parks, body.park_id, park)}}
   end
 
