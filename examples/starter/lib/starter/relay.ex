@@ -5,7 +5,6 @@ defmodule Starter.Relay do
   by `flz relay info` and to AI agents.
   """
 
-  # the name `flz relay start` takes
   use Flezha.SDK.Relay, factory_id: "starter"
 
   @hit %{type: "object", properties: %{page: %{type: "string"}}, required: ["page"]}
