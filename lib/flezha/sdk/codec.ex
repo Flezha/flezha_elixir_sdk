@@ -86,6 +86,24 @@ defmodule Flezha.SDK.Codec do
     })
   end
 
+  @doc "Encode a `TaskletActivityResponse` from `{tasklet, cells, queued, queued_max}` rows."
+  @spec encode_tasklet_activity([tuple()], integer(), non_neg_integer()) :: binary()
+  def encode_tasklet_activity(rows, read_at_ms, instance_seq) do
+    encode(%RunnerCommands.TaskletActivityResponse{
+      rows:
+        for {tasklet, cells, queued, queued_max} <- rows do
+          %RunnerCommands.TaskletActivityRow{
+            tasklet: tasklet,
+            cells: cells,
+            queued: queued,
+            queued_max: queued_max
+          }
+        end,
+      read_at_ms: read_at_ms,
+      instance_seq: instance_seq
+    })
+  end
+
   @doc "Encode a `CreditWindowAck` — the raw_data that marks the session credit-speaking."
   @spec encode_credit_ack(String.t()) :: binary()
   def encode_credit_ack(stream_id),

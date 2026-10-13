@@ -28,12 +28,13 @@ defmodule Flezha.SDK.Call do
 
   @doc """
   Call one of the runner's own control processes, answering `refusal` when it
-  does not reply within `sdk_control_call_ms`. None of them runs author code on
-  the answering clause, so a wait here is a wedged process, not a busy one.
+  does not reply within `sdk_control_call_ms`, or the caller's shorter `ms`.
+  None of them runs author code on the answering clause, so a wait here is a
+  wedged process, not a busy one.
   """
-  @spec control(GenServer.server(), term(), term()) :: term()
-  def control(target, request, refusal),
-    do: SafeCall.bounded(target, request, Knob.get(:sdk_control_call_ms), on_error: refusal)
+  @spec control(GenServer.server(), term(), term(), timeout()) :: term()
+  def control(target, request, refusal, ms \\ Knob.get(:sdk_control_call_ms)),
+    do: SafeCall.bounded(target, request, ms, on_error: refusal)
 
   @doc """
   Call a Cell, which may be mid-dispatch.

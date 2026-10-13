@@ -111,10 +111,10 @@ defmodule Flezha.SDK.Relay.Server do
   router did not say" are different facts, and a walk that confused them would
   report a live relay as empty.
   """
-  @spec cells(GenServer.server()) ::
+  @spec cells(GenServer.server(), timeout()) ::
           [{String.t(), :single | :static | :dynamic, [{term(), pid()}]}]
           | {:error, :relay_busy}
-  def cells(pid), do: Call.control(pid, :cells, @busy)
+  def cells(pid, ms \\ Knob.get(:sdk_control_call_ms)), do: Call.control(pid, :cells, @busy, ms)
 
   # --- server ---
 

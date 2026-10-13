@@ -65,6 +65,9 @@ defmodule Flezha.SDK.Knob do
     {:sdk_cell_apply_ms, nil, :ms, 4_000},
     {:sdk_cell_restore_ms, nil, :ms, 10_000},
     {:sdk_cell_snapshot_ms, nil, :ms, 25_000},
+    # One activity read's wait for every Cell of the relay at once, inside the
+    # controller's own wait for the answer.
+    {:sdk_activity_read_ms, nil, :ms, 3_000},
     {:sdk_idle_probe_ms, nil, :ms, 50},
     {:sdk_max_reap_interval_ms, nil, :ms, 30_000},
     # How long a rehydrated per-input steps loop waits for the inbox tail its

@@ -52,6 +52,7 @@ message CommandRequest {
         EffectResult effect_result = 40;
         EffectResultAck effect_result_ack = 41;
         EffectResults effect_results = 42;
+        TaskletActivity tasklet_activity = 43;
     }
 }
 
@@ -834,4 +835,40 @@ message AdminResponse {
 message RelayExited {
     string relay_id = 1;
     string reason = 2;
+}
+
+// Controller -> SDK: what each tasklet of relay instance `relay_id` is doing,
+// read on request from figures the data path already keeps. Answered with an
+// encoded TaskletActivityResponse as the CommandResponse raw_data; a relay the
+// runner does not host is refused as `runtime.relay_not_found`.
+message TaskletActivity {
+    string relay_id = 1;
+}
+
+// `read_at_ms` is the runner's monotonic clock at the read. `instance_seq`
+// names the instance that answered: a rebind, migration, wake or runner
+// restart builds a new one, and every total starts again from zero.
+message TaskletActivityResponse {
+    repeated TaskletActivityRow rows = 1;
+    uint64 read_at_ms = 2;
+    uint64 instance_seq = 3;
+}
+
+// One tasklet's figures, summed over its Cells. A figure the runtime does not
+// keep is absent, never zero. `queued` is approximate under contention.
+// `admitted_total` counts mailbox items, timer firings and interval closes
+// included; `blocked_total` counts wait rounds, not blocked pushes. The
+// capped, created and evicted totals are kept by dynamic tasklets only.
+message TaskletActivityRow {
+    string tasklet = 1;
+    uint64 cells = 2;
+    optional uint64 queued = 3;
+    optional uint64 queued_max = 4;
+    optional uint64 admitted_total = 5;
+    optional uint64 blocked_total = 6;
+    optional uint64 dropped_newest_total = 7;
+    optional uint64 dropped_oldest_total = 8;
+    optional uint64 dropped_capped_total = 9;
+    optional uint64 cells_created_total = 10;
+    optional uint64 cells_evicted_total = 11;
 }

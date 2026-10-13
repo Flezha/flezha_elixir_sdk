@@ -10,6 +10,14 @@
   },
   "sites": ["wire.spawn", "wire.connect", "wire.commit", "wire.message"],
   "codes": {
+    "activity.no_answer": {
+      "class": "unavailable",
+      "message": "runner '{runner}' did not answer the activity read of relay '{relay}'; it may predate the read, or be busy",
+      "details": ["relay", "runner"],
+      "reasons": [
+        {"tag": "activity_no_answer", "args": ["relay", "runner"]}
+      ]
+    },
     "audit.closed": {
       "class": "unavailable",
       "message": "the audit log writer is closed",

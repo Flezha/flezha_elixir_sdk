@@ -189,6 +189,24 @@ defmodule Flezha.SDK.Cell do
     do: Call.cell(pid, :read, timeout: timeout, log: false, on_error: @read_verdict)
 
   @doc """
+  Ask every Cell in `pids` for its queued items at once, and answer each
+  one's count by `deadline` (monotonic ms): `:timeout` for a Cell still in a
+  dispatch, `:gone` for one that ended.
+  """
+  @spec queued([pid()], integer()) :: [non_neg_integer() | :timeout | :gone]
+  def queued(pids, deadline) do
+    pids
+    |> Enum.map(&:gen_server.send_request(&1, :queued))
+    |> Enum.map(fn request ->
+      case :gen_server.receive_response(request, {:abs, deadline}) do
+        {:reply, size} -> size
+        :timeout -> :timeout
+        {:error, _reason} -> :gone
+      end
+    end)
+  end
+
+  @doc """
   Replace the state with a JSON object through the tasklet's
   `state_from_json/1`, inside the Controller's own await for the reply.
   """
@@ -366,6 +384,8 @@ defmodule Flezha.SDK.Cell do
 
   def handle_call(:read, _from, %State{} = s),
     do: {:reply, {:ok, s.task_state, s.change_seq}, s}
+
+  def handle_call(:queued, _from, %State{} = s), do: {:reply, s.size, s}
 
   # What a sleeping steps relay wakes at: the earliest processing-time timer.
   def handle_call(:earliest_timer, _from, %State{} = s),

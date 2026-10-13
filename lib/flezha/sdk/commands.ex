@@ -78,20 +78,18 @@ defmodule Flezha.SDK.Commands do
   end
 
   def dispatch(:cell_state, cmd, respond, s) do
-    off_loop(respond, fn ->
-      case state_json(s, cmd.relay_id, selector(cmd)) do
-        {:ok, json, seq} -> respond.("success", [], json, seq_metadata(seq))
-        {:error, reason} -> respond.("error", [reason], <<>>, %{})
-      end
+    answer_off_loop(respond, fn ->
+      with {:ok, json, seq} <- state_json(s, cmd.relay_id, selector(cmd)),
+           do: {:ok, json, seq_metadata(seq)}
     end)
   end
 
+  def dispatch(:tasklet_activity, cmd, respond, s),
+    do: answer_off_loop(respond, fn -> activity(s, cmd.relay_id) end)
+
   def dispatch(:migration_serialization, cmd, respond, s) do
-    off_loop(respond, fn ->
-      case state_json(s, cmd.relay_id, @whole) do
-        {:ok, json, _seq} -> respond.("success", [], json, %{})
-        {:error, reason} -> respond.("error", [reason], <<>>, %{})
-      end
+    answer_off_loop(respond, fn ->
+      with {:ok, json, _seq} <- state_json(s, cmd.relay_id, @whole), do: {:ok, json, %{}}
     end)
   end
 
@@ -254,6 +252,43 @@ defmodule Flezha.SDK.Commands do
 
   # --- the live read ---
 
+  # Live Cells and their queued items per tasklet. This runtime keeps no
+  # per-Cell totals, so every total is absent; a tasklet with a Cell that does
+  # not answer by the deadline reports its queue as absent too. The router and
+  # every Cell answer inside one deadline. The instance is the relay process,
+  # so its hash tells a new one apart.
+  defp activity(s, relay_id) do
+    now = System.monotonic_time(:millisecond)
+    deadline = now + Knob.get(:sdk_activity_read_ms)
+
+    with {:ok, op} <- relay(s, relay_id),
+         {:ok, nodes} <- nodes(op, relay_id, deadline - now) do
+      # The wire's clock is unsigned; the VM's monotonic clock may be negative.
+      read_at_ms =
+        now - System.convert_time_unit(:erlang.system_info(:start_time), :native, :millisecond)
+
+      sizes =
+        nodes
+        |> Enum.flat_map(fn {_name, _mode, cells} -> Enum.map(cells, &elem(&1, 1)) end)
+        |> Cell.queued(deadline)
+
+      {rows, []} =
+        Enum.map_reduce(nodes, sizes, fn {name, _mode, cells}, sizes ->
+          {mine, rest} = Enum.split(sizes, length(cells))
+          {activity_row(name, Enum.reject(mine, &(&1 == :gone))), rest}
+        end)
+
+      instance_seq = :erlang.phash2(op, 4_294_967_296)
+      {:ok, Codec.encode_tasklet_activity(rows, read_at_ms, instance_seq), %{}}
+    end
+  end
+
+  defp activity_row(name, live) do
+    if Enum.member?(live, :timeout),
+      do: {name, length(live), nil, nil},
+      else: {name, length(live), Enum.sum(live), Enum.max(live, fn -> 0 end)}
+  end
+
   defp relay(%{relays: relays}, relay_id) do
     case Map.get(relays, relay_id) do
       {pid, _factory_id} -> {:ok, pid}
@@ -263,8 +298,8 @@ defmodule Flezha.SDK.Commands do
 
   # The router's nodes, or its refusal. `[]` would be a lie: a walk that read
   # it would report a live relay as empty.
-  defp nodes(op, relay_id) do
-    case Relay.Server.cells(op) do
+  defp nodes(op, relay_id, ms \\ Knob.get(:sdk_control_call_ms)) do
+    case Relay.Server.cells(op, ms) do
       {:error, :relay_busy} ->
         {:error, Error.new("runtime.relay_busy", relay: relay_id)}
 
@@ -402,13 +437,10 @@ defmodule Flezha.SDK.Commands do
   # --- the JSON apply ---
 
   defp apply_off_loop(s, relay_id, json, respond) do
-    off_loop(respond, fn ->
+    answer_off_loop(respond, fn ->
       with {:ok, op} <- relay(s, relay_id),
-           :ok <- apply_json(op, relay_id, json) do
-        respond.("success", [], <<>>, %{})
-      else
-        {:error, reason} -> respond.("error", [reason], <<>>, %{})
-      end
+           :ok <- apply_json(op, relay_id, json),
+           do: {:ok, <<>>, %{}}
     end)
   end
 
@@ -525,6 +557,16 @@ defmodule Flezha.SDK.Commands do
     end)
 
     :ok
+  end
+
+  # `fun` answers `{:ok, raw_data, metadata}` or the refusal.
+  defp answer_off_loop(respond, fun) do
+    off_loop(respond, fn ->
+      case fun.() do
+        {:ok, raw, metadata} -> respond.("success", [], raw, metadata)
+        {:error, reason} -> respond.("error", [reason], <<>>, %{})
+      end
+    end)
   end
 
   defp blank_to_nil(""), do: nil

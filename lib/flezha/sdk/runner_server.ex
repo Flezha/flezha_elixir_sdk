@@ -57,7 +57,8 @@ defmodule Flezha.SDK.RunnerServer do
     :migration_deserialization,
     :cell_mailbox_status,
     :credit_window_init,
-    :credit_grant
+    :credit_grant,
+    :tasklet_activity
   ]
   # Exit status of a terminally-disconnected runner. Any non-zero value makes
   # the orchestrator restart the process; a distinct one lets a user tell
