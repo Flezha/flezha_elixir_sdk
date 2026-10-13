@@ -845,7 +845,8 @@ defmodule Flezha.SDK.RunnerServer do
             "description" => desc,
             "sdk_lang" => Codec.sdk_lang(),
             "run" => run.run,
-            "api" => run.api
+            "api" => run.api,
+            "graph" => run.graph
           }
           |> put_steps(run)
         end),

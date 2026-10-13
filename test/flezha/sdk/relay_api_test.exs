@@ -78,6 +78,36 @@ defmodule Flezha.SDK.RelayApiTest do
     end
   end
 
+  defmodule Fixed do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "fixed", cell_keys: ["a", "b"]
+    @impl true
+    def cells_for(_input), do: ["a"]
+    @impl true
+    def mailbox_capacity, do: 8
+    @impl true
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
+  defmodule Keyed do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "keyed"
+    @impl true
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
+  # A static tasklet behind a shedding edge, and a dynamic one behind a key.
+  defmodule Shaped do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "shaped"
+
+    def channels(c) do
+      c |> Channels.input("rows") |> Channels.on_full(:drop_newest) |> Channels.into(Fixed)
+      c |> Channels.input("ticks") |> Channels.key_by(& &1) |> Channels.into(Keyed)
+    end
+  end
+
   # The schema and codec its one entry declares are the calling test's.
   defmodule Broken do
     @moduledoc false
@@ -136,15 +166,64 @@ defmodule Flezha.SDK.RelayApiTest do
              Codec.api(topology)
   end
 
-  test "the UpdateFactories announcement carries the entries" do
+  test "the UpdateFactories announcement carries the entries and the graph" do
     {:ok, topology} = Topology.build(Orders)
-    run = Map.put(Codec.run(topology), :api, Codec.api(topology))
+
+    run =
+      Map.merge(Codec.run(topology), %{api: Codec.api(topology), graph: Codec.graph(topology)})
 
     {:update_factories, %{factories: [decl]}} =
       Codec.update_factories_command([{"orders", nil, run}])
 
     assert [%{channel: "place", description: "Places an order"}, %{codec: "text"}, _raw] =
              decl.api
+
+    assert %{channels: [%{name: "place", kind: "entry"} | _], tasklets: [%{name: "echo"} | _]} =
+             decl.graph
+  end
+
+  test "the graph lists every channel with its ends and every tasklet in declaration order" do
+    {:ok, topology} = Topology.build(Mixed)
+    graph = Codec.graph(topology)
+    rows = Map.new(graph.channels, &{&1.name, &1})
+    call = Enum.find(graph.channels, &(&1.plugin_end == "call"))
+
+    assert %{kind: "entry", producer: "", consumers: ["echo"]} = rows["in"]
+    assert %{kind: "entry", consumers: ["ask"]} = rows["question"]
+
+    assert %{kind: "inter_tasklet", producer: "echo", consumers: ["sink"], plugin_end: "output"} =
+             rows["json"]
+
+    assert %{kind: "plugin_bound", producer: "sink", consumers: [], plugin_end: "output"} =
+             rows["own"]
+
+    assert %{kind: "plugin_bound", producer: "ask", call_target: "id:pricing"} = call
+    assert %{kind: "entry", consumers: ["sink"]} = rows[call.name <> ".response"]
+    assert map_size(rows) == 6
+
+    assert [
+             %{name: "echo", mode: "single", cell_keys: []},
+             %{name: "sink"},
+             %{name: "ask"}
+           ] = graph.tasklets
+
+    assert Enum.all?(graph.tasklets, &(&1.mailbox_capacity > 0))
+    assert Enum.all?(graph.channels, &(&1.overflow == "drop_nothing"))
+  end
+
+  test "the graph carries cell modes, cell keys, mailboxes and the consumer's policy" do
+    {:ok, topology} = Topology.build(Shaped)
+    graph = Codec.graph(topology)
+
+    assert [
+             %{name: "fixed", mode: "static", cell_keys: ["a", "b"], mailbox_capacity: 8},
+             %{name: "keyed", mode: "dynamic", cell_keys: []}
+           ] = graph.tasklets
+
+    assert [
+             %{name: "rows", consumers: ["fixed"], overflow: "drop_newest"},
+             %{name: "ticks", consumers: ["keyed"], overflow: "drop_nothing"}
+           ] = graph.channels
   end
 
   test "a schema that is not an object with a type is refused at registration" do

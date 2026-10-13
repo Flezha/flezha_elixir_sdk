@@ -9,6 +9,7 @@ defmodule Flezha.SDK.Codec do
   alias Flezha.SDK.Proto.RunnerCommands
   alias Flezha.SDK.Topology
   alias Flezha.SDK.Steps.Spec
+  alias Flezha.SDK.Tasklet
 
   # The Elixir SDK's allocated language byte (`flz_core::header`'s table of
   # record: 1 Rust, 2 Java, 3 Elixir). Spelled ONCE: it rides both halves of
@@ -103,7 +104,7 @@ defmodule Flezha.SDK.Codec do
   @doc """
   Build the `UpdateFactories` command tuple from a list of
   `{id, description, run}`, `run` as `run/1` answers it with `:api` as
-  `api/1` answers it.
+  `api/1` answers it and `:graph` as `graph/1` does.
   """
   @spec update_factories_command([{String.t(), String.t() | nil, map()}]) ::
           {atom(), struct()}
@@ -117,12 +118,21 @@ defmodule Flezha.SDK.Codec do
           run: run.run,
           each: run.each,
           on_failure: run.on_failure,
-          api: run |> Map.get(:api, []) |> Enum.map(&struct(RunnerCommands.ApiEntry, &1))
+          api: run |> Map.get(:api, []) |> Enum.map(&struct(RunnerCommands.ApiEntry, &1)),
+          graph: graph_decl(run[:graph])
         }
       end)
 
     {:update_factories, %RunnerCommands.UpdateFactories{factories: decls}}
   end
+
+  defp graph_decl(nil), do: nil
+
+  defp graph_decl(graph),
+    do: %RunnerCommands.RelayGraph{
+      channels: Enum.map(graph.channels, &struct(RunnerCommands.GraphChannel, &1)),
+      tasklets: Enum.map(graph.tasklets, &struct(RunnerCommands.GraphTasklet, &1))
+    }
 
   @doc """
   How a registered class runs, as its announcement names it: `"flow"`, or
@@ -192,6 +202,76 @@ defmodule Flezha.SDK.Codec do
       answer_codec(routes, next ++ pending, MapSet.put(seen, source), outputs)
     end
   end
+
+  @doc """
+  A registered class's graph, as its announcement carries it: every channel
+  with its kind, producer, consumers, plugin end, call target and overflow,
+  and every tasklet in declaration order with its cell mode, cell keys and
+  mailbox capacity, the shape `flz_core::relay::registry` announces a host's
+  class in. A producer's output nothing closes on is no channel.
+  """
+  @spec graph(Spec.t() | Topology.t()) :: %{channels: [map()], tasklets: [map()]}
+  def graph(%Spec{topology: topology}), do: graph(topology)
+
+  def graph(%Topology{} = t) do
+    nodes = Enum.sort_by(t.node_seq, &elem(&1, 1))
+    entries = for name <- t.entry_order, do: graph_channel(t, {:entry, name}, name, "")
+
+    outputs =
+      for {ref, _seq} <- nodes,
+          channel = graph_channel(t, {:node, ref}, t.node_channel[ref], tasklet_name(t, ref)),
+          channel.kind != nil,
+          do: channel
+
+    tasklets =
+      for {ref, _seq} <- nodes do
+        module = t.node_modules[ref]
+
+        %{
+          name: tasklet_name(t, ref),
+          mode: Atom.to_string(t.node_mode[ref]),
+          cell_keys: Enum.map(Tasklet.cell_keys(module), &to_string/1),
+          mailbox_capacity: Tasklet.mailbox_capacity(module)
+        }
+      end
+
+    %{channels: entries ++ outputs, tasklets: tasklets}
+  end
+
+  defp graph_channel(t, source, name, producer) do
+    routes = Map.get(t.routes, source, [])
+    consumers = for %{to: {:node, ref}} <- routes, do: ref
+    ends = for %{to: {:sink, _}} = route <- routes, do: route
+    call = Enum.find_value(ends, & &1.call)
+
+    %{
+      name: name,
+      kind: graph_kind(source, consumers, ends),
+      producer: producer,
+      consumers: Enum.map(consumers, &tasklet_name(t, &1)),
+      plugin_end:
+        cond do
+          call -> "call"
+          ends != [] -> "output"
+          true -> "none"
+        end,
+      call_target: if(call, do: call.target, else: ""),
+      # This SDK applies a policy to the consuming tasklet's mailbox, so a
+      # channel announces the first one its consumers declare.
+      overflow:
+        consumers
+        |> Enum.find_value(&get_in(t.node_knobs, [&1, :on_full]))
+        |> Kernel.||(:drop_nothing)
+        |> Atom.to_string()
+    }
+  end
+
+  defp graph_kind({:entry, _name}, _consumers, _ends), do: "entry"
+  defp graph_kind(_node, [], []), do: nil
+  defp graph_kind(_node, [], _ends), do: "plugin_bound"
+  defp graph_kind(_node, _consumers, _ends), do: "inter_tasklet"
+
+  defp tasklet_name(t, ref), do: t.node_name[ref] || t.node_modules[ref].name()
 
   defp output_codec(%{serializer: serializer}),
     do: if(serializer == (&Flezha.SDK.Channels.default_serialize/1), do: "json", else: "custom")

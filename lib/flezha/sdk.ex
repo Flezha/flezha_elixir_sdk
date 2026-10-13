@@ -329,6 +329,7 @@ defmodule Flezha.SDK do
     description =
       if function_exported?(module, :description, 0), do: module.description(), else: nil
 
-    {class.factory_id, description, Map.put(Codec.run(class), :api, Codec.api(class))}
+    {class.factory_id, description,
+     Map.merge(Codec.run(class), %{api: Codec.api(class), graph: Codec.graph(class)})}
   end
 end

@@ -647,6 +647,38 @@ message FactoryDecl {
     // The factory's API: one entry per entry channel of its class. Empty from
     // a runner that announces none, whose factory then has no API.
     repeated ApiEntry api = 7;
+    // The class's static data flow, built when the factory is announced.
+    // Absent from a runner that announces none.
+    RelayGraph graph = 8;
+}
+
+// A class's tasklets and the channels between them, referenced by name.
+message RelayGraph {
+    repeated GraphChannel channels = 1;
+    repeated GraphTasklet tasklets = 2;
+}
+
+message GraphChannel {
+    string name = 1;
+    // "entry", "inter_tasklet" or "plugin_bound".
+    string kind = 2;
+    // Empty for an entry channel.
+    string producer = 3;
+    repeated string consumers = 4;
+    // "none", "output" or "call".
+    string plugin_end = 5;
+    // For a "call" end: "id:<relay>" or "factory:<id>"; empty otherwise.
+    string call_target = 6;
+    // "drop_nothing", "drop_newest" or "drop_oldest".
+    string overflow = 7;
+}
+
+message GraphTasklet {
+    string name = 1;
+    // "single", "static" or "dynamic".
+    string mode = 2;
+    repeated string cell_keys = 3;
+    uint32 mailbox_capacity = 4;
 }
 
 // One entry channel of a factory's API, as its class declares it.
