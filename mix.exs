@@ -29,9 +29,8 @@ defmodule Flezha.SDK.MixProject do
     [
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"},
-      {:protox, "~> 2.0"},
       {:rustler_precompiled, "~> 0.8"},
-      # A source build of the socket NIF: a host the checksum file names no
+      # A source build of the native library: a host the checksum file names no
       # precompiled artefact for, or `FLEZHA_SDK_BUILD_NIF=1`. Not optional, so
       # a project depending on this package can take that path too.
       {:rustler, "~> 0.37", runtime: false},
@@ -39,18 +38,17 @@ defmodule Flezha.SDK.MixProject do
     ]
   end
 
-  # The error catalogue and the schema are read at compile time, so the package
-  # carries the two files of the contract set it compiles.
+  # The error catalogue is read at compile time, so the package carries that
+  # file of the contract set.
   defp package do
     [
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
       files: ~w(
         lib
-        native/flz_sdk_nif/src
-        native/flz_sdk_nif/Cargo.toml
+        native/flz_core_beam/src
+        native/flz_core_beam/Cargo.toml
         contract/flz_transport/errors.json
-        contract/protobufs/runner_commands.proto
         checksum-Elixir.Flezha.SDK.Native.exs
         mix.exs
         README.md

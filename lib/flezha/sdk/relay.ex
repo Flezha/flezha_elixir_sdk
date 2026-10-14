@@ -167,20 +167,6 @@ defmodule Flezha.SDK.Relay do
 
   @optional_callbacks description: 0, max_duration_ms: 0, run: 0, durable: 0
 
-  @doc """
-  The settings tree `module` declares, read and checked, or the issue that
-  refuses it: `{:UnknownField, declaration, fields}` for a member written
-  under a parent that does not carry it, `{:InvalidSetting, declaration,
-  setting, value, expected}` for a value outside its choices.
-  """
-  @spec settings(module()) :: {:ok, t()} | {:error, tuple()}
-  def settings(module) do
-    values =
-      for key <- @use_options, Tasklet.exports?(module, key, 0), do: {key, apply(module, key, [])}
-
-    parse(module.factory_id(), values)
-  end
-
   @doc false
   # The tree as `use` options or callback answers, read into `t()`.
   @spec parse(term(), keyword()) :: {:ok, t()} | {:error, tuple()}
@@ -197,23 +183,6 @@ defmodule Flezha.SDK.Relay do
         {:error, {:InvalidSetting, "relay '#{factory_id}'", setting, value, expected}}
     end
   end
-
-  @doc """
-  The effectively-once tier the tree declares, in the shape every Cell and
-  the topology read: whether it is on, the checkpoint policy and the
-  correction policy.
-  """
-  @spec tier(t()) :: %{
-          effectively_once: boolean(),
-          checkpoint: map() | nil,
-          correction: map() | nil
-        }
-  def tier(%__MODULE__{} = s),
-    do: %{
-      effectively_once: s.exactly == :effectively_once,
-      checkpoint: s.checkpoint,
-      correction: s.correction
-    }
 
   # --- the class members ---
 

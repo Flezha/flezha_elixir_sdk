@@ -15,7 +15,7 @@ defmodule Flezha.SDK.Merge do
   so one import writes a whole pipe. This module is the handle they carry
   between them: the sources recorded so far, each already mapped, and the key
   the merged node is declared on. Every source the author wrote reaches the
-  record, a repeated one included; `Flezha.SDK.Topology` is what names
+  record, a repeated one included; `flz_core`'s check is what names
   `MergeTooFewSources` and `DuplicateMergeSource`.
   """
 

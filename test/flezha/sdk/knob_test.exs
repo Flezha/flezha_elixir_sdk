@@ -52,55 +52,24 @@ defmodule Flezha.SDK.KnobTest do
       assert Knob.get(:mailbox_capacity) == 512
     end
 
+    test "an application env value that is not one of the row's type reads as the default" do
+      Application.put_env(:flezha_sdk, :mailbox_capacity, 0)
+      assert Knob.get(:mailbox_capacity) == 1_024
+
+      Application.put_env(:flezha_sdk, :mailbox_capacity, "256")
+      assert Knob.get(:mailbox_capacity) == 256
+    end
+
     test "a row with no variable is set through the application env" do
-      Application.put_env(:flezha_sdk, :sdk_idle_probe_ms, 7)
-      on_exit(fn -> Application.delete_env(:flezha_sdk, :sdk_idle_probe_ms) end)
-      assert Knob.get(:sdk_idle_probe_ms) == 7
+      Application.put_env(:flezha_sdk, :sdk_control_call_ms, 7)
+      on_exit(fn -> Application.delete_env(:flezha_sdk, :sdk_control_call_ms) end)
+      assert Knob.get(:sdk_control_call_ms) == 7
     end
 
-    test "a caller's computed default stands in for a row that cannot state one" do
-      assert Knob.get(:reap_interval_ms, 125) == 125
-    end
-  end
-
-  describe "a ladder" do
-    test "doubles from its base, capping the exponent and then the value" do
-      assert Enum.map(1..11, &Knob.delay(:sdk_reconnect, &1, rand: fn n -> div(n, 2) end)) ==
-               [100, 200, 400, 800, 1_600, 3_200, 6_400, 12_800, 25_600, 25_600, 25_600]
-
-      assert Knob.delay(:sdk_retry, 20, rand: fn n -> n end) == 5_000
-      assert Knob.delay(:park_resend, 9) == 2_000
-    end
-
-    test "spreads a jittered wait over half to one and a half of it" do
-      assert Knob.delay(:sdk_retry, 1, rand: fn _ -> 1 end) == 26
-      assert Knob.delay(:sdk_retry, 1, rand: fn n -> n end) == 75
-    end
-
-    test "takes the caller's own first rung" do
-      assert Knob.delay(:sdk_retry, 2, base: 10, rand: fn n -> div(n, 2) end) == 20
-    end
-
-    test "announces every wait and every reset" do
-      ref = make_ref()
-      events = [[:flezha, :backoff, :wait], [:flezha, :backoff, :reset]]
-      :telemetry.attach_many(ref, events, &__MODULE__.forward/4, self())
-      on_exit(fn -> :telemetry.detach(ref) end)
-
-      assert Knob.arm(:park_resend, 1, "p-1") == 2_000
-
-      assert_receive {[:flezha, :backoff, :wait], %{delay_ms: 2_000, attempt: 1},
-                      %{ladder: :park_resend, target: "p-1"}}
-
-      assert Knob.reset(:sdk_reconnect, "r-1") == 0
-
-      assert_receive {[:flezha, :backoff, :reset], %{attempt: 0},
-                      %{ladder: :sdk_reconnect, target: "r-1"}}
+    test "a row with no default reads nil until something sets it" do
+      assert Knob.get(:worker_pool_max) == nil
     end
   end
-
-  @doc false
-  def forward(event, measurements, metadata, pid), do: send(pid, {event, measurements, metadata})
 
   defp expect("error"), do: :error
   defp expect("true"), do: {:ok, true}

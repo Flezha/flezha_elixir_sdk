@@ -10,7 +10,7 @@
 #
 # Everything the core contributes is fetched from one of its releases and
 # checked against that release's manifest: the fake controller, the contract set
-# and the precompiled socket client. Nothing here builds the core, and nothing
+# and the precompiled native library. Nothing here builds the core, and nothing
 # here needs a checkout of it.
 #
 #   scripts/ci.sh --core <dir|url> [--version 0.1.0]
@@ -18,8 +18,7 @@
 # What this cannot see is the fifteen-capability vocabulary the controller
 # owns: persistence, effectively-once, correction, partitioning, steps relays,
 # liveness, restarts. Those are end-to-end scenarios and they run in the core's
-# own tree, against the commit it pins this repository at, as does the in-node
-# `:native` transport.
+# own tree, against the commit it pins this repository at.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -41,7 +40,7 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 step "fetching the core ${VERSION}"
 scripts/fetch-core.sh --from "${CORE}" --version "${VERSION}"
 
-# The socket client is taken from the archive the fetch verified, never built.
+# The native library is taken from the archive the fetch verified, never built.
 export RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH="${PWD}/.core/nifs"
 
 step "installing"

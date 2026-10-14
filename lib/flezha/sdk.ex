@@ -1,21 +1,27 @@
 defmodule Flezha.SDK do
   @moduledoc """
-  The Elixir runner SDK — the runner-as-handle surface, deployable two ways from
-  one core: in-node over the native transport (`transport: :native`, the default)
-  or as a standalone runner node over the binary protocol (`transport: :uds |
-  :quic`). A handle accumulates its declared factory set with no connection or
-  process; `start/1` claims the process-wide runner slot (a named singleton) and
+  The Elixir runner SDK — the runner-as-handle surface over `flz_core`, the
+  runtime every Flezha SDK runs on. A runner reaches its controller one way,
+  over UDS (`transport: :uds`, the default) or QUIC (`transport: :quic`),
+  wherever the controller runs: in this BEAM, on this machine or on another.
+  A handle accumulates its declared factory set with no connection or process;
+  `start/1` claims the process-wide runner slot (a named singleton) and
   connects; `run/1` is `start/1` then `await_termination/1`. Authoring and
   connection failures are named error tuples returned at the call site (never a
   raise) and propagate through a pipe. `child_spec/1` wraps the same sequence for
   a host application's supervision tree.
+
+  The connection settings are read through `Flezha.SDK.Knob`: the OS
+  environment first, then `config :flezha_sdk, ...`. A controller that enforces
+  authorization asks every runner for a credential: pass it as
+  `namespace_secret:`, or set `FLEZHA_NAMESPACE_SECRET`.
   """
 
-  alias Flezha.SDK.{Codec, Error, Relay, RunnerServer, Topology}
-  alias Flezha.SDK.Steps.Spec
+  alias Flezha.SDK.{Declaration, Error, Native, Relay, Runner}
 
   @enforce_keys [:namespace]
-  defstruct namespace: nil, transport: :native, classes: [], server: nil
+  @derive {Inspect, except: [:namespace_secret]}
+  defstruct namespace: nil, transport: :uds, namespace_secret: nil, modules: [], server: nil
 
   @type t :: %__MODULE__{}
   @type result :: t() | {:error, Error.t()}
@@ -25,17 +31,21 @@ defmodule Flezha.SDK do
   @doc "Create a runner handle. No connection, no slot claim, no processes."
   @spec create_runner(String.t(), keyword()) :: result()
   def create_runner(namespace, opts \\ []) do
-    transport = Keyword.get(opts, :transport, :native)
+    transport = Keyword.get(opts, :transport, :uds)
 
     cond do
       not (is_binary(namespace) and namespace != "") ->
         {:error, Error.new("namespace.invalid_name", namespace: namespace)}
 
-      transport not in [:native, :uds, :quic] ->
+      transport not in [:uds, :quic] ->
         {:error, Error.new("runtime.invalid_transport", transport: transport)}
 
       true ->
-        %__MODULE__{namespace: namespace, transport: transport}
+        %__MODULE__{
+          namespace: namespace,
+          transport: transport,
+          namespace_secret: Keyword.get(opts, :namespace_secret)
+        }
     end
   end
 
@@ -43,46 +53,45 @@ defmodule Flezha.SDK do
   Declare a relay: a module of the `Flezha.SDK.Relay` behaviour. Legal
   before and after `start/1`.
 
-  Its settings tree is read and checked here, and a class that runs in steps
-  is compiled into its steps spec. The runner announces each entry's run with
-  its factory id, so the controller knows it before it places.
+  Its declaration is judged here by `flz_core`, the check every SDK's builder
+  is judged by, and declared to the live core when the runner is started.
   """
   @spec register_factory(result(), module()) :: result()
   def register_factory({:error, _} = e, _module), do: e
 
   def register_factory(%__MODULE__{} = h, module) do
     with :ok <- relay?(module),
-         {:ok, class} <- build_class(module),
-         :ok <- not_duplicate(h, class.factory_id) do
-      if h.server do
-        case RunnerServer.define(h.server, factory_row(module, class), class) do
-          :ok -> %{h | classes: h.classes ++ [{module, class}]}
-          {:error, _} = e -> e
-        end
-      else
-        %{h | classes: h.classes ++ [{module, class}]}
-      end
+         :ok <- not_duplicate(h, module.factory_id()),
+         :ok <- judged(h, module) do
+      %{h | modules: h.modules ++ [module]}
     end
   end
+
+  # Before start the core answers the verdict with nothing declared; after it
+  # the live core takes the declaration.
+  defp judged(%__MODULE__{server: nil}, module) do
+    with {:ok, _derived} <- Declaration.check(module), do: :ok
+  end
+
+  defp judged(%__MODULE__{server: server}, module), do: Runner.define(server, module)
 
   @doc "Remove a declared relay — the inverse of `register_factory/2`, taking what it took."
   @spec unregister_factory(result(), module()) :: result()
   def unregister_factory({:error, _} = e, _module), do: e
 
-  def unregister_factory(%__MODULE__{server: nil} = h, module) do
+  def unregister_factory(%__MODULE__{} = h, module) do
     fid = module.factory_id()
 
-    if Enum.any?(h.classes, fn {_m, t} -> t.factory_id == fid end) do
-      %{h | classes: Enum.reject(h.classes, fn {_m, t} -> t.factory_id == fid end)}
-    else
-      {:error, Error.new("runtime.class_not_registered", factory: fid)}
-    end
-  end
+    cond do
+      module not in h.modules ->
+        {:error, Error.new("runtime.class_not_registered", factory: fid)}
 
-  def unregister_factory(%__MODULE__{} = h, module) do
-    case RunnerServer.remove(h.server, module) do
-      :ok -> %{h | classes: Enum.reject(h.classes, fn {m, _t} -> m == module end)}
-      {:error, _} = e -> e
+      h.server == nil ->
+        %{h | modules: List.delete(h.modules, module)}
+
+      true ->
+        with :ok <- Runner.remove(h.server, fid),
+             do: %{h | modules: List.delete(h.modules, module)}
     end
   end
 
@@ -93,32 +102,31 @@ defmodule Flezha.SDK do
   @spec start(result()) :: result()
   def start({:error, _} = e), do: e
 
-  def start(%__MODULE__{} = h) do
-    topologies = Map.new(h.classes, fn {_m, t} -> {t.factory_id, t} end)
-
-    factories = Enum.map(h.classes, fn {m, t} -> factory_row(m, t) end)
-
+  def start(%__MODULE__{server: nil} = h) do
     opts = [
       namespace: h.namespace,
       transport: h.transport,
-      topologies: topologies,
-      factories: factories
+      namespace_secret: h.namespace_secret,
+      relays: h.modules
     ]
 
-    case RunnerServer.start_link(opts) do
+    case Runner.start_link(opts) do
       {:ok, pid} ->
-        %{h | server: pid}
+        with :ok <- Runner.connect(pid), do: %{h | server: pid}
 
       {:error, {:already_started, _pid}} ->
         {:error, Error.new("runtime.runner_already_running", namespace: h.namespace)}
 
-      {:error, {:connect_failed, reason}} ->
-        {:error, Error.new("runner.controller_unreachable", reason: reason)}
+      {:error, %Error{} = error} ->
+        {:error, error}
 
       {:error, reason} ->
-        {:error, Error.new("runtime.runner_unavailable", reason: reason)}
+        {:error, Error.new("runtime.runner_unavailable", reason: inspect(reason))}
     end
   end
+
+  def start(%__MODULE__{} = h),
+    do: {:error, Error.new("runtime.runner_already_running", namespace: h.namespace)}
 
   @doc """
   The live runner process behind a handle: `runtime.runner_not_started` before
@@ -132,6 +140,11 @@ defmodule Flezha.SDK do
   def server({:error, _reason} = e), do: e
   def server(%__MODULE__{server: nil}), do: {:error, Error.new("runtime.runner_not_started")}
   def server(%__MODULE__{server: pid}), do: {:ok, pid}
+
+  @doc false
+  # The core context behind a handle, for a call made from the caller's process.
+  @spec core(result() | pid() | atom()) :: {:ok, Native.core()} | {:error, Error.t()}
+  def core(runner), do: with({:ok, server} <- server(runner), do: Runner.core(server))
 
   @doc """
   Send `message` to the entry channel `channel` of `relay_id`.
@@ -202,16 +215,15 @@ defmodule Flezha.SDK do
   """
   @spec relays(result() | pid() | atom()) :: {:ok, [String.t()]} | {:error, Error.t()}
   def relays(runner) do
-    with {:ok, server} <- server(runner), do: RunnerServer.relays(server)
+    with {:ok, server} <- server(runner), do: Runner.relays(server)
   end
 
-  # Enters where a frame off a data stream enters, `Flezha.SDK.DataStream`.
   defp send_local(runner, relay_id, message, channel) do
-    with {:ok, server} <- server(runner),
-         {:ok, pid, topology} <- RunnerServer.local_target(server, relay_id),
-         :ok <- Flezha.SDK.Local.declared(topology, relay_id, channel, :entry) do
-      Flezha.SDK.Relay.Inbox.input(pid, channel, message, %{"channel" => channel})
-      {:ok, nil}
+    with {:ok, core} <- core(runner) do
+      case Native.answered(Native.send_message(core, relay_id, channel, message, "", "", true)) do
+        {:error, _} = refused -> refused
+        _null -> {:ok, nil}
+      end
     end
   end
 
@@ -238,7 +250,11 @@ defmodule Flezha.SDK do
     end
   end
 
-  @doc "Disconnect and release the slot. A never-started handle is a no-op."
+  @doc """
+  Ship each relay's state, end the session and release the slot. A runner
+  runs once per BEAM: a later start in this node is refused as
+  `runtime.core_shut_down`. A never-started handle is a no-op.
+  """
   @spec close(result()) :: :ok
   def close({:error, _}), do: :ok
   def close(%__MODULE__{server: nil}), do: :ok
@@ -262,8 +278,12 @@ defmodule Flezha.SDK do
 
   @doc """
   A child spec wrapping create → register → start for the host application's
-  supervision tree. The supervised process is the RunnerServer, so a crash
-  restarts it and it reconnects with the same stable id (a binding swap).
+  supervision tree: `namespace:`, `relays:`, `transport:` and
+  `namespace_secret:`. The supervised process is the runner. A runner runs
+  once per BEAM: one that stops or crashes ends its session, and the restart
+  that follows is refused, so the failure reaches
+  the node, which is the unit to restart. The controller moves the relays
+  meanwhile.
   """
   def child_spec(opts) do
     %{
@@ -281,12 +301,11 @@ defmodule Flezha.SDK do
   @doc false
   def start_link(opts) do
     namespace = Keyword.fetch!(opts, :namespace)
-    transport = Keyword.get(opts, :transport, :native)
 
     handle =
       Enum.reduce(
         Keyword.get(opts, :relays, []),
-        create_runner(namespace, transport: transport),
+        create_runner(namespace, Keyword.take(opts, [:transport, :namespace_secret])),
         fn module, acc -> register_factory(acc, module) end
       )
 
@@ -310,26 +329,9 @@ defmodule Flezha.SDK do
       else: {:error, Error.new("topology.no_relay_exported", module: inspect(module))}
   end
 
-  # The tree decides the class: a steps spec, or a flow topology.
-  defp build_class(module) do
-    case Relay.settings(module) do
-      {:ok, %Relay{run: :steps} = settings} -> Spec.build(module, settings)
-      {:ok, settings} -> Topology.build(module, settings)
-      {:error, issue} -> {:error, Topology.refusal([issue])}
-    end
-  end
-
-  defp not_duplicate(%__MODULE__{classes: classes}, fid) do
-    if Enum.any?(classes, fn {_m, t} -> t.factory_id == fid end),
+  defp not_duplicate(%__MODULE__{modules: modules}, fid) do
+    if Enum.any?(modules, &(&1.factory_id() == fid)),
       do: {:error, Error.new("topology.duplicate_factory_id", factory_id: fid)},
       else: :ok
-  end
-
-  defp factory_row(module, class) do
-    description =
-      if function_exported?(module, :description, 0), do: module.description(), else: nil
-
-    {class.factory_id, description,
-     Map.merge(Codec.run(class), %{api: Codec.api(class), graph: Codec.graph(class)})}
   end
 end

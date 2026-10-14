@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch what this package needs from one core release: the fake controller, the
-# contract set, and the precompiled socket client with the checksum file it is
+# contract set, and the precompiled native library with the checksum file it is
 # verified against.
 #
 # This package is proven against a core it does not contain. A release of the
@@ -14,7 +14,7 @@
 # --stage-release` writes in the core's tree) or the URL a GitHub release serves
 # its assets from. Everything it installs is build output and is ignored by git:
 # the fake controller at `.core/`, the contract set at `contract/`, the checksum
-# file at the package root, and this host's socket client archive at
+# file at the package root, and this host's native library archive at
 # `.core/nifs/`, the directory `RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH` names.
 set -euo pipefail
 
@@ -40,7 +40,7 @@ refuse() {
 command -v sha256sum >/dev/null 2>&1 || refuse "sha256sum is required"
 
 # The platform a core release names its fake controller by, and the triple it
-# names the socket client by: the directory column of the core's
+# names the native library by: the directory column of the core's
 # `scripts/native_triples.sh`, and the triple itself.
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)               platform=linux-x64;   triple=x86_64-unknown-linux-gnu ;;
@@ -91,7 +91,7 @@ tar -xzf "${scratch}/fixtures.tar.gz" -C contract
 echo "  unpacked the contract set -> contract/"
 
 verified checksum-Elixir.Flezha.SDK.Native.exs checksum-Elixir.Flezha.SDK.Native.exs
-nif="libflz_sdk_nif-v${VERSION}-nif-2.16-${triple}.so.tar.gz"
+nif="libflz_core_beam-v${VERSION}-nif-2.16-${triple}.so.tar.gz"
 rm -rf .core/nifs
 verified "${nif}" ".core/nifs/${nif}"
 

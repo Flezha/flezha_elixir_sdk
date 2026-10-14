@@ -1,7 +1,7 @@
 defmodule Flezha.SDK.Contract do
   @moduledoc """
-  The directory the contract set this package reads is resolved in: the schema
-  the codec compiles, and the fixtures its suite is held to.
+  The directory the contract set this package reads is resolved in: the error
+  catalogue it compiles, and the fixtures its suite is held to.
 
   `$FLEZHA_CONTRACT_DIR` when it is set, else the core tree the package sits in
   as a submodule, else `contract/` in the package, where a release's fixture
@@ -12,9 +12,8 @@ defmodule Flezha.SDK.Contract do
   when they hold the member asked for, or for the directory as a whole the
   set's own list, `test/fixtures/contract.txt`.
 
-  `contract/` tracks the two members the package compiles from, the error
-  catalogue and the runner command schema, so a clone or the Hex package
-  compiles with no release unpacked.
+  `contract/` tracks the member the package compiles from, the error
+  catalogue, so a clone or the Hex package compiles with no release unpacked.
   """
 
   @package Path.expand("../../..", __DIR__)

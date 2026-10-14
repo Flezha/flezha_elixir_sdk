@@ -3,12 +3,10 @@ defmodule Flezha.SDK.RouteLatestTest do
   The packaged latest-document router, run in local mode: each distinct
   document reaches a key once, on that key's own next traffic item.
   """
-  # async: false: local mode's process-wide notice counter.
+  # async: false: one local run per process at a time.
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureIO, only: [with_io: 2]
-
-  alias Flezha.SDK.{Channels, Cell, Local, Relay, Topology}
+  alias Flezha.SDK.{Channels, Declaration, Local}
 
   defmodule RouterOp do
     @behaviour Flezha.SDK.Relay
@@ -39,7 +37,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   end
 
   test "a document reaches each key once, on the key's own next trade" do
-    {{:ok, run}, _notice} = with_io(:stderr, fn -> Local.start(RouterOp) end)
+    {:ok, run} = Local.start(RouterOp)
     on_exit(fn -> Local.stop(run) end)
 
     reader = self()
@@ -53,12 +51,6 @@ defmodule Flezha.SDK.RouteLatestTest do
 
     assert routed() == ["A=v1", "B=v1"]
 
-    assert [{"route_latest", :single, [{_key, router}]}] =
-             Relay.Server.cells(Local.relay(run))
-
-    assert {:ok, %{version: 1, delivered: %{"A" => 1, "B" => 1}}, _seq} =
-             Cell.read(router, 1_000)
-
     feed(run, "thresholds", "v2")
     feed(run, "trades", "A:3")
 
@@ -66,13 +58,13 @@ defmodule Flezha.SDK.RouteLatestTest do
   end
 
   test "the router node is `route_latest`, and the named spelling names it" do
-    assert {:ok, topology} = Topology.build(RouterOp)
-    assert {:ok, node} = Topology.node_of(topology, "route_latest")
-    assert topology.node_name[node] == nil
+    assert tasklet_names(RouterOp) == ["route_latest"]
+    assert tasklet_names(NamedRouterOp) == ["thresholds_router"]
+  end
 
-    assert {:ok, named} = Topology.build(NamedRouterOp)
-    assert {:ok, node} = Topology.node_of(named, "route_latest")
-    assert named.node_name[node] == "thresholds_router"
+  defp tasklet_names(module) do
+    {:ok, class} = Declaration.build(module)
+    for tasklet <- Jason.decode!(class.json)["tasklets"], do: tasklet["name"]
   end
 
   # Each item settles before the next, so the order across the two entries is

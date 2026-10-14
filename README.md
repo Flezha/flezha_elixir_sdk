@@ -18,14 +18,19 @@ end
 
 Elixir 1.17 or later.
 
-## Two ways to run
+## Running
 
-- **A runner of its own.** Your application starts `Flezha.SDK.child_spec/1`
-  under its supervisor and connects to a controller over a Unix domain socket or
-  QUIC. `examples/echo` is the smallest complete one.
-- **Inside the controller's node.** The controller registers the in-node
-  transport (`Flezha.SDK.Connect`) at boot, and a runner started there with
-  `transport: :native` reaches it without a socket.
+The SDK runs on `flz_core`, the runtime every Flezha SDK shares, through a
+native library this package carries. Your application starts
+`Flezha.SDK.child_spec/1` under its supervisor, and the runner connects to a
+controller over a Unix domain socket (the default) or QUIC, wherever it runs:
+its own BEAM, or the controller's. `examples/echo` is the smallest complete
+one.
+
+A controller that enforces authorization asks every runner for a credential:
+issue one with `flz token issue runner@<ns> <ns> runner` and pass it as
+`namespace_secret:`, or set `FLEZHA_NAMESPACE_SECRET`. Connection settings are
+read from the OS environment, then from `config :flezha_sdk, ...`.
 
 `Flezha.SDK.Local` runs a relay's declared graph in your own process with no
 controller at all, holding state in memory only.
@@ -98,14 +103,14 @@ answer is a JSON value, a string for text, the bytes for the binary formats, or
 {:ok, placed} = Flezha.SDK.call(runner, "orders-eu", "place", %{"pair" => "EUR/USD", "amount" => 1000})
 ```
 
-## The socket client
+## The native library
 
-`:uds` and `:quic` dial through a small native library, `Flezha.SDK.Native`. It
+The runtime is a native library, `Flezha.SDK.Native`, built over `flz_core`. It
 is precompiled for Linux (x86_64, aarch64), macOS (x86_64, arm64) and Windows
 (x86_64), downloaded when the package compiles and checked against the checksum
 file the package carries. On any other host, or with `FLEZHA_SDK_BUILD_NIF=1`,
-it is built from source, which needs a Rust toolchain. A node that never dials a
-socket sets `config :flezha_sdk, socket_nif: false` and compiles no library.
+it is built from source, which needs a Rust toolchain. A node that never runs a
+runner sets `config :flezha_sdk, socket_nif: false` and compiles no library.
 
 ## Configuration
 

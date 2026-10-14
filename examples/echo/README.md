@@ -61,7 +61,7 @@ end
 
 A copy of this folder outside the checkout names the package's absolute path
 instead. With no release to download it from, the first compile builds the
-package's socket client with a Rust toolchain, so it takes a few minutes.
+package's native library with a Rust toolchain, so it takes a few minutes.
 
 ## Where to go next
 

@@ -1,17 +1,12 @@
 defmodule Flezha.SDK.Timers do
   @moduledoc """
-  A Cell's pending timers and the session an invocation registers through —
-  the kernel's pending set and timer session re-expressed in this SDK's own
-  core. One ordered set per kind; registering a pending timestamp again
-  changes nothing. Every registration, cancellation and firing is an op — the
-  map `Flezha.SDK.Wire` encodes for a `format_id = 3` record — so the set is
-  folded state: `apply/2` is the one mutation seam, live and on restore, and
-  `register_ops/1` re-states the whole set after a compaction. A session works
-  on a COPY of the set, so a failed attempt's registrations do not survive its
-  retry; only the attempt that completes commits, and a firing's session opens
-  on the fired timer's removal so it rides the same record as what `on_timer/4`
-  applies. Arming is the Cell's, on the BEAM's timer service; counting is
-  telemetry's, from the tally a commit answers.
+  A Cell's pending timers as this host sees them, and the session an
+  invocation registers through. `flz_core` keeps the timers themselves, fires
+  them and restores them; the host's copy is what the timer cap and a
+  cancel's answer read. One ordered set per kind; registering a pending
+  timestamp again changes nothing. A session works on a COPY of the set, so a
+  failed attempt's registrations do not survive its retry, and a firing's
+  session opens on the fired timer's removal.
   """
 
   alias Flezha.SDK.Error
@@ -24,17 +19,11 @@ defmodule Flezha.SDK.Timers do
   @type policy :: %{tasklet: String.t(), cap: pos_integer(), clock: atom()}
   @typedoc "`runtime.event_time_timer_without_event_time_clock` or `runtime.timer_cap_exceeded`."
   @type refusal :: Error.t()
-  @type tally :: %{
-          registered: non_neg_integer(),
-          fired: non_neg_integer(),
-          cancelled: non_neg_integer(),
-          refused: non_neg_integer()
-        }
   @type t :: %__MODULE__{}
 
   defmodule Session do
     @moduledoc false
-    defstruct [:pending, :policy, :now_ms, ops: [], firing?: false, refused: 0]
+    defstruct [:pending, :policy, :now_ms, ops: []]
     @type t :: %__MODULE__{}
   end
 
@@ -47,38 +36,12 @@ defmodule Flezha.SDK.Timers do
   @spec cancel_op(kind(), non_neg_integer()) :: op()
   def cancel_op(kind, at), do: %{kind: kind, scheduled_at: at, register: false}
 
-  @doc "Fold one op — the single mutation seam, live and on restore. Whether the set changed."
-  @spec apply(t(), op()) :: {boolean(), t()}
-  def apply(%__MODULE__{} = t, op), do: fold_op(t, op)
-
-  @spec apply_all(t(), [op()]) :: t()
-  def apply_all(%__MODULE__{} = t, ops),
-    do: Enum.reduce(ops, t, fn op, acc -> acc |> fold_op(op) |> elem(1) end)
-
   @spec contains?(t(), kind(), non_neg_integer()) :: boolean()
   def contains?(%__MODULE__{} = t, kind, at), do: :gb_sets.is_element(at, Map.fetch!(t, kind))
 
   @spec size(t()) :: non_neg_integer()
   def size(%__MODULE__{} = t),
     do: :gb_sets.size(t.event_time) + :gb_sets.size(t.processing_time)
-
-  @spec empty?(t()) :: boolean()
-  def empty?(%__MODULE__{} = t), do: size(t) == 0
-
-  @doc "Timestamps of `kind` at or below `upto`, ascending."
-  @spec due(t(), kind(), non_neg_integer()) :: [non_neg_integer()]
-  def due(%__MODULE__{} = t, kind, upto),
-    do: t |> Map.fetch!(kind) |> :gb_sets.iterator() |> take_due(upto, [])
-
-  @spec all(t(), kind()) :: [non_neg_integer()]
-  def all(%__MODULE__{} = t, kind), do: :gb_sets.to_list(Map.fetch!(t, kind))
-
-  @doc "The full set as registrations — what a compaction re-states ABOVE the snapshot's seq."
-  @spec register_ops(t()) :: [op()]
-  def register_ops(%__MODULE__{} = t) do
-    Enum.map(all(t, :event_time), &register_op(:event_time, &1)) ++
-      Enum.map(all(t, :processing_time), &register_op(:processing_time, &1))
-  end
 
   # --- the session ---
 
@@ -93,20 +56,14 @@ defmodule Flezha.SDK.Timers do
   def session(%__MODULE__{} = pending, policy, now_ms, {kind, at}) do
     {_changed?, pending} = fold_op(pending, cancel_op(kind, at))
 
-    %Session{
-      pending: pending,
-      policy: policy,
-      now_ms: now_ms,
-      ops: [cancel_op(kind, at)],
-      firing?: true
-    }
+    %Session{pending: pending, policy: policy, now_ms: now_ms, ops: [cancel_op(kind, at)]}
   end
 
   @doc "The invocation's `now`, which `register_after/2` anchors on."
   @spec now(Session.t()) :: non_neg_integer()
   def now(%Session{now_ms: ms}), do: ms
 
-  @doc "Register `kind` at `at`: the absolute timestamp, or a refusal (counted) with the set unchanged."
+  @doc "Register `kind` at `at`: the absolute timestamp, or a refusal with the set unchanged."
   @spec register(Session.t(), kind(), non_neg_integer()) ::
           {:ok, non_neg_integer(), Session.t()} | {:error, refusal(), Session.t()}
   def register(%Session{policy: policy} = s, kind, at) do
@@ -138,29 +95,23 @@ defmodule Flezha.SDK.Timers do
   def register_after(%Session{now_ms: now} = s, delay_ms),
     do: register(s, :processing_time, max(now + delay_ms, 0))
 
-  @doc "Cancel by the scheduled timestamp; whether one was pending."
+  @doc """
+  Cancel by the scheduled timestamp; whether one was pending here. The op is
+  recorded either way: a Cell restored by the core holds timers its host copy
+  never saw.
+  """
   @spec cancel(Session.t(), kind(), non_neg_integer()) :: {boolean(), Session.t()}
-  def cancel(%Session{} = s, kind, at), do: note(s, cancel_op(kind, at))
-
-  @doc "The copy as the live set, the ops to make durable in order, and the tally."
-  @spec commit(Session.t()) :: {t(), [op()], tally()}
-  def commit(%Session{} = s) do
-    ops = Enum.reverse(s.ops)
-    zero = %{registered: 0, fired: 0, cancelled: 0, refused: s.refused}
-
-    tally =
-      ops
-      |> Enum.with_index()
-      |> Enum.reduce(zero, fn
-        {%{register: true}, _index}, t -> %{t | registered: t.registered + 1}
-        {_removal, 0}, t when s.firing? -> %{t | fired: t.fired + 1}
-        {_cancel, _index}, t -> %{t | cancelled: t.cancelled + 1}
-      end)
-
-    {s.pending, ops, tally}
+  def cancel(%Session{} = s, kind, at) do
+    op = cancel_op(kind, at)
+    {changed?, pending} = fold_op(s.pending, op)
+    {changed?, %{s | pending: pending, ops: [op | s.ops]}}
   end
 
-  # An op joins the session only when it changed the copy.
+  @doc "The copy as the live set, and the ops to record in order."
+  @spec commit(Session.t()) :: {t(), [op()]}
+  def commit(%Session{} = s), do: {s.pending, Enum.reverse(s.ops)}
+
+  # A registration joins the session only when it changed the copy.
   defp note(%Session{} = s, op) do
     case fold_op(s.pending, op) do
       {true, pending} -> {true, %{s | pending: pending, ops: [op | s.ops]}}
@@ -168,19 +119,12 @@ defmodule Flezha.SDK.Timers do
     end
   end
 
-  defp refuse(%Session{} = s, refusal), do: {:error, refusal, %{s | refused: s.refused + 1}}
+  defp refuse(%Session{} = s, refusal), do: {:error, refusal, s}
 
   defp fold_op(%__MODULE__{} = t, %{kind: kind, scheduled_at: at, register: register}) do
     set = Map.fetch!(t, kind)
     changed? = :gb_sets.is_element(at, set) != register
     set = if register, do: :gb_sets.add(at, set), else: :gb_sets.delete_any(at, set)
     {changed?, Map.put(t, kind, set)}
-  end
-
-  defp take_due(iter, upto, acc) do
-    case :gb_sets.next(iter) do
-      {at, iter} when at <= upto -> take_due(iter, upto, [at | acc])
-      _ -> Enum.reverse(acc)
-    end
   end
 end

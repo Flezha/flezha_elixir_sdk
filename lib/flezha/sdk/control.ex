@@ -13,14 +13,11 @@ defmodule Flezha.SDK.Control do
       flz role bind runner@team-orders app team-orders
 
   Every function here is one line over `call/3`, because the verb travels as
-  data on the wire. Adding a verb costs a function and nothing else. This host
-  is its own core and shares no bindings with `flz_core`, so the shape is
-  re-expressed here rather than inherited; the frame and the verb names are the
-  same ones every other SDK sends.
+  data on the wire, through `flz_core`'s one administration entry. Adding a verb
+  costs a function and nothing else.
   """
 
-  alias Flezha.SDK.Error
-  alias Flezha.SDK.RunnerServer
+  alias Flezha.SDK.{Error, Native}
 
   @typedoc "A runner handle, or the server behind one."
   @type runner :: Flezha.SDK.t() | pid() | atom()
@@ -107,12 +104,16 @@ defmodule Flezha.SDK.Control do
   """
   @spec call(runner(), String.t(), [term()]) :: {:ok, term()} | {:error, Error.t()}
   def call(runner, verb, args) when is_binary(verb) and is_list(args) do
-    with {:ok, server} <- Flezha.SDK.server(runner),
-         {:ok, json} <- RunnerServer.admin_call(server, verb, Jason.encode!(args)) do
-      case Jason.decode(json) do
-        {:ok, answer} -> {:ok, answer}
-        {:error, _not_json} -> {:error, Error.new("control.unreadable_answer", verb: verb)}
-      end
+    with {:ok, core} <- Flezha.SDK.core(runner),
+         json when is_binary(json) <-
+           Native.answered(Native.admin_call(core, verb, Jason.encode!(args))),
+         do: decoded(json, verb)
+  end
+
+  defp decoded(json, verb) do
+    case Jason.decode(json) do
+      {:ok, answer} -> {:ok, answer}
+      {:error, _not_json} -> {:error, Error.new("control.unreadable_answer", verb: verb)}
     end
   end
 

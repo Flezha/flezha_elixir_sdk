@@ -8,7 +8,6 @@ defmodule Agentdesk.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # `:uds` because this node is not the controller's.
       {Flezha.SDK,
        namespace: "agents",
        relays: [Agentdesk.AgentRelay, Agentdesk.GatewayRelay],

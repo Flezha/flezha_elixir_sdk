@@ -5,13 +5,10 @@ defmodule Starter.RelayTest do
   """
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureIO, only: [with_io: 2]
-
   alias Flezha.SDK.Local
 
   test "counts each page on its own" do
-    {{:ok, run}, notice} = with_io(:stderr, fn -> Local.start(Starter.Relay) end)
-    assert notice =~ "LOCAL MODE"
+    {:ok, run} = Local.start(Starter.Relay)
     on_exit(fn -> Local.stop(run) end)
 
     test = self()

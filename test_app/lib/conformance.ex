@@ -161,7 +161,6 @@ defmodule ElixirRunner.Conformance do
 
   alias ElixirRunner.Conformance.Row
   alias Flezha.SDK.Channels
-  alias Flezha.SDK.Steps.Spec
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
@@ -225,23 +224,14 @@ defmodule ElixirRunner.Conformance do
     put_context(row)
 
     case registered(module) do
-      {:ok, _topology} -> [module]
+      {:ok, _derived} -> [module]
       {:error, issues} -> die(rejection(row.topology, issues))
     end
   end
 
-  # The row's class through the registration a runner makes, which reads its
-  # settings tree and judges it under them; nothing connects. A steps class's
-  # verdict carries its topology inside its spec.
-  defp registered(module) do
-    case "conformance" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(module) do
-      %Flezha.SDK{classes: [{^module, class}]} -> {:ok, topology(class)}
-      {:error, %Flezha.SDK.Error{} = refusal} -> {:error, refusal}
-    end
-  end
-
-  defp topology(%Spec{topology: topology}), do: topology
-  defp topology(topology), do: topology
+  # The row's class as the core judges it, settings tree and all; nothing
+  # connects.
+  defp registered(module), do: Flezha.SDK.Declaration.check(module)
 
   defp rejection(topology, refusal),
     do: "topology rejected [#{Enum.join(names(refusal), ", ")}] declaring #{topology}"
@@ -280,12 +270,8 @@ defmodule ElixirRunner.Conformance do
     put_context(row)
 
     case registered(module) do
-      {:ok, topology} ->
-        %{
-          "topology" => row.topology,
-          "outcome" => "accepted",
-          "derived" => derived(topology, entries(module))
-        }
+      {:ok, derived} ->
+        %{"topology" => row.topology, "outcome" => "accepted", "derived" => channels_of(derived)}
 
       {:error, refusal} ->
         %{"topology" => row.topology, "outcome" => "refused", "names" => names(refusal)}
@@ -386,56 +372,19 @@ defmodule ElixirRunner.Conformance do
   # opened it among the producing channels, and every producing channel
   # something terminates on. A producer's output channel nothing closes on is
   # no channel at all, which is what the fixture's seven-column table states.
-  defp derived(topology, entries) do
-    entries = for {name, after_nodes} <- entries, do: {after_nodes, {{:entry, name}, name, nil}}
-
-    outputs =
-      for {ref, seq} <- topology.node_seq,
-          do: {seq + 0.5, {{:node, ref}, topology.node_channel[ref], seq}}
-
-    (entries ++ outputs)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(&channel(elem(&1, 1), topology))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.with_index()
-    |> Enum.map(fn {channel, index} -> Map.put(channel, "index", index) end)
-  end
-
-  defp channel({source, name, producer}, topology) do
-    routes = Map.get(topology.routes, source, [])
-    ends = for %{to: {:sink, _}} = route <- routes, do: route
-    sinks = for %{call: nil, to: {:sink, plugin}} <- ends, do: plugin
-    consumers = for %{to: {:node, ref}} <- routes, do: Map.fetch!(topology.node_seq, ref)
-
-    cond do
-      producer == nil -> line(name, "entry", nil, consumers, sinks)
-      ends == [] and consumers == [] -> nil
-      consumers == [] -> line(name, "plugin", producer, consumers, sinks)
-      true -> line(name, "inter_task", producer, consumers, sinks)
+  # The core spells a consumer `{"tasklet": n, "chain": m}`; the report carries
+  # the flat list of tasklet indices, which is what the table pins.
+  defp channels_of(derived) do
+    for channel <- derived["channels"] do
+      %{
+        "index" => channel["index"],
+        "name" => channel["name"],
+        "kind" => channel["kind"],
+        "producer" => channel["producer"],
+        "consumers" => Enum.map(channel["consumers"], & &1["tasklet"]),
+        "sink" => channel["sink"]
+      }
     end
-  end
-
-  defp line(name, kind, producer, consumers, sinks) do
-    %{
-      "name" => name,
-      "kind" => kind,
-      "producer" => producer,
-      "consumers" => consumers,
-      # An output names the channel it terminates, so the descriptor has no name
-      # of its own: presence is what the routes carry, and the name is the
-      # channel's.
-      "sink" => if(sinks == [], do: nil, else: name)
-    }
-  end
-
-  # The entry channels in declaration order, each with how many tasklets were
-  # declared before it. The compiled topology keeps them in a map, so the
-  # record the builder wrote is what states their order.
-  defp entries(module) do
-    c = Channels.new()
-    _ = module.channels(c)
-    record = Channels.take(c)
-    for name <- Enum.uniq(record.entry_order), do: {name, record.entries[name].after_nodes}
   end
 
   # --- the step vocabulary, mapped to this SDK's builder ---

@@ -2420,6 +2420,16 @@
       "message": "the controller connect was not confirmed within {seconds}s",
       "details": ["seconds"]
     },
+    "runtime.core_in_use": {
+      "class": "conflict",
+      "message": "another runner or local run is live in this process: its core serves one at a time",
+      "details": []
+    },
+    "runtime.core_shut_down": {
+      "class": "unavailable",
+      "message": "this process's core was shut down: a runner or a local run starts once per process",
+      "details": []
+    },
     "runtime.edge_closure_panicked": {
       "class": "internal",
       "message": "the edge {closure} panicked: {reason}",
@@ -2495,9 +2505,14 @@
       "message": "if_running must be deliver or error, not '{value}'",
       "details": ["value"]
     },
+    "runtime.invalid_connect_setting": {
+      "class": "invalid",
+      "message": "connection setting '{setting}' is refused: {reason}",
+      "details": ["setting", "reason"]
+    },
     "runtime.invalid_transport": {
       "class": "invalid",
-      "message": "'{transport}' is not a transport; use native, uds or quic",
+      "message": "'{transport}' is not a transport; use uds or quic",
       "details": ["transport"]
     },
     "runtime.key_not_allowed_on_non_keyed_channel": {
@@ -2819,6 +2834,11 @@
       "reasons": [
         {"tag": "partial_drain", "args": ["still_local"]}
       ]
+    },
+    "spawn.outside_invocation": {
+      "class": "invalid",
+      "message": "spawn_steps of factory '{factory}' was called outside the invocation it belongs to: from another process, or after it returned",
+      "details": ["factory"]
     },
     "spawn.timeout": {
       "class": "unavailable",
@@ -3567,8 +3587,8 @@
     }
   },
   "internal": [
-    "already_exist", "already_exists", "already_loaded", "already_present", "already_started", "awake", "bad_header_size",
-    "bad_marker_body", "bad_payload", "call_not_relearned", "chmod", "claim_held", "client_not_running", "column_missing", "corrupt_index",
+    "already_exist", "already_exists", "already_loaded", "already_present", "already_started", "awake", "bad_cell_id", "bad_header_size",
+    "bad_marker_body", "bad_option", "bad_payload", "bad_timer_op", "bad_varint", "call_not_relearned", "chmod", "claim_held", "client_not_running", "column_missing", "corrupt_index",
     "crc_mismatch", "delivery_crashed", "delivery_failed", "dispatch_timeout", "dlq_entry_missing",
     "durability_tier_disabled", "durability_tier_not_running", "einval", "enoent", "exception",
     "exit", "fetch_crashed", "gap", "http", "http_status", "id_taken", "input_log_unavailable",
@@ -3593,7 +3613,7 @@
     "sink_start_failed", "spki_decode_failed", "split_state_key", "stale_writer", "start_crashed",
     "start_relay_failed", "startup_failed", "stream_unbound", "struct_build_failed",
     "subject_decode_failed", "superseded", "symlink", "table_missing", "task_exit", "too_long", "too_many_links",
-    "too_short", "topic_already_exists", "trusted_keys_empty", "unavailable", "unbound",
+    "too_short", "topic_already_exists", "trailing_bytes", "trusted_keys_empty", "unavailable", "unbound",
     "undisabled", "unexpected_start_result", "unknown_discovery_handler", "unknown_entry_type",
     "unknown_file", "unknown_hub", "unknown_key", "unknown_stream_type", "unknown_topic_or_partition",
     "unparseable", "unreachable", "unrebound", "unsafe_artifact_name", "unsupported_key_format", "unsupported_pem",

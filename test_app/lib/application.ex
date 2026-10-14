@@ -98,14 +98,14 @@ defmodule ElixirRunner.Application do
   end
 
   defp drill(%{"call" => true, "value" => value}, relay, channel) do
-    case Flezha.SDK.call(Flezha.SDK.RunnerServer, relay, channel, value) do
+    case Flezha.SDK.call(Flezha.SDK.Runner, relay, channel, value) do
       {:ok, answer} -> "call #{relay} ok #{Jason.encode!(answer)}"
       {:error, %{code: code}} -> "call #{relay} err #{code}"
     end
   end
 
   defp drill(%{"message" => message}, relay, channel) do
-    case Flezha.SDK.send(Flezha.SDK.RunnerServer, relay, message, channel, local: true) do
+    case Flezha.SDK.send(Flezha.SDK.Runner, relay, message, channel, local: true) do
       {:ok, _} -> "local_send #{relay} ok"
       {:error, %{code: code}} -> "local_send #{relay} err #{code}"
     end

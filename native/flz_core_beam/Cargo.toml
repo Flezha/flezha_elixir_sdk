@@ -1,0 +1,24 @@
+[package]
+name = "flz_core_beam"
+version = "0.1.0"
+edition = "2021"
+description = "The Elixir SDK's native library: a Rustler NIF over flz_core_ffi's veneer"
+license = "Apache-2.0"
+repository = "https://github.com/flezha/flezha_elixir_sdk"
+publish = false
+
+[lib]
+name = "flz_core_beam"
+crate-type = ["cdylib"]
+
+[dependencies]
+crossbeam = "0.8"
+flz_core = { git = "https://github.com/flezha/flezha", tag = "v0.1.0" }
+flz_core_ffi = { git = "https://github.com/flezha/flezha", tag = "v0.1.0", default-features = false }
+rustler = "0.35"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_analyzer)", "cfg(loom)"] }
+
+[lints.clippy]
+cognitive_complexity = "warn"

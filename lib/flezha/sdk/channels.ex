@@ -13,16 +13,12 @@ defmodule Flezha.SDK.Channels do
   to the chain its handle carries — a transform, a key, a plugin output, an edge
   into a tasklet, a merge source closing on one — and the record is kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
-  builder's `pending`).
-  `Flezha.SDK.Topology.build/2` then judges the finished record in the three
-  stages `flz_core::host::register::check` judges its own: the chain rules,
-  the derivation, then the topology and class facts. The Elixir SDK inherits
-  nothing from `flz_core`, so this is a re-expression of those rules, measured
-  against `test/fixtures/reference_topologies.txt` like every other SDK's.
+  builder's `pending`). `Flezha.SDK.Declaration` hands the finished record to
+  `flz_core`, which judges it as it judges every SDK's.
 
-  The two refusals that stay here are the ones the surface itself makes:
-  `keyed` and `named` on an entry handle name a fact an entry channel has no
-  end for, and neither reaches the record.
+  The refusals that stay here are the ones the surface itself makes: `keyed`,
+  `named`, an output and a call on an entry handle name a fact an entry channel
+  has no end for, and none reaches the record.
   """
 
   alias Flezha.SDK.{Merge, Response, RouteLatest, Stream}
@@ -46,7 +42,7 @@ defmodule Flezha.SDK.Channels do
           | {:merge, reference(), non_neg_integer()}
           | {:branch, non_neg_integer()}
 
-  # --- build lifecycle (used by Topology.build/2) ---
+  # --- build lifecycle (used by Flezha.SDK.Declaration) ---
 
   @doc false
   def new do
@@ -113,12 +109,7 @@ defmodule Flezha.SDK.Channels do
       description: Keyword.get(opts, :description, "")
     }
 
-    stream = open(c, name, &default_parse/1, api)
-
-    case schema_refusal(api) do
-      nil -> stream
-      reason -> refuse(stream, {:SchemaInvalid, name, reason})
-    end
+    open(c, name, &default_parse/1, api)
   end
 
   @doc "Entry channel with a custom parser; a parse failure rides the entry ladder."
@@ -140,13 +131,6 @@ defmodule Flezha.SDK.Channels do
 
     %Stream{builder: ref, source: {:entry, name}}
   end
-
-  # The rule `flz_core::host::register` judges a declared schema by.
-  defp schema_refusal(%{schema: nil}), do: nil
-  defp schema_refusal(%{codec: "json", schema: %{"type" => _}}), do: nil
-  defp schema_refusal(%{codec: "json", schema: %{type: _}}), do: nil
-  defp schema_refusal(%{codec: "json"}), do: "a schema is a JSON object with a type"
-  defp schema_refusal(_not_json), do: "only a json channel carries a schema"
 
   # --- edge transforms (fused into one closure per consumer edge) ---
 
@@ -178,8 +162,9 @@ defmodule Flezha.SDK.Channels do
   def into(%Merge{} = m, module), do: close_merge(m, module, nil)
 
   @doc """
-  Route into a named tasklet node, or close a merge on one. Identity
-  collisions refuse.
+  Route into a tasklet node named `name`, or close a merge on one: `name` is
+  the node's identity, which its Cells are named by in place of the tasklet's
+  `name/0`, so one module can back two nodes. Identity collisions refuse.
   """
   @spec into_named(Stream.t() | Merge.t(), module(), String.t()) :: Stream.t()
   def into_named(handle, module, name)
@@ -344,12 +329,15 @@ defmodule Flezha.SDK.Channels do
 
   def keyed(%Stream{} = s), do: link(s, :keyed)
 
-  @doc "Name the source tasklet node, and with it the channel it produces."
+  @doc """
+  Name the channel the source tasklet node produces on. The tasklet keeps its
+  own name, or the identity `into_named/3` gave it.
+  """
   def named(%Stream{source: {:entry, name}} = s, _name),
     do: refuse(s, {:NamedOnEntry, name})
 
   def named(%Stream{source: {:node, node_ref}, builder: ref} = s, name) when is_binary(name) do
-    update(ref, fn acc -> claim_name(acc, name, node_ref) end)
+    update(ref, fn acc -> put_in(acc, [:nodes, node_ref, :channel], name) end)
     s
   end
 
@@ -401,58 +389,22 @@ defmodule Flezha.SDK.Channels do
 
   @doc """
   The channel a source is named by on the wire: an entry's own name, a node's
-  `named/2` name, the name its `output` declared, else its tasklet's. One rule,
-  read by the check's refusals and by the compiled routes, so the override is
-  applied once for every terminator the channel carries.
+  `named/2` name, the name its `output` declared, else its tasklet's.
   """
   @spec channel_name(map(), {:entry, String.t()} | {:node, reference()}) :: String.t()
   def channel_name(_acc, {:entry, name}), do: name
 
   def channel_name(acc, {:node, ref}), do: node_channel_name(Map.fetch!(acc.nodes, ref))
 
-  # The names a node's record declares for its channel, in the order they win:
-  # `named/2`'s name, then the names its outputs wrote. The one reader of a node's
-  # naming declarations — the wire name, the refusal two of them raise, and
-  # whether an output supplied the name all come off this list, so they cannot be
-  # read from different fields.
-  @doc false
-  def naming_declarations(%{name: nil, sink_names: sinks}), do: Enum.uniq(sinks)
-  def naming_declarations(%{name: name, sink_names: sinks}), do: [name | Enum.uniq(sinks)]
-
   @doc """
-  The same rule off a node record: its first naming declaration, else the
-  tasklet's own name.
+  The same rule off a node record: `named/2`'s name, the first name its outputs
+  wrote, else the tasklet's own name.
   """
-  def node_channel_name(%{module: module} = node),
-    do: List.first(naming_declarations(node)) || module.name()
+  def node_channel_name(%{channel: channel, sink_names: sinks} = node),
+    do: channel || List.first(sinks) || node_tasklet_name(node)
 
-  # Whether a node's channel took its name from the node's own `output`, rather
-  # than from `named/2` or from its tasklet.
-  @doc false
-  def named_by_sink?(%{name: name, sink_names: sinks}), do: is_nil(name) and sinks != []
-
-  @doc false
-  def fuse(chain) do
-    {steps, key_by} =
-      Enum.reduce(chain, {[], nil}, fn
-        {:key, f}, {steps, _} -> {steps, f}
-        step, {steps, key} -> {[step | steps], key}
-      end)
-
-    steps = Enum.reverse(steps)
-
-    transform = fn value ->
-      Enum.reduce(steps, [value], fn step, acc ->
-        Enum.flat_map(acc, &apply_step(step, &1))
-      end)
-    end
-
-    {transform, key_by}
-  end
-
-  defp apply_step({:map, f}, v), do: [f.(v)]
-  defp apply_step({:filter, f}, v), do: if(f.(v), do: [v], else: [])
-  defp apply_step({:flat_map, f}, v), do: Enum.to_list(f.(v))
+  @doc "The name a node's Cells are identified by: `into_named/3`'s, else the tasklet's."
+  def node_tasklet_name(%{identity: identity, module: module}), do: identity || module.name()
 
   # --- internals ---
 
@@ -481,8 +433,8 @@ defmodule Flezha.SDK.Channels do
   end
 
   # Unnamed mentions of one module unify to a single node (fan-in). A named
-  # node is distinct per name; a name already claimed by another node still
-  # creates one, so the record carries both claims and the check names the
+  # node is distinct per name; a name already claimed by another module's node
+  # still creates one, so the record carries both and the core names the
   # collision.
   defp resolve_node(ref, module, nil) do
     resolve(ref, fn acc ->
@@ -519,24 +471,15 @@ defmodule Flezha.SDK.Channels do
     end)
   end
 
-  defp put_node(acc, node_ref, module, name),
+  defp put_node(acc, node_ref, module, identity),
     do:
       put_in(acc, [:nodes, node_ref], %{
         module: module,
-        name: name,
+        identity: identity,
+        channel: nil,
         sink_names: [],
         seq: map_size(acc.nodes)
       })
-
-  # `named/2` on a node whose name another node already claims writes the name
-  # anyway: two nodes then answer to it and the check names the collision.
-  defp claim_name(acc, name, node_ref) do
-    acc = put_in(acc, [:nodes, node_ref, :name], name)
-
-    if Map.has_key?(acc.node_names, name),
-      do: acc,
-      else: put_in(acc, [:node_names, name], node_ref)
-  end
 
   defp link(%Stream{builder: ref} = s, link) do
     s = track_chain(s)

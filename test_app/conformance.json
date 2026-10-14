@@ -24,9 +24,12 @@
     "quic"
   ],
   "dispatch": {
-    "model": "process-per-cell",
-    "detail": "One BEAM process per Cell, scheduled by the VM; there is no worker pool to size.",
-    "env": {}
+    "model": "thread-pool",
+    "detail": "A base pool of Elixir worker processes, each paired with a thread the native library owns that waits in the core's poll and hands the worker one activation at a time; a supervisor process grows the pool on the core's starvation signal.",
+    "env": {
+      "FLEZHA_WORKER_POOL_SIZE": "base workers (default: the schedulers online)",
+      "FLEZHA_WORKER_POOL_MAX": "the ceiling the pool grows to on starvation (default: ten times the base)"
+    }
   },
   "toolchain": "elixir --version",
   "topology_surfaces": [

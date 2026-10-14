@@ -1,24 +1,21 @@
 defmodule Flezha.SDK.Native do
   @moduledoc """
-  The socket client: this package's own NIF over `flz_transport`'s UDS and QUIC
-  client, the one `Flezha.SDK.Transport` dials `:uds` and `:quic` through.
+  The native library: `flz_core`, the runtime every Flezha SDK runs on, bound
+  through `flz_core_ffi`'s veneer. Activations reach a worker as
+  `{:flz_activation, thread, activation}` from a thread the library owns;
+  nothing that waits for one runs on a BEAM scheduler.
 
   The library is precompiled for the supported triples, downloaded when the
   package compiles and checked against the checksum file the package carries.
   A host that file names no artefact for, or a build with `FLEZHA_SDK_BUILD_NIF=1`,
   compiles it from source instead, which needs a Rust toolchain.
 
-  A node that never dials a socket, a controller running this SDK in its own VM,
-  sets `config :flezha_sdk, socket_nif: false`: nothing is downloaded or compiled,
-  and every function here raises `:nif_not_loaded`.
+  A node that never runs a runner, a controller with no runner in its own VM,
+  sets `config :flezha_sdk, socket_nif: false`: nothing is downloaded or
+  compiled, and every function here raises `:nif_not_loaded`.
 
-  ## Messages sent to a flow relay's owner
-
-    * `{:flz_data, stream_id, payload_id, message, metadata}` — one frame
-    * `{:flz_closed, stream_id, reason}` — the stream ended
+  A refusal is `{:error, document}`, the core's JSON error document.
   """
-
-  alias Flezha.SDK.Knob
 
   version = Mix.Project.config()[:version]
 
@@ -39,7 +36,7 @@ defmodule Flezha.SDK.Native do
 
     use RustlerPrecompiled,
       otp_app: :flezha_sdk,
-      crate: "flz_sdk_nif",
+      crate: "flz_core_beam",
       base_url: "https://github.com/flezha/flezha/releases/download/v#{version}",
       version: version,
       nif_versions: ["2.16"],
@@ -53,88 +50,72 @@ defmodule Flezha.SDK.Native do
       force_build: System.get_env("FLEZHA_SDK_BUILD_NIF") in ["1", "true"] or not precompiled?
   end
 
-  # --- connecting ---
+  @typedoc "A core context."
+  @type core :: reference()
+  @typedoc "A thread the library owns: a poller or the starvation watch."
+  @type thread :: reference()
+  @type refused :: {:error, String.t()}
 
-  @doc """
-  Where this runner's controller is: `{:ok, socket_dir, quic_addresses}`.
-  `socket_dir` and `quic_addresses` pass this node's own reading of the two
-  knobs, `nil` when unset: the BEAM keeps its own environment table, so a value
-  set with `System.put_env/2` never reaches `std::env::var` in the NIF.
-  """
-  def resolve_connect(_socket_dir, _quic_addresses), do: :erlang.nif_error(:not_loaded)
+  @doc "A call's answer, with a refusal read into a `Flezha.SDK.Error`."
+  @spec answered(term()) :: term()
+  def answered({:error, document}) when is_binary(document),
+    do: {:error, Flezha.SDK.Error.from_document(document)}
 
-  @doc "`resolve_connect/2` with this node's environment view supplied."
-  @spec resolve_connect() :: {:ok, String.t(), [String.t()]} | {:error, String.t()}
-  def resolve_connect, do: resolve_connect(socket_dir_env(), quic_env())
+  def answered(answer), do: answer
 
-  @doc """
-  Why this node cannot reach a controller over `transport` (`"uds"` or `"quic"`),
-  as one line: for UDS the resolved directory, the candidates walked, which of
-  the four situations it is and the fix; for QUIC the candidate list. The same
-  text a Rust runner logs and `flz runner check` prints.
-  """
-  def connect_diagnosis(_transport, _socket_dir, _quic_addresses),
+  # --- the context ---
+
+  @doc "The activation schema version the library speaks."
+  def schema_version, do: :erlang.nif_error(:not_loaded)
+  @doc "A core context for `schema_version`."
+  def context_new(_schema_version), do: :erlang.nif_error(:not_loaded)
+  @doc "Free a context once nothing polls it."
+  def context_free(_core), do: :erlang.nif_error(:not_loaded)
+  @doc "The core's verdict on a class declaration: the derived declaration as JSON."
+  def check_class(_core, _json), do: :erlang.nif_error(:not_loaded)
+  @doc "Declare a class to the core."
+  def declare_class(_core, _json), do: :erlang.nif_error(:not_loaded)
+  @doc "Connect as `namespace`, with the connection settings as a JSON object."
+  def start(_core, _namespace, _settings), do: :erlang.nif_error(:not_loaded)
+  @doc "Stop the runner and release every poller."
+  def shutdown(_core), do: :erlang.nif_error(:not_loaded)
+  @doc "The relay instances bound on this runner."
+  def relays(_core), do: :erlang.nif_error(:not_loaded)
+
+  # --- dispatch ---
+
+  @doc "A thread polling for `worker`, which receives `{:flz_activation, activation}`."
+  def poller(_core, _worker), do: :erlang.nif_error(:not_loaded)
+  @doc "A thread sending `owner` `:flz_starved` whenever the core observes starvation."
+  def starvation_watch(_core, _owner), do: :erlang.nif_error(:not_loaded)
+  @doc "Stop a thread once it is back from its wait; its worker's activation stays the worker's."
+  def stop_thread(_thread), do: :erlang.nif_error(:not_loaded)
+  @doc "Stop a thread whose worker is gone, failing the activation that worker never answered."
+  def release_thread(_core, _thread), do: :erlang.nif_error(:not_loaded)
+  @doc "Answer the activation `thread` handed out, then let it poll again."
+  def complete(_core, _thread, _result), do: :erlang.nif_error(:not_loaded)
+
+  # --- calls from a live activation ---
+
+  def spawn_request(_core, _token, _factory, _id, _payload, _if_running, _replay, _offset),
     do: :erlang.nif_error(:not_loaded)
 
-  @doc "`connect_diagnosis/3` with this node's environment view supplied."
-  @spec connect_diagnosis(:uds | :quic) :: String.t()
-  def connect_diagnosis(transport),
-    do: connect_diagnosis(to_string(transport), socket_dir_env(), quic_env())
+  def spawn_result(_core, _handle, _timeout_ms), do: :erlang.nif_error(:not_loaded)
+  def part(_core, _token, _item, _payload), do: :erlang.nif_error(:not_loaded)
+  def effect_begin(_core, _token, _item, _name), do: :erlang.nif_error(:not_loaded)
+  def effect_end(_core, _token, _item, _payload), do: :erlang.nif_error(:not_loaded)
+  def effect_release(_core, _token, _item), do: :erlang.nif_error(:not_loaded)
+  def admin_call(_core, _verb, _args), do: :erlang.nif_error(:not_loaded)
 
-  defp socket_dir_env, do: Knob.get(:socket_files_path)
-  defp quic_env, do: Knob.get(:quic_addresses)
-
-  @doc "A data-socket path in `socket_dir`, composed by `flz_transport`."
-  @spec stream_socket_path(String.t(), String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, String.t()}
-  def stream_socket_path(_socket_dir, _runner_id, _stream_type),
+  def send_message(_core, _relay, _channel, _message, _msg_id, _key, _local),
     do: :erlang.nif_error(:not_loaded)
 
-  @doc "The control-socket path in `socket_dir`, composed by `flz_transport`."
-  @spec control_socket_path_in(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def control_socket_path_in(_socket_dir), do: :erlang.nif_error(:not_loaded)
+  # --- the local run ---
 
-  @doc """
-  Connect a UDS client stream to `socket_path`, retrying the connect on a
-  deadline (exponential from 10 ms, cap 500 ms, ~3 s total). Frames arrive at
-  `owner_pid`. Returns `{:ok, stream_handle} | {:error, reason}`.
-  """
-  def client_connect_uds(_socket_path, _owner_pid), do: :erlang.nif_error(:not_loaded)
-
-  @doc """
-  Open a QUIC client connection to `address` — one `resolve_connect/0` entry,
-  re-resolved on this attempt — verifying the server against `ca_cert_path`
-  (and presenting the client identity when the cert/key variables point at
-  readable files). Returns `{:ok, conn} | {:error, reason}`.
-  """
-  def client_connect_quic(_address, _ca_cert_path), do: :erlang.nif_error(:not_loaded)
-
-  @doc """
-  Open a bidirectional QUIC stream on `conn`. `stream_type` 1/2 writes the 2-byte
-  `[type, index]` preamble the server keys the stream on; 0 means the control
-  stream and writes no preamble. Frames arrive at `owner_pid`.
-  """
-  def client_open_stream(_conn, _stream_type, _index, _owner_pid),
-    do: :erlang.nif_error(:not_loaded)
-
-  # --- per stream ---
-
-  @doc "Queue one frame; `{:error, :driver_gone}` when the stream's writer has ended."
-  def send_frame(_stream, _payload_id, _message, _metadata), do: :erlang.nif_error(:not_loaded)
-
-  @doc """
-  Queue a frame while the stream's writer is fewer than `max_pending` frames
-  behind, or answer `{:error, :busy}`.
-  """
-  def try_send_frame(_stream, _payload_id, _message, _metadata, _max_pending),
-    do: :erlang.nif_error(:not_loaded)
-
-  @doc "Close the stream."
-  def close(_stream), do: :erlang.nif_error(:not_loaded)
-
-  @doc "Deliver the stream's later frames to `pid`."
-  def controlling_process(_stream, _pid), do: :erlang.nif_error(:not_loaded)
-
-  @doc "The id this stream's `{:flz_data, ...}` and `{:flz_closed, ...}` carry."
-  def stream_id(_stream), do: :erlang.nif_error(:not_loaded)
+  def local_start(_core, _factory_id, _relay_id), do: :erlang.nif_error(:not_loaded)
+  def local_on_sink(_core, _channel), do: :erlang.nif_error(:not_loaded)
+  def local_feed(_core, _channel, _payload), do: :erlang.nif_error(:not_loaded)
+  def local_next_output(_core, _timeout_ms), do: :erlang.nif_error(:not_loaded)
+  def local_run_until_idle(_core, _timeout_ms), do: :erlang.nif_error(:not_loaded)
+  def local_stop(_core), do: :erlang.nif_error(:not_loaded)
 end

@@ -1,44 +1,24 @@
 defmodule Flezha.SDK.Spawn do
   @moduledoc """
-  Tasklet-requested spawn of a steps instance: the request a tasklet
-  makes with `Flezha.SDK.Ctx.spawn_steps/4`, the handle it gets back at
-  once, and what the controller's answer resolves to.
+  Tasklet-requested spawn of a steps instance: the request a tasklet makes
+  with `Flezha.SDK.Ctx.spawn_steps/4`, the handle it gets back at once, and
+  what the controller's answer resolves to.
 
-  The request is a cast to the runner, which ships `SpawnStepsRequest` and
-  keeps the caller as a waiter until `SpawnStepsResponse` arrives or the
-  request's deadline passes. The answer reaches the caller as a message, so a
-  handle is read once, and only inside the invocation that made it: after
-  `run/3` returns the Cell drops what arrives. A failure nobody read is
-  logged once, as a warning, by the process that answered it.
-
-  Nothing here faults the invocation: every refusal resolves the handle. The
-  contract is `docs/sdk/tasklet_requested_spawn.md`.
+  The request is `flz_core`'s, made from the invocation's live activation, and
+  the handle is the core's: it is read inside the invocation that made it, and
+  released when that invocation's activation completes. A failure nobody read
+  is logged once by the core. Nothing here faults the invocation: every
+  refusal resolves the handle. The contract is `docs/topics/core/workflows.md`.
   """
 
-  require Logger
+  alias Flezha.SDK.{Ctx, Error, Knob, Native}
 
-  alias Flezha.SDK.Error
-  alias Flezha.SDK.Knob
-
-  @enforce_keys [:reference_id, :instance_id, :factory_id]
-  defstruct [
-    :reference_id,
-    :instance_id,
-    :factory_id,
-    :runner,
-    :deadline,
-    :result,
-    identity: "",
-    claimed?: false
-  ]
+  @enforce_keys [:factory_id, :instance_id]
+  defstruct [:factory_id, :instance_id, :core, :handle, :result]
 
   @typedoc """
-  A request's handle. `instance_id` is the caller's id, or `""` when the
-  controller is to generate one; `identity` names the request across a re-run
-  of the input that asked, `""` for none. `result` is set when the answer was known
-  without asking: a replay, or no runner. `deadline` is a monotonic millisecond
-  shared with the runner, which settles the request there. `claimed?` is read
-  on the runner's copy: whether a reader asked for the answer before it arrived.
+  A request's handle: the core's handle number, or the `result` known without
+  asking (a refusal at the call).
   """
   @type t :: %__MODULE__{}
 
@@ -54,39 +34,38 @@ defmodule Flezha.SDK.Spawn do
 
   @typedoc """
   What a handle resolves to: the instance reached, or the refusal, carrying
-  the controller's own code (`relay.already_running`,
-  `relay.factory_unknown`, `relay.factory_not_steps`, ...) or one the
-  runner decides itself: `spawn.timeout`, `spawn.unavailable`.
+  the controller's own code (`relay.already_running`, `relay.factory_unknown`,
+  ...) or the core's (`spawn.timeout`, `spawn.unavailable`).
   """
   @type result ::
           {:ok, %{id: String.t(), outcome: :spawned | :delivered | :skipped_on_replay}}
           | {:error, Error.t()}
 
   @doc false
-  @spec request(pid() | nil, boolean(), String.t(), binary(), [option()], String.t()) :: t()
-  def request(runner, replay?, factory_id, payload, opts, identity)
+  @spec request(Ctx.t(), String.t(), binary(), [option()]) :: t()
+  def request(%Ctx{} = ctx, factory_id, payload, opts)
       when is_binary(factory_id) and is_binary(payload) and is_list(opts) do
     {instance_id, if_running} = options!(opts)
+    handle = %__MODULE__{factory_id: factory_id, instance_id: instance_id, core: ctx.core}
 
-    handle = %__MODULE__{
-      reference_id: "spawn-steps-#{instance_id}-#{System.unique_integer([:positive])}",
-      instance_id: instance_id,
-      factory_id: factory_id,
-      identity: identity
-    }
-
-    cond do
-      replay? ->
-        %{handle | result: {:ok, %{id: instance_id, outcome: :skipped_on_replay}}}
-
-      runner == nil ->
-        %{handle | result: {:error, refused(handle, "spawn.unavailable")}}
-
-      true ->
-        deadline = System.monotonic_time(:millisecond) + Knob.get(:sdk_spawn_reply_ms)
-        handle = %{handle | runner: runner, deadline: deadline}
-        GenServer.cast(runner, {:spawn, self(), handle, payload, if_running})
-        handle
+    if self() != ctx.owner do
+      %{handle | result: {:error, Error.new("spawn.outside_invocation", factory: factory_id)}}
+    else
+      ctx.core
+      |> Native.spawn_request(
+        ctx.token,
+        factory_id,
+        instance_id,
+        payload,
+        Atom.to_string(if_running),
+        ctx.replay?,
+        ctx.offset
+      )
+      |> Native.answered()
+      |> case do
+        {:error, _} = refused -> %{handle | result: refused}
+        number -> %{handle | handle: number}
+      end
     end
   end
 
@@ -118,78 +97,47 @@ defmodule Flezha.SDK.Spawn do
   end
 
   @doc """
-  Wait for the answer, up to `timeout` milliseconds and never past the
-  request's deadline; `spawn.timeout` when nothing arrived. The answer is
-  taken from the caller's mailbox, so a second read waits out what is left of
-  the deadline.
+  Wait for the answer, up to `timeout` milliseconds; `spawn.timeout` when
+  nothing arrived.
   """
   @spec await(t(), non_neg_integer()) :: result()
   def await(handle, timeout \\ Knob.get(:sdk_spawn_reply_ms))
 
   def await(%__MODULE__{result: nil} = handle, timeout)
       when is_integer(timeout) and timeout >= 0 do
-    left = max(handle.deadline - System.monotonic_time(:millisecond), 0)
-    take(handle, min(timeout, left), {:error, refused(handle, "spawn.timeout")})
+    case read(handle, timeout) do
+      :pending ->
+        {:error,
+         Error.new("spawn.timeout", seconds: div(timeout, 1000), factory: handle.factory_id)}
+
+      answer ->
+        answer
+    end
   end
 
   def await(%__MODULE__{result: result}, _timeout), do: result
 
   @doc "The answer if it has arrived, else `:pending`, without waiting."
   @spec try_result(t()) :: result() | :pending
-  def try_result(%__MODULE__{result: nil} = handle), do: take(handle, 0, :pending)
+  def try_result(%__MODULE__{result: nil} = handle), do: read(handle, 0)
   def try_result(%__MODULE__{result: result}), do: result
 
-  @doc false
-  # The one place an answer is sent, so the reply and the unread warning cannot
-  # disagree: the runner server's settle, its refusal with no control plane and
-  # local mode all answer through here. A controller's reply is its outcome word
-  # and the instance id the request resolved to.
-  @spec answer(pid(), t(), {String.t(), String.t()} | :timeout | :unavailable, Error.t() | nil) ::
-          :ok
-  def answer(caller, %__MODULE__{} = spawn, reply, error) do
-    send(caller, {:spawn_reply, spawn.reference_id, reply, error})
-
-    with false <- spawn.claimed?,
-         {:error, refusal} <- interpret(spawn, reply, error) do
-      Logger.warning(
-        "[Flezha.SDK] spawn_steps(factory `#{spawn.factory_id}`, " <>
-          "id `#{spawn.instance_id}`) failed: #{refusal.message} (#{refusal.code})"
-      )
-    end
-
-    :ok
-  end
-
-  # The claim goes first, so the runner does not also log a failure this reader
-  # is about to see.
-  defp take(%__MODULE__{reference_id: id} = handle, wait, nothing) do
-    GenServer.cast(handle.runner, {:claim_spawn, id})
-
-    receive do
-      {:spawn_reply, ^id, reply, error} -> interpret(handle, reply, error)
-    after
-      wait -> nothing
+  defp read(handle, timeout) do
+    case Native.answered(Native.spawn_result(handle.core, handle.handle, timeout)) do
+      nil -> :pending
+      {:error, _} = refused -> refused
+      json -> json |> Jason.decode!() |> resolved()
     end
   end
 
-  # As the reference maps a reply: the controller's error is the refusal
-  # whatever the outcome says, a success carries the id the controller
-  # resolved, and a word this SDK does not know is an unreadable reply.
-  defp interpret(spawn, :timeout, _error), do: {:error, refused(spawn, "spawn.timeout")}
-  defp interpret(spawn, :unavailable, _error), do: {:error, refused(spawn, "spawn.unavailable")}
-  defp interpret(_spawn, _reply, %Error{} = error), do: {:error, error}
-  defp interpret(_spawn, {"spawned", id}, nil), do: {:ok, %{id: id, outcome: :spawned}}
-  defp interpret(_spawn, {"delivered", id}, nil), do: {:ok, %{id: id, outcome: :delivered}}
+  defp resolved(%{"id" => id, "outcome" => "spawned"}), do: {:ok, %{id: id, outcome: :spawned}}
 
-  defp interpret(_spawn, {other, _id}, nil),
-    do: {:error, Error.new("runtime.unreadable_reply", reply: "spawn outcome '#{other}'")}
+  defp resolved(%{"id" => id, "outcome" => "delivered"}),
+    do: {:ok, %{id: id, outcome: :delivered}}
 
-  # The two refusals the runner decides itself, naming the request.
-  defp refused(spawn, code) do
-    Error.new(code,
-      factory: spawn.factory_id,
-      instance: spawn.instance_id,
-      seconds: div(Knob.get(:sdk_spawn_reply_ms), 1000)
-    )
-  end
+  defp resolved(%{"id" => id, "outcome" => "skipped_on_replay"}),
+    do: {:ok, %{id: id, outcome: :skipped_on_replay}}
+
+  defp resolved(other),
+    do: {:error, Error.new("runtime.unreadable_reply", reply: "spawn answer #{inspect(other)}")}
 end

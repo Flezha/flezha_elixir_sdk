@@ -130,8 +130,6 @@ defmodule Flezha.SDK.Tasklet do
                       on_timer: 4,
                       max_timers_per_cell: 0
 
-  @default_mailbox_capacity 1024
-  @max_mailbox_capacity 1_048_576
   @default_max_cells 100_000
   # In lockstep with `flz_core::persistence::DEFAULT_COMPACT_AFTER_BYTES` and
   # the controller's `:default_compact_after_bytes`.
@@ -529,13 +527,14 @@ defmodule Flezha.SDK.Tasklet do
       else: cell_keys(module)
   end
 
-  @doc "Per-Cell mailbox capacity. Overridden callback wins; else the env; else 1024."
+  @doc """
+  Per-Cell mailbox capacity as declared: the overridden callback, else the env,
+  else 1024. The core refuses a capacity outside its range by name.
+  """
   def mailbox_capacity(module) do
-    if exports?(module, :mailbox_capacity, 0) do
-      validate_capacity!(module.mailbox_capacity(), module)
-    else
-      validate_capacity!(Knob.get(:mailbox_capacity), module)
-    end
+    if exports?(module, :mailbox_capacity, 0),
+      do: module.mailbox_capacity(),
+      else: Knob.get(:mailbox_capacity)
   end
 
   @doc "Cap on live dynamic cells (default 100_000)."
@@ -666,24 +665,4 @@ defmodule Flezha.SDK.Tasklet do
   @doc false
   def exports?(module, fun, arity),
     do: Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
-
-  @doc "Range-check a mailbox capacity — returns `{issue, tasklet}` on violation."
-  @spec validate_capacity(pos_integer(), module()) :: :ok | {atom(), module()}
-  def validate_capacity(cap, module) when is_integer(cap) do
-    cond do
-      cap <= 0 -> {:MailboxCapacityZero, module}
-      cap > @max_mailbox_capacity -> {:MailboxCapacityTooLarge, module}
-      true -> :ok
-    end
-  end
-
-  def validate_capacity(_cap, module), do: {:MailboxCapacityZero, module}
-
-  defp validate_capacity!(cap, module) do
-    case validate_capacity(cap, module) do
-      :ok -> cap
-      {:MailboxCapacityZero, _} -> @default_mailbox_capacity
-      {:MailboxCapacityTooLarge, _} -> @max_mailbox_capacity
-    end
-  end
 end

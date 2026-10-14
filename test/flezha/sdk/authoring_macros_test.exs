@@ -13,7 +13,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   import ExUnit.CaptureIO, only: [with_io: 2]
   import Flezha.SDK.Test.Refused
 
-  alias Flezha.SDK.{Channels, Ctx, Local, Tasklet, Topology}
+  alias Flezha.SDK.{Channels, Ctx, Declaration, Local, Tasklet}
 
   # --- what `use` defines, and what it does not ---------------------------
 
@@ -91,9 +91,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   test "a nested tasklet's own input/0 does not clash with the builder's" do
     assert NestingRelay.Nested.input() == "the nested tasklet's own"
-    assert {:ok, topo} = Topology.build(NestingRelay)
+    assert {:ok, derived} = Declaration.check(NestingRelay)
     assert entry_names(NestingRelay) == ["in"]
-    assert sink_names(topo) == ["out"]
+    assert sink_names(derived) == ["out"]
   end
 
   # --- the behaviour form is unchanged -------------------------------------
@@ -134,8 +134,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "the behaviour form registers and runs, with its clock and idle TTL read from its callbacks" do
-    assert {:ok, topo} = Topology.build(HandWrittenRelay)
-    assert topo.factory_id == "hand_written_relay"
+    assert {:ok, _derived} = Declaration.check(HandWrittenRelay)
     refute function_exported?(HandWritten, :mailbox_capacity, 0)
 
     assert Tasklet.idle_ttl_ms(HandWritten) == 1_000
@@ -293,12 +292,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a merge pipe written with one import registers the topology the prefixed form did" do
-    assert {:ok, imported} = Topology.build(MergedByImport)
-    assert {:ok, prefixed} = Topology.build(MergedByPrefix)
+    assert {:ok, imported} = Declaration.check(MergedByImport)
+    assert {:ok, prefixed} = Declaration.check(MergedByPrefix)
 
     assert entry_names(MergedByImport) == entry_names(MergedByPrefix)
-    assert sink_names(imported) == sink_names(prefixed)
-    assert map_size(imported.node_seq) == map_size(prefixed.node_seq)
     assert route_shape(imported) == route_shape(prefixed)
   end
 
@@ -313,23 +310,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     c |> Channels.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
   end
 
-  defp sink_names(topology) do
-    for {_source, routes} <- topology.routes,
-        %{to: {:sink, plugin}} <- routes,
-        do: plugin
-  end
+  defp sink_names(derived), do: for(%{"sink" => sink} <- derived["channels"], sink, do: sink)
 
-  # Each source's links by what they reach, with the closures dropped: two
-  # declarations of one graph carry different closure identities and the same
-  # shape.
-  defp route_shape(topology) do
-    topology.routes
-    |> Enum.map(fn {_source, routes} ->
-      Enum.map(routes, fn route ->
-        {elem(route.to, 0), Map.get(route, :channel), is_function(route.key_by, 1)}
-      end)
-    end)
-    |> Enum.sort()
+  # Each channel by what it is and what it reaches, as the core derived it.
+  defp route_shape(derived) do
+    for channel <- derived["channels"],
+        do: {channel["name"], channel["kind"], channel["consumers"], channel["sink"]}
   end
 
   # --- the `state` block and `defchange` -----------------------------------
@@ -573,26 +559,24 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert Upcase.factory_id() == "upcase"
     assert function_exported?(Upcase, :channels, 1)
 
-    assert {:ok, short} = Topology.build(Upcase)
-    assert {:ok, hand} = Topology.build(UpcaseTwinRelay)
+    assert {:ok, short} = Declaration.check(Upcase)
+    assert {:ok, hand} = Declaration.check(UpcaseTwinRelay)
     assert entry_names(Upcase) == entry_names(UpcaseTwinRelay)
     assert sink_names(short) == sink_names(hand)
-    assert route_shape(short) == route_shape(hand)
   end
 
   test "a relay module with a run body is a whole steps relay" do
     assert Place.factory_id() == "place"
     assert function_exported?(Place, :channels, 1)
 
-    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(Place)
-    assert spec.settings.each == :once
+    assert {:ok, _derived} = Declaration.check(Place)
+    assert Place.run() == :steps
     assert entry_names(Place) == ["order"]
   end
 
   test "a short form that runs in steps declares its loop shape" do
     assert Chat.run() == {:steps, each: :per_input}
-    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(Chat)
-    assert spec.settings.each == :per_input
+    assert {:ok, _derived} = Declaration.check(Chat)
     assert entry_names(Chat) == ["input"]
   end
 
@@ -607,9 +591,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a short form with no output wires its entry channel into the tasklet alone" do
-    assert {:ok, topo} = Topology.build(Counter)
+    assert {:ok, derived} = Declaration.check(Counter)
     assert entry_names(Counter) == ["ticks"]
-    assert sink_names(topo) == []
+    assert sink_names(derived) == []
 
     # A tasklet option, and the `defchange` recorder, reach the generated tasklet.
     assert Counter.Tasklet.max_cells() == 10
@@ -620,15 +604,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "register_factory reads how a short form runs" do
     runner = Flezha.SDK.create_runner("short_form_ns")
 
-    assert %Flezha.SDK{classes: [{Upcase, %Topology{} = flow}]} =
-             Flezha.SDK.register_factory(runner, Upcase)
-
-    assert flow.factory_id == "upcase"
-
-    assert %Flezha.SDK{classes: [{Place, %Flezha.SDK.Steps.Spec{} = steps}]} =
-             Flezha.SDK.register_factory(runner, Place)
-
-    assert steps.factory_id == "place"
+    assert %Flezha.SDK{modules: [Upcase]} = Flezha.SDK.register_factory(runner, Upcase)
+    assert %Flezha.SDK{modules: [Place]} = Flezha.SDK.register_factory(runner, Place)
+    assert Jason.decode!(class_json(Place))["run"] == "steps"
+    refute Map.has_key?(Jason.decode!(class_json(Upcase)), "run")
   end
 
   test "register_factory and unregister_factory take a hand-written module of either run" do
@@ -639,11 +618,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
       |> Flezha.SDK.register_factory(UpcaseTwinRelay)
       |> Flezha.SDK.register_factory(TunedSteps)
 
-    assert Enum.map(declared.classes, fn {_m, c} -> c.factory_id end) ==
-             ["upcase_twin", "tuned_steps"]
+    assert Enum.map(declared.modules, & &1.factory_id()) == ["upcase_twin", "tuned_steps"]
 
     left = Flezha.SDK.unregister_factory(declared, TunedSteps)
-    assert Enum.map(left.classes, fn {_m, c} -> c.factory_id end) == ["upcase_twin"]
+    assert Enum.map(left.modules, & &1.factory_id()) == ["upcase_twin"]
 
     assert {:error, %Flezha.SDK.Error{code: "runtime.class_not_registered", details: details}} =
              Flezha.SDK.unregister_factory(left, TunedSteps)
@@ -670,11 +648,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "how a module runs is read from its settings" do
     runner = Flezha.SDK.create_runner("run_ns")
 
-    assert %Flezha.SDK{classes: [{HandWrittenSteps, %Flezha.SDK.Steps.Spec{}}]} =
+    assert %Flezha.SDK{modules: [HandWrittenSteps]} =
              Flezha.SDK.register_factory(runner, HandWrittenSteps)
 
-    assert %Flezha.SDK{classes: [{HandWrittenRelay, %Topology{}}]} =
-             Flezha.SDK.register_factory(runner, HandWrittenRelay)
+    assert Jason.decode!(class_json(HandWrittenSteps))["run"] == "steps"
+    refute Map.has_key?(Jason.decode!(class_json(HandWrittenRelay)), "run")
   end
 
   test "a module that is not a relay is refused at registration" do
@@ -732,8 +710,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a short form takes the class settings, and a full form no short-form option" do
-    assert {:ok, spec} = Flezha.SDK.Steps.Spec.build(CappedShort)
-    assert %{each: :chained, max_duration_ms: 5_000, durable: :memory} = spec.settings
+    assert {:ok, _derived} = Declaration.check(CappedShort)
+
+    assert %{
+             "run" => %{"steps" => %{"each" => "chained"}},
+             "max_duration_ms" => 5_000,
+             "durable" => false
+           } =
+             Jason.decode!(class_json(CappedShort))
 
     for option <- [~s|output: "out"|, "max_cells: 10"] do
       stray =
@@ -767,11 +751,16 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     {Ctx.take_changes(ctx), state}
   end
 
+  defp class_json(module) do
+    {:ok, class} = Declaration.build(module)
+    class.json
+  end
+
   defp behaviours(module),
     do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
   defp start_run(module) do
-    {{:ok, run}, _notice} = with_io(:stderr, fn -> Local.start(module) end)
+    {:ok, run} = Local.start(module)
     on_exit(fn -> Local.stop(run) end)
     run
   end

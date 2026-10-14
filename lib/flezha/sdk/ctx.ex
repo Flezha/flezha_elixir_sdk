@@ -8,67 +8,29 @@ defmodule Flezha.SDK.Ctx do
 
   `emit/2`, `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4`
   accumulate outputs for this invocation; `apply/3` folds a change into the
-  state through the tasklet's `apply_change/2` and records it for the Cell's record
-  stream — one fold, one push, the only recorded mutation path, which a
-  reference-form tasklet calls by its full name; `now/1` is a
-  wall-clock millisecond stamp captured once at invocation entry;
-  `cell_key/1` is the owning Cell's key (or nil for a Single Cell).
-  Emits and changes are held in the running process's dictionary under a
-  per-invocation ref (so `emit/2` can side-effect through an immutable struct)
-  and are taken by the Cell only when `run/3` returns `{:ok, _}` — a failing
-  invocation discards both. Reserved `flz.`-prefixed metadata keys are refused.
+  state through the tasklet's `apply_change/2` and records it for the Cell's
+  record stream, the only recorded mutation path; `now/1` is the declared
+  clock's value, evaluated once by the core for this input, and the scheduled
+  timestamp inside a firing; `cell_key/1` is the owning Cell's key (or nil for
+  a Single Cell). Emits, changes, timer operations and the completion are held
+  in the invoking worker's dictionary under a per-invocation ref and are taken
+  only when `run/3` returns `{:ok, _}`: a failing invocation discards them all.
+  Reserved `flz.`-prefixed metadata keys are refused.
 
   A key rides an emit only where the node's output is declared `keyed/1`, and a
-  keyless emit from a Cell with no key of its own on such an output is refused
-  here, at the call — the reference's `KeyRequiredOnKeyedChannel` — from two
-  topology facts the Cell hands `new/4`.
+  keyless emit there from a Cell with no key of its own is refused at the call.
 
-  Timers ride the same dictionary: `timer_after/2` and `timer_at_event_time/2`
-  register on a `Flezha.SDK.Timers` session over a copy of the Cell's pending
-  set — opened on the first timer call, so an invocation that registers
-  nothing pays nothing — answering the absolute timestamp, the handle the two
-  cancels take; the Cell commits the session's ops with the changes when
-  `run/3` (or `on_timer/4`) answers `{:ok, _}`, and a firing commits its own
-  removal even when it registered nothing. `now/1` is the declared clock's value: the
-  epoch millisecond, the durable seq, or the input's event time, evaluated
-  once per invocation — and, inside a firing, the scheduled timestamp. Inside a
-  steps relay's tasklet timers are unavailable until they fire there: the Cell
-  hands `timers: :unavailable`, and the four timer calls answer
+  `timer_after/2` and `timer_at_event_time/2` register over a copy of the
+  Cell's pending set, answering the absolute timestamp the two cancels take.
+  Inside a `compensate/3` hook the four timer calls answer
   `runtime.timers_unavailable` and arm nothing.
 
-  Two more slots ride the same dictionary: under the effectively-once tier
-  `checkpoint/1` raises the flag the Cell reads at the invocation's end to
-  close its staged interval, and on every Cell `stable_id/1` answers a
-  replay-stable id derived from the Cell's wire identity, the change seq the
-  invocation started at and a per-invocation ordinal.
-
-  `part/2` sends a preview of the invocation's output at once, on the output
-  route of the node's channel (`preview`), through the Cell's stream seam
-  (`hold`), which never holds one; its number rides the dictionary under the ref, opened by
-  the Cell for the attempt (`attempt`) and cleared by `discard/1`, which is
-  what makes a part through a kept ctx `part.outside_invocation`.
-
-  `spawn_steps/4` asks the runner for a steps instance and answers a
-  `Flezha.SDK.Spawn` handle at once; an invocation of a replayed input asks
-  nothing. `complete/2` rides the dictionary too, and is taken with the emits.
-
-  `effect/4` runs an outside call once per re-run of the invocation, keeping
-  its result through the runner (`Flezha.SDK.Effects`); its per-name count and
-  the name whose function is running ride the dictionary under the ref.
+  `spawn_steps/4`, `effect/4` and `part/2` reach `flz_core` from the live
+  activation, and only from the worker running the invocation: the same call
+  from another process is refused.
   """
 
-  alias Flezha.SDK.{
-    Codec,
-    Counters,
-    Effects,
-    Error,
-    Hold,
-    Knob,
-    RunnerServer,
-    Tasklet,
-    Spawn,
-    Timers
-  }
+  alias Flezha.SDK.{Error, Native, Spawn, Tasklet, Timers}
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -80,29 +42,20 @@ defmodule Flezha.SDK.Ctx do
     :timers,
     :timer_policy,
     :firing,
-    :runner,
-    :origin,
-    :relay_id,
-    :counters,
-    :preview,
-    :effects,
-    :pass,
+    :core,
+    :token,
     :owner,
+    :offset,
+    :part_encode,
     identity: <<>>,
-    phase: :run,
-    hold: nil,
-    attempt: 1,
+    item: 0,
     seq: 0,
     replay?: false,
-    keyed_sink?: false,
-    key_required?: false
+    keyed_sink?: false
   ]
 
-  @zero_tally %{registered: 0, fired: 0, cancelled: 0, refused: 0}
-
-  # FNV-1a-128, the constants `flz_core::relay::instance` fixes; the
-  # rendered id is a cross-language contract, so the three fixture vectors are
-  # the only thing that may change it.
+  # FNV-1a-128, the constants `flz_core::relay::instance` fixes; the rendered
+  # id is a cross-language contract.
   @fnv128_offset_basis 0x6C62272E07BB014262B821756295C58D
   @fnv128_prime 0x0000000001000000000000000000013B
   @fnv128_mask 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
@@ -111,24 +64,18 @@ defmodule Flezha.SDK.Ctx do
 
   @reserved_prefix "flz."
 
+  # A refusal the caller can only fix in its code: `run/3` returns it as it is.
+  @non_retryable_effect ~w(effect.bad_name effect.nested effect.outside_invocation effect.too_large)
+
   @doc """
-  A fresh ctx for one invocation of `module`. `now_ms` is captured once here;
-  `opts` carries the node's channel name, whether its output is keyed
-  (`keyed_sink?`), whether a keyless emit has nothing to fall back on
-  (`key_required?`), the Cell's pending timers (`timers`, empty by default,
-  `:unavailable` inside a steps relay),
-  the tasklet's timer policy (`timer_policy`, resolved from `module` by
-  default), the firing this invocation is (`firing`, `{kind, at}` or nil), the
-  runner a spawn request goes to (`runner`, nil for none), whether the input
-  is a replay (`replay`), which issues no spawn, and the Cell's identity with
-  the input-log offset it is taking (`origin`, nil for none), which names a
-  spawn across a re-run of the input.
+  A fresh ctx for one invocation of `module`. `opts` carries the node's channel
+  name and whether its output is keyed (`keyed_sink?`), the Cell's pending
+  timers (`timers`, empty by default, `:unavailable` in a compensate hook), the
+  firing this invocation is (`firing`, `{kind, at}` or nil), and the live
+  activation the core calls are made from: `core`, `token`, `item`, `offset`,
+  `replay`, the Cell's `identity` and the `seq` it was handed at.
   """
   def new(module, cell_key, now_ms, opts \\ []) do
-    # Nothing is written here: every reader of a slot defaults to empty, so an
-    # invocation that emits nothing, applies nothing and registers no timer
-    # touches the dictionary not at all — and one that never returns from here
-    # leaves nothing behind to delete.
     %__MODULE__{
       module: module,
       cell_key: cell_key,
@@ -138,33 +85,28 @@ defmodule Flezha.SDK.Ctx do
       timers: Keyword.get(opts, :timers, Timers.new()),
       timer_policy: Keyword.get_lazy(opts, :timer_policy, fn -> Tasklet.timer_policy(module) end),
       firing: Keyword.get(opts, :firing),
-      runner: Keyword.get(opts, :runner),
-      origin: Keyword.get(opts, :origin),
-      relay_id: Keyword.get(opts, :relay_id),
-      counters: Keyword.get(opts, :counters),
-      preview: Keyword.get(opts, :preview),
-      effects: Keyword.get(opts, :effects),
-      pass: Keyword.get(opts, :pass),
+      core: Keyword.get(opts, :core),
+      token: Keyword.get(opts, :token),
+      owner: self(),
+      offset: Keyword.get(opts, :offset),
+      part_encode: Keyword.get(opts, :part_encode),
       identity: Keyword.get(opts, :identity, <<>>),
+      item: Keyword.get(opts, :item, 0),
       seq: Keyword.get(opts, :seq, 0),
       replay?: Keyword.get(opts, :replay, false),
-      keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
-      key_required?: Keyword.get(opts, :key_required?, false)
+      keyed_sink?: Keyword.get(opts, :keyed_sink?, false)
     }
   end
 
   @doc false
-  # A Cell's ctx before any invocation: its static facts, built once at start and
-  # updated per invocation with that invocation's own fields.
-  @spec template(module(), term(), binary(), keyword()) :: t()
-  def template(module, cell_key, identity, opts) do
-    ctx =
-      new(module, cell_key, 0, [
-        {:timer_policy, Tasklet.timer_policy(module)},
-        {:identity, identity} | opts
-      ])
+  # `[len relay][relay][len tasklet][tasklet][u16 len key][key]`, big-endian,
+  # the Cell identity every SDK derives `stable_id/1` from.
+  @spec cell_identity(String.t(), String.t(), String.t() | nil) :: binary()
+  def cell_identity(relay, tasklet, key) do
+    key = key || ""
 
-    %{ctx | owner: self()}
+    <<byte_size(relay)::8, relay::binary, byte_size(tasklet)::8, tasklet::binary,
+      byte_size(key)::16-big, key::binary>>
   end
 
   @doc """
@@ -184,8 +126,12 @@ defmodule Flezha.SDK.Ctx do
 
   @doc "Emit a value with metadata. Reserved `flz.`-prefixed keys are refused."
   @spec emit_with_meta(t(), term(), map()) :: :ok | {:error, Error.t()}
-  def emit_with_meta(%__MODULE__{key_required?: true, channel: channel}, _value, _meta),
-    do: {:error, Error.new("runtime.key_required_on_keyed_channel", channel: channel)}
+  def emit_with_meta(
+        %__MODULE__{keyed_sink?: true, cell_key: nil, channel: channel},
+        _value,
+        _meta
+      ),
+      do: {:error, Error.new("runtime.key_required_on_keyed_channel", channel: channel)}
 
   def emit_with_meta(%__MODULE__{} = ctx, value, meta) when is_map(meta),
     do: put_emit(ctx, value, meta, nil)
@@ -208,12 +154,11 @@ defmodule Flezha.SDK.Ctx do
       when is_binary(key) and is_map(meta),
       do: put_emit(ctx, value, meta, key)
 
-  @doc "The declared clock's value, evaluated once at invocation entry; the scheduled timestamp inside a firing."
+  @doc "The declared clock's value for this input; the scheduled timestamp inside a firing."
   def now(%__MODULE__{now_ms: ms}), do: ms
 
   @doc "Register a processing-time timer `delay_ms` after `now/1`; `{:ok, at}`, the cancellation handle."
-  @spec timer_after(t(), integer()) ::
-          {:ok, non_neg_integer()} | {:error, Error.t()}
+  @spec timer_after(t(), integer()) :: {:ok, non_neg_integer()} | {:error, Error.t()}
   def timer_after(%__MODULE__{} = ctx, delay_ms),
     do: with_session(ctx, &Timers.register_after(&1, delay_ms))
 
@@ -224,14 +169,11 @@ defmodule Flezha.SDK.Ctx do
     do: with_session(ctx, &Timers.register(&1, :event_time, at))
 
   @doc "Cancel the processing-time timer `timer_after/2` answered; whether one was pending."
-  @spec cancel_processing_time_timer(t(), non_neg_integer()) ::
-          boolean() | {:error, Error.t()}
-  def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
-    do: cancel(ctx, :processing_time, at)
+  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: boolean() | {:error, Error.t()}
+  def cancel_processing_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :processing_time, at)
 
   @doc "Cancel the event-time timer `timer_at_event_time/2` answered; whether one was pending."
-  @spec cancel_event_time_timer(t(), non_neg_integer()) ::
-          boolean() | {:error, Error.t()}
+  @spec cancel_event_time_timer(t(), non_neg_integer()) :: boolean() | {:error, Error.t()}
   def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
 
   @doc "The owning Cell's key, or nil for a Single Cell."
@@ -251,56 +193,14 @@ defmodule Flezha.SDK.Ctx do
   raises `ArgumentError` and sends nothing.
 
   Without `id:` the controller generates one, and every call starts a new
-  instance: it never delivers into a running one, a call reissued after a lost
-  or timed-out answer starts a second instance, and a replayed invocation
-  resolves an empty id. A crash re-run of an input the Cell had not durably
-  consumed asks again under the same identity, and the controller answers the
-  instance the first ask started. Pass `id:` for at most one instance, or for
-  the id on a replay.
+  instance: a call reissued after a lost or timed-out answer starts a second
+  one, and a replayed invocation resolves `skipped_on_replay`. A crash re-run
+  of an input the Cell had not durably consumed asks again under the same
+  identity, and the controller answers the instance the first ask started.
   """
   @spec spawn_steps(t(), String.t(), term(), [Spawn.option()]) :: Spawn.t()
-  def spawn_steps(%__MODULE__{} = ctx, factory_id, payload, opts \\ []) do
-    payload = plain_payload(payload)
-    identity = spawn_identity(ctx, factory_id, payload)
-    Spawn.request(ctx.runner, ctx.replay?, factory_id, payload, opts, identity)
-  end
-
-  # FNV-1a-128 over the origin, the call's position in the invocation, the
-  # factory and the payload, each part length-prefixed, as the shared core
-  # derives it. Empty for an invocation that took no offset: nothing re-runs
-  # it, and two of its inputs with one payload are two requests.
-  defp spawn_identity(%__MODULE__{origin: {cell, offset}, ref: ref}, factory_id, payload)
-       when is_binary(factory_id) and is_binary(payload) do
-    position = next_position(ref, :spawn)
-    origin_hash(cell, offset, [<<position::32-big>>, factory_id, payload])
-  end
-
-  defp spawn_identity(%__MODULE__{}, _factory_id, _payload), do: ""
-
-  # The next place of a call counted under `counted` in this invocation: a
-  # spawn's position, an effect's ordinal by name.
-  defp next_position(ref, counted) do
-    position = Map.get(Process.get(positions_key(ref), %{}), counted, 0)
-    counted(ref, counted, position + 1)
-    position
-  end
-
-  defp counted(ref, counted, next),
-    do:
-      Process.put(
-        positions_key(ref),
-        Map.put(Process.get(positions_key(ref), %{}), counted, next)
-      )
-
-  # The cell, the offset and `parts`, each length-prefixed, as the shared core
-  # names a call from its invocation's origin.
-  defp origin_hash(cell, offset, parts) do
-    [cell, <<offset::64-big>> | parts]
-    |> Enum.reduce(@fnv128_offset_basis, fn part, hash ->
-      hash |> fnv1a128(<<byte_size(part)::64-big>>) |> fnv1a128(part)
-    end)
-    |> hex128()
-  end
+  def spawn_steps(%__MODULE__{} = ctx, factory_id, payload, opts \\ []),
+    do: Spawn.request(ctx, factory_id, plain_payload(payload), opts)
 
   @doc """
   Run `fun`, a call to anything outside the instance (a model, a tool, a
@@ -312,128 +212,66 @@ defmodule Flezha.SDK.Ctx do
   it takes one.
 
   `name` names the call: a non-empty string of at most 255 bytes, counted per
-  invocation, so a call of another name added before this one leaves its kept
-  result where it was. One call runs at a time; a concurrent one is refused. The
-  result is encoded as `spawn_steps/4` encodes its payload and read back as
-  JSON, else as the binary; `codec`, an `{encode, decode}` pair of one-argument
-  functions, replaces both. The call answers the result as it reads back, on a
-  first run and a re-run alike.
+  invocation. One call runs at a time; a concurrent one is refused. The result
+  is encoded as `spawn_steps/4` encodes its payload and read back as JSON, else
+  as the binary; `codec`, an `{encode, decode}` pair of one-argument
+  functions, replaces both.
 
-  An invocation that took no input-log offset (local mode, a relay with no
-  input log) runs `fun` each time and keeps nothing. A raise in `fun`
-  propagates and nothing is kept. Answers `{:ok, result}`, or `{:error, reason}`
-  for `run/3` to return as it is: `{:non_retryable, error}` for
-  `effect.bad_name`, `effect.nested`, `effect.outside_invocation` and
-  `effect.too_large`, and the retryable `effect.not_recorded` error.
+  An invocation that took no input-log offset runs `fun` each time and keeps
+  nothing. A raise in `fun` propagates and nothing is kept. Answers
+  `{:ok, result}`, or `{:error, reason}` for `run/3` to return as it is:
+  `{:non_retryable, error}` for `effect.bad_name`, `effect.nested`,
+  `effect.outside_invocation` and `effect.too_large`, and the retryable
+  `effect.not_recorded` error.
   """
   @spec effect(t(), String.t(), (-> term()), {(term() -> binary()), (binary() -> term())} | nil) ::
           {:ok, term()} | {:error, Error.t() | {:non_retryable, Error.t()}}
   def effect(%__MODULE__{} = ctx, name, fun, codec \\ nil) when is_function(fun, 0) do
     {encode, decode} = codec || {&plain_payload/1, &plain_value/1}
 
-    with :ok <- effect_callable(ctx, name) do
-      case effect_origin(ctx) do
-        nil -> {:ok, fun |> run_effect(ctx, name) |> encode.() |> decode.()}
-        {cell, offset} -> kept_or_run(ctx, name, cell, offset, fun, encode, decode)
-      end
-    end
-  end
-
-  defp effect_callable(%__MODULE__{} = ctx, name) do
     cond do
-      not is_binary(name) or name == "" or byte_size(name) > 255 ->
-        refuse("effect.bad_name", name: inspect(name))
+      not is_binary(name) ->
+        effect_refused(Error.new("effect.bad_name", name: inspect(name)))
 
-      ctx.owner != nil and ctx.owner != self() ->
-        refuse("effect.outside_invocation", name: name)
-
-      Process.get(effect_running_key(ctx.ref)) != nil ->
-        refuse("effect.nested", name: name)
+      self() != ctx.owner ->
+        effect_refused(Error.new("effect.outside_invocation", name: name))
 
       true ->
-        :ok
-    end
-  end
-
-  defp refuse(code, details), do: {:error, {:non_retryable, Error.new(code, details)}}
-
-  # A flow Cell's input carries its offset; a steps stage's pass holds it, and an
-  # undo runs in the pass that failed.
-  defp effect_origin(%__MODULE__{phase: :run, origin: {_cell, _offset} = origin}), do: origin
-
-  defp effect_origin(%__MODULE__{pass: pass, identity: cell}) when pass != nil do
-    case :atomics.get(pass, 1) do
-      offset when offset >= 0 -> {cell, offset}
-      _none -> nil
-    end
-  end
-
-  defp effect_origin(%__MODULE__{}), do: nil
-
-  defp kept_or_run(ctx, name, cell, offset, fun, encode, decode) do
-    from = Map.get(Process.get(positions_key(ctx.ref), %{}), {:effect, name}, 0)
-    phase = if ctx.phase == :compensate, do: 1, else: 0
-    identity_of = &origin_hash(cell, offset, ["effect", <<phase>>, name, <<&1::32-big>>])
-    at = {ctx.relay_id, cell, offset}
-
-    {ordinal, identity, kept} =
-      Effects.resolve(ctx.effects, at, identity_of, from, ctx.attempt)
-
-    counted(ctx.ref, {:effect, name}, ordinal + 1)
-
-    case kept do
-      {:ok, kept} ->
-        {:ok, decode.(kept)}
-
-      :none ->
-        encoded = fun |> run_effect(ctx, name) |> encode.()
-
-        with :ok <- effect_fits(name, encoded),
-             {:ok, kept} <- keep(ctx, name, cell, offset, identity, encoded) do
-          {:ok, decode.(kept)}
+        case Native.answered(Native.effect_begin(ctx.core, ctx.token, ctx.item, name)) do
+          {:kept, kept} -> {:ok, decode.(kept)}
+          :run -> run_effect(ctx, fun, encode, decode, true)
+          :unrecorded -> run_effect(ctx, fun, encode, decode, false)
+          {:error, error} -> effect_refused(error)
         end
     end
   end
 
-  defp run_effect(fun, %__MODULE__{ref: ref}, name) do
-    Process.put(effect_running_key(ref), name)
+  defp run_effect(ctx, fun, encode, decode, keep?) do
+    encoded =
+      try do
+        encode.(fun.())
+      catch
+        kind, reason ->
+          Native.effect_release(ctx.core, ctx.token, ctx.item)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
 
-    try do
-      fun.()
-    after
-      Process.delete(effect_running_key(ref))
+    if keep? do
+      case Native.answered(Native.effect_end(ctx.core, ctx.token, ctx.item, encoded)) do
+        nil -> {:ok, decode.(encoded)}
+        first when is_binary(first) -> {:ok, decode.(first)}
+        {:error, error} -> effect_refused(error)
+      end
+    else
+      Native.effect_release(ctx.core, ctx.token, ctx.item)
+      {:ok, decode.(encoded)}
     end
   end
 
-  defp effect_fits(name, encoded) do
-    limit = Knob.get(:effect_max_bytes)
+  defp effect_refused(%Error{code: code} = error) when code in @non_retryable_effect,
+    do: {:error, {:non_retryable, error}}
 
-    if byte_size(encoded) > limit,
-      do: refuse("effect.too_large", name: name, bytes: byte_size(encoded), limit: limit),
-      else: :ok
-  end
-
-  defp keep(%__MODULE__{runner: nil}, name, _cell, _offset, _identity, _encoded),
-    do:
-      {:error,
-       Error.new("effect.not_recorded", name: name, reason: "the runner has no control plane")}
-
-  defp keep(%__MODULE__{} = ctx, name, cell, offset, identity, encoded) do
-    command = Codec.effect_result_command(ctx.relay_id, identity, offset, name, encoded, cell)
-
-    case RunnerServer.keep_effect(ctx.runner, command) do
-      {:ok, first} ->
-        kept = first || encoded
-        Effects.put(ctx.effects, ctx.relay_id, cell, offset, identity, kept)
-        {:ok, kept}
-
-      {:error, %Error{code: "effect.not_recorded"} = refusal} ->
-        {:error, refusal}
-
-      {:error, %Error{} = refusal} ->
-        {:error, Error.new("effect.not_recorded", name: name, reason: refusal.message)}
-    end
-  end
+  defp effect_refused(%Error{} = error), do: {:error, error}
 
   defp plain_value(binary) do
     case Jason.decode(binary) do
@@ -449,15 +287,8 @@ defmodule Flezha.SDK.Ctx do
 
   In a class that runs in steps the rest of the iteration still runs and
   commits; once that commit is durable the instance ends instead of waiting
-  for its next input, re-seeding a chained loop or parking. In a `:once`
-  class it only sets the result the pass ends with. Called more than once in
-  one iteration, the instance ends once, with the result of the tasklet latest
-  in the chain's order and, within it, of the Cell whose key sorts last. A
-  failing invocation discards its call as it discards its emits, and an
-  iteration that fails discards the call with it.
-
-  In a flow class the instance runs what its Cells already hold to its
-  outputs, then ends; a later call before that replaces the result.
+  for its next input. In a flow class the instance runs what its Cells already
+  hold to its outputs, then ends; a later call before that replaces the result.
   """
   @spec complete(t(), term()) :: :ok
   def complete(%__MODULE__{ref: ref}, result) do
@@ -467,8 +298,9 @@ defmodule Flezha.SDK.Ctx do
 
   # Read by a runner in any language, so unlike an output's default this never
   # falls back to Erlang terms: a term with no JSON form raises.
-  defp plain_payload(v) when is_binary(v), do: v
-  defp plain_payload(v), do: Jason.encode!(v)
+  @doc false
+  def plain_payload(v) when is_binary(v), do: v
+  def plain_payload(v), do: Jason.encode!(v)
 
   @doc false
   @spec completion(t()) :: binary() | nil
@@ -476,8 +308,7 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   Close the staged checkpoint interval at the end of this invocation. A no-op
-  on a class that did not declare checkpoint granularity — the Cell reads the
-  flag only when it has an interval to close.
+  on a class that did not declare checkpoint granularity.
   """
   @spec checkpoint(t()) :: :ok
   def checkpoint(%__MODULE__{ref: ref}) do
@@ -491,11 +322,9 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   A replay-stable 128-bit id, 32 lowercase hex digits: FNV-1a-128 over the
-  Cell's wire identity, the change seq this invocation started at and a
+  Cell's identity, the change seq this invocation started at and a
   per-invocation ordinal. The same invocation on a replay derives the same
-  ids in the same order, which is what makes an effect idempotent. The seq
-  moves on only when an invocation records a change, a timer op or an effect,
-  so on a Cell that records nothing every invocation answers the same ids.
+  ids in the same order, which is what makes an effect idempotent.
   """
   @spec stable_id(t()) :: String.t()
   def stable_id(%__MODULE__{ref: ref} = ctx) do
@@ -511,16 +340,34 @@ defmodule Flezha.SDK.Ctx do
     |> fnv1a128(identity)
     |> fnv1a128(<<seq::64-big>>)
     |> fnv1a128(<<ordinal::32-big>>)
-    |> hex128()
+    |> Integer.to_string(16)
+    |> String.downcase()
+    |> String.pad_leading(32, "0")
   end
-
-  defp hex128(hash),
-    do: hash |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(32, "0")
 
   defp fnv1a128(hash, <<byte, rest::binary>>),
     do: fnv1a128(Bitwise.band(Bitwise.bxor(hash, byte) * @fnv128_prime, @fnv128_mask), rest)
 
   defp fnv1a128(hash, <<>>), do: hash
+
+  @doc """
+  Send `value` as a part: a preview of this invocation's output on its
+  channel, which leaves now rather than when `run/3` returns, encoded as an
+  emit of `value` would be. It never waits: a part the wire cannot take at once
+  is dropped, and an invocation of a replayed input sends none.
+
+  `:ok`, or `{:error, %Error{}}`: `part.no_output` when the node's channel does
+  not end in an output (a `call` end is not one), `part.outside_invocation`
+  through a ctx whose invocation has returned or from another process.
+  """
+  @spec part(t(), term()) :: :ok | {:error, Error.t()}
+  def part(%__MODULE__{} = ctx, value) do
+    payload = if ctx.part_encode, do: ctx.part_encode.(value), else: ""
+
+    if self() != ctx.owner,
+      do: {:error, Error.new("part.outside_invocation", tasklet: ctx.module.name())},
+      else: Native.answered(Native.part(ctx.core, ctx.token, ctx.item, payload))
+  end
 
   @doc false
   def take_emits(%__MODULE__{ref: ref}) do
@@ -536,108 +383,20 @@ defmodule Flezha.SDK.Ctx do
     changes
   end
 
-  # An invocation that opened no session has nothing to commit; a firing
-  # commits its removal, op 0 of a session opened here if `on_timer/4` opened
-  # none. A Cell whose timers are unavailable never armed one, so its set is
-  # the empty one it was seeded with.
   @doc false
-  def take_timers(%__MODULE__{timers: :unavailable}), do: {Timers.new(), [], @zero_tally}
+  # The Cell's pending set after this invocation and the ops to record. A
+  # firing records its own removal even when `on_timer/4` registered nothing.
+  def take_timers(%__MODULE__{timers: :unavailable}), do: {Timers.new(), []}
 
   def take_timers(%__MODULE__{ref: ref, firing: nil} = ctx) do
     case Process.delete(timers_key(ref)) do
-      nil -> {ctx.timers, [], @zero_tally}
+      nil -> {ctx.timers, []}
       session -> Timers.commit(session)
     end
   end
 
-  def take_timers(%__MODULE__{ref: ref} = ctx) do
-    Timers.commit(Process.delete(timers_key(ref)) || open(ctx))
-  end
-
-  @doc """
-  Send `value` as a part: a preview of this invocation's output on its
-  channel, which leaves now rather than when `run/3` returns, encoded as an
-  emit of `value` would be. It never waits: a part the wire cannot take at once
-  is dropped and counted, and an invocation of a replayed input sends none.
-
-  `:ok`, or `{:error, %Error{}}`: `part.no_output` when the node's channel does
-  not end in an output (a `call` end is not one), `part.outside_invocation`
-  through a ctx whose invocation has returned.
-  """
-  @spec part(t(), term()) :: :ok | {:error, Error.t()}
-  def part(%__MODULE__{preview: nil} = ctx, _value) do
-    {:error,
-     Error.new("part.no_output",
-       tasklet: ctx.module.name(),
-       relay: ctx.relay_id,
-       channel: ctx.channel
-     )}
-  end
-
-  def part(%__MODULE__{ref: ref} = ctx, value) do
-    case Process.get(part_key(ref)) do
-      nil ->
-        {:error, Error.new("part.outside_invocation", tasklet: ctx.module.name())}
-
-      _next when ctx.replay? ->
-        :ok
-
-      next ->
-        outputs = ctx.preview.transform.(value)
-        Process.put(part_key(ref), next + length(outputs))
-        outputs |> Enum.with_index(next) |> Enum.each(fn {out, n} -> send_part(ctx, out, n) end)
-    end
-  end
-
-  @doc false
-  # Opened by the Cell for each attempt of a node that can send parts, so a
-  # node that cannot pays nothing.
-  def open_parts(%__MODULE__{preview: nil}), do: :ok
-
-  def open_parts(%__MODULE__{ref: ref}) do
-    Process.put(part_key(ref), 0)
-    :ok
-  end
-
-  defp send_part(%__MODULE__{} = ctx, value, number) do
-    bytes = ctx.preview.serializer.(value)
-
-    # A local run's owner reads only its relay's outputs off its in-process
-    # stream, so a part sent there is dropped by the owner.
-    outcome =
-      cond do
-        not Hold.bound?(ctx.hold) ->
-          :parts_dropped_no_stream
-
-        byte_size(bytes) > Knob.get(:max_frame_bytes) ->
-          :parts_dropped_too_large
-
-        true ->
-          write_part(ctx, bytes, number)
-      end
-
-    if ctx.counters, do: Counters.inc_part(ctx.counters, outcome)
-    :ok
-  end
-
-  defp write_part(ctx, bytes, number) do
-    case Hold.write("output_part", ctx.hold, {bytes, part_stamps(ctx, number), ctx.relay_id}) do
-      {:ok, _hold} -> :parts_sent
-      {_refused, _hold} -> :parts_dropped_refused
-    end
-  end
-
-  defp part_stamps(%__MODULE__{} = ctx, number) do
-    stamps = %{
-      "channel" => ctx.preview.channel,
-      "flz.part" => Integer.to_string(number),
-      "flz.part_attempt" => Integer.to_string(ctx.attempt),
-      "flz.cell" => "#{ctx.relay_id}/#{ctx.module.name()}/#{ctx.cell_key || ""}",
-      "flz.relay" => ctx.relay_id
-    }
-
-    if ctx.cell_key, do: Map.put(stamps, "flz.key", ctx.cell_key), else: stamps
-  end
+  def take_timers(%__MODULE__{ref: ref} = ctx),
+    do: Timers.commit(Process.delete(timers_key(ref)) || open(ctx))
 
   @doc false
   def discard(%__MODULE__{ref: ref}) do
@@ -646,9 +405,7 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(timers_key(ref))
     Process.delete(checkpoint_key(ref))
     Process.delete(stable_id_key(ref))
-    Process.delete(positions_key(ref))
     Process.delete(completion_key(ref))
-    Process.delete(part_key(ref))
   end
 
   defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, timers_unavailable()}
@@ -668,9 +425,9 @@ defmodule Flezha.SDK.Ctx do
   defp cancel(%__MODULE__{timers: :unavailable}, _kind, _at), do: {:error, timers_unavailable()}
 
   defp cancel(%__MODULE__{ref: ref} = ctx, kind, at) do
-    {changed?, session} = Timers.cancel(session(ctx), kind, at)
+    {pending?, session} = Timers.cancel(session(ctx), kind, at)
     Process.put(timers_key(ref), session)
-    changed?
+    pending?
   end
 
   defp timers_unavailable, do: Error.new("runtime.timers_unavailable")
@@ -704,8 +461,5 @@ defmodule Flezha.SDK.Ctx do
   defp timers_key(ref), do: {__MODULE__, ref, :timers}
   defp checkpoint_key(ref), do: {__MODULE__, ref, :checkpoint}
   defp stable_id_key(ref), do: {__MODULE__, ref, :stable_id}
-  defp positions_key(ref), do: {__MODULE__, ref, :positions}
-  defp effect_running_key(ref), do: {__MODULE__, ref, :effect_running}
   defp completion_key(ref), do: {__MODULE__, ref, :completion}
-  defp part_key(ref), do: {__MODULE__, ref, :part}
 end

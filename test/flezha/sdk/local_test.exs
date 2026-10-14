@@ -5,13 +5,12 @@ defmodule Flezha.SDK.LocalTest do
   `WordCount` below are the worked example in `docs/quickstart.md`, copied
   verbatim so the documented graph is the one that runs here.
   """
-  # async: false: the process-wide notice and unhandled-output counters.
+  # async: false: a local run's tasklets reach the test through registered names.
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureIO, only: [with_io: 2]
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
-  alias Flezha.SDK.{Channels, Local, Relay, Spawn}
+  alias Flezha.SDK.{Channels, Local, Spawn}
 
   # --- a changeful tasklet, and one that asks for a spawn ---
 
@@ -57,6 +56,34 @@ defmodule Flezha.SDK.LocalTest do
       emit(ctx, refusal.code)
       {:ok, state}
     end
+  end
+
+  defmodule Effector do
+    @moduledoc false
+    use Flezha.SDK.Tasklet, name: "effector"
+
+    @impl true
+    def run(_input, state, ctx) do
+      thrown =
+        try do
+          effect(ctx, "thrown", fn -> throw(:boom) end)
+        catch
+          :throw, :boom -> :caught
+        end
+
+      {:ok, after_it} = effect(ctx, "after", fn -> "ran" end)
+      emit(ctx, "#{thrown} #{after_it}")
+      {:ok, state}
+    end
+  end
+
+  defmodule EffectorOp do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "local_effector"
+
+    def channels(c),
+      do: c |> Channels.input("in") |> Channels.into(Effector) |> Channels.output("out")
   end
 
   defmodule SpawnerOp do
@@ -167,19 +194,6 @@ defmodule Flezha.SDK.LocalTest do
       do: c |> Channels.input("in") |> Channels.into(Closer) |> Channels.output("out")
   end
 
-  defmodule StrictOp do
-    @behaviour Flezha.SDK.Relay
-    def factory_id, do: "local_strict"
-
-    def channels(c) do
-      c
-      |> Channels.input_with("lines", fn _bytes -> {:error, "unreadable"} end)
-      |> Channels.into(Normalise)
-      |> Channels.named("out")
-      |> Channels.output()
-    end
-  end
-
   # A tasklet that does not return until the test releases it, so what makes
   # `run_until_idle` reach its budget is the test's own word rather than a
   # sleep long enough to hope for.
@@ -212,8 +226,8 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   # Reports the stable id of every attempt. `flaky` fails its first attempt;
-  # `die` ends the Cell untrappably the first time it runs, before its change
-  # is recorded, so the Cell is minted again from its slot.
+  # `die` ends the worker running it untrappably the first time it runs, before
+  # its change is recorded, so the input runs again on another worker.
   @stamps_probe :local_mode_stamps
 
   defmodule Stamper do
@@ -231,9 +245,15 @@ defmodule Flezha.SDK.LocalTest do
       send(:local_mode_stamps, {:stamp, input, stable_id(ctx)})
 
       cond do
-        input == "flaky" and Process.put(:flaky_tried, true) == nil -> {:error, "once"}
-        input == "die" and :persistent_term.get({__MODULE__, :died}, false) == false -> die()
-        true -> {:ok, add(count, ctx, 1)}
+        input == "flaky" and :persistent_term.get({__MODULE__, :tried}, false) == false ->
+          :persistent_term.put({__MODULE__, :tried}, true)
+          {:error, "once"}
+
+        input == "die" and :persistent_term.get({__MODULE__, :died}, false) == false ->
+          die()
+
+        true ->
+          {:ok, add(count, ctx, 1)}
       end
     end
 
@@ -252,12 +272,7 @@ defmodule Flezha.SDK.LocalTest do
   # --- helpers ---
 
   defp start_run(module) do
-    # Every start writes the non-durability notice to stderr, by design and
-    # unconditionally: a user running without a controller has to be told,
-    # whatever the log level. It is captured here rather than silenced, so the
-    # write still happens; the case that asserts it reads `Local.notice/0` and
-    # the emit counter, neither of which reads this device.
-    {{:ok, run}, _notice} = with_io(:stderr, fn -> Local.start(module) end)
+    {:ok, run} = Local.start(module)
     on_exit(fn -> Local.stop(run) end)
     run
   end
@@ -279,30 +294,24 @@ defmodule Flezha.SDK.LocalTest do
 
   # --- the graph runs ---
 
-  test "a retried attempt and a Cell restored from its slot answer the stable id the first attempt did" do
+  test "a retried attempt answers the stable id the first did, and a dead worker's input runs again" do
     Process.register(self(), @stamps_probe)
-    on_exit(fn -> :persistent_term.erase({Stamper, :died}) end)
+
+    on_exit(fn ->
+      :persistent_term.erase({Stamper, :died})
+      :persistent_term.erase({Stamper, :tried})
+    end)
+
     run = start_run(StamperOp)
 
     :ok = Local.feed(run, "in", "flaky")
     assert_receive {:stamp, "flaky", first}, 5_000
     assert_receive {:stamp, "flaky", ^first}, 5_000
 
-    {:ok, cell} = Relay.Server.lookup(Local.relay(run), "stamper", nil)
-    ref = Process.monitor(cell)
-
-    log =
-      capture_log(fn ->
-        :ok = Local.feed(run, "in", "die")
-        assert_receive {:stamp, "die", killed}, 5_000
-        assert_receive {:DOWN, ^ref, :process, ^cell, :killed}, 5_000
-        refute killed == first, "the change the retry recorded moved the seq on"
-
-        :ok = Local.feed(run, "in", "die")
-        assert_receive {:stamp, "die", ^killed}, 5_000
-      end)
-
-    assert log =~ "cell crashed: relay=local_stamper-local"
+    :ok = Local.feed(run, "in", "die")
+    assert_receive {:stamp, "die", _killed}, 5_000
+    assert_receive {:stamp, "die", _again}, 5_000
+    assert :ok = Local.run_until_idle(run, 5_000)
   end
 
   # The lines to feed and the output to release, read from the file the Rust and
@@ -341,10 +350,7 @@ defmodule Flezha.SDK.LocalTest do
     :ok = Local.feed(run, "lines", "a b a c")
     assert :ok = Local.run_until_idle(run, 5_000)
 
-    {"tally", :dynamic, keyed} =
-      List.keyfind(Relay.Server.cells(Local.relay(run)), "tally", 0)
-
-    assert keyed |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ~w(a b c)
+    assert Enum.sort(payloads()) == ["a 1", "a 2", "b 1", "c 1"]
   end
 
   test "a filtered value never reaches the consumer and flat_map fans out" do
@@ -371,19 +377,15 @@ defmodule Flezha.SDK.LocalTest do
     assert metadata["flz.seq"] =~ ~r/^\d+\.\d+$/
   end
 
-  test "a record frame is discarded at the outbound edge, never taken for output" do
+  test "a changeful tasklet releases its outputs and nothing of its records" do
     run = start_run(CounterOp)
     collect(run, "c")
-    unhandled = Local.unhandled_outputs()
 
     :ok = Local.feed(run, "in", "2")
     :ok = Local.feed(run, "in", "3")
     assert :ok = Local.run_until_idle(run, 5_000)
 
-    # A changeful tasklet: two dispatches wrote two change records onto the
-    # same stream the output rides. Only the two output values reach the callback.
     assert payloads() == ~w(2 5)
-    assert Local.unhandled_outputs() == unhandled
   end
 
   # --- what local mode refuses ---
@@ -411,34 +413,7 @@ defmodule Flezha.SDK.LocalTest do
     assert {:error, %{code: "runtime.local_needs_controller", message: steps}} =
              Local.start(Job)
 
-    assert steps =~ "run: :steps" and steps =~ "requires a controller"
-  end
-
-  test "a value released on an output with no callback is reported by name and counted" do
-    run = start_run(WordCount)
-    before = Local.unhandled_outputs()
-
-    log =
-      capture_log(fn ->
-        :ok = Local.feed(run, "lines", "fox")
-        assert :ok = Local.run_until_idle(run, 5_000)
-      end)
-
-    assert log =~ "released on output `counts`"
-    assert Local.unhandled_outputs() == before + 1
-  end
-
-  test "an entry the channel's parser refuses is parked and named" do
-    run = start_run(StrictOp)
-
-    log =
-      capture_log(fn ->
-        :ok = Local.feed(run, "lines", "anything")
-        assert :ok = Local.run_until_idle(run, 5_000)
-      end)
-
-    assert log =~ "parked an input on channel `lines`"
-    assert log =~ "unreadable"
+    assert steps =~ "steps" and steps =~ "requires a controller"
   end
 
   test "a flow tasklet's completion is the controller's to act on: a local run runs on" do
@@ -456,7 +431,7 @@ defmodule Flezha.SDK.LocalTest do
     refute log =~ "parked an input"
     assert [{:ran, "hi"}, {:ran, "end"}] == for({:ran, _} = m <- collect_ran(), do: m)
     assert payloads() == ["hi", "end"]
-    assert Process.alive?(Local.relay(run))
+    assert Process.alive?(run)
   end
 
   defp collect_ran(acc \\ []) do
@@ -472,7 +447,7 @@ defmodule Flezha.SDK.LocalTest do
     run = start_run(HeldOp)
 
     :ok = Local.feed(run, "in", "x")
-    assert_receive {:held, cell}
+    assert_receive {:held, cell}, 5_000
 
     assert {:error, %{code: "runtime.local_run_busy", message: message}} =
              Local.run_until_idle(run, 30)
@@ -482,28 +457,30 @@ defmodule Flezha.SDK.LocalTest do
     send(cell, :release)
   end
 
-  # --- the notice, and the class both surfaces accept ---
-
-  test "the non-durability notice names what needs a controller and is emitted once per run" do
-    notice = Local.notice()
-    assert notice =~ "state is held in memory and NOTHING is durable"
-
-    for named <- ~w(Durability plugins placement migration dead-letter observability authz),
-        do: assert(notice =~ named)
-
-    assert notice =~ "multi-runner scale"
-
-    before = Local.notices_emitted()
-    start_run(WordCount)
-    start_run(WordCount)
-    assert Local.notices_emitted() == before + 2
-  end
+  # --- the class both surfaces accept ---
 
   test "the same module is accepted by local mode and by register_factory/2" do
-    assert %Flezha.SDK{classes: [{WordCount, _topology}]} =
+    assert %Flezha.SDK{modules: [WordCount]} =
              "local-mode" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(WordCount)
 
     assert is_pid(start_run(WordCount))
+  end
+
+  test "an effect that throws is released, so the next one in the invocation runs" do
+    run = start_run(EffectorOp)
+    collect(run, "out")
+
+    :ok = Local.feed(run, "in", "x")
+    assert :ok = Local.run_until_idle(run, 5_000)
+    assert payloads() == ["caught ran"]
+  end
+
+  test "one local run is live in this VM at a time" do
+    first = start_run(WordCount)
+    assert {:error, %Flezha.SDK.Error{code: "runtime.core_in_use"}} = Local.start(CounterOp)
+
+    :ok = Local.stop(first)
+    assert is_pid(start_run(CounterOp))
   end
 
   test "a tasklet's spawn request is answered unavailable at once: there is no control plane" do

@@ -21,7 +21,7 @@ defmodule Flezha.SDK.ElixirRunnerExitTest do
     {_, 0} =
       System.cmd("mix", ["do", "deps.get", "+", "compile"],
         cd: Path.expand(@app_dir),
-        env: [{"MIX_ENV", "dev"}],
+        env: [{"MIX_ENV", "watcher"}],
         stderr_to_stdout: true
       )
 
@@ -93,7 +93,7 @@ defmodule Flezha.SDK.ElixirRunnerExitTest do
 
     command =
       "sh -c 'cd #{Path.expand(@app_dir)}; " <>
-        "{ MIX_ENV=dev mix run --no-halt --no-compile --no-start #{script}; " <>
+        "{ MIX_ENV=watcher mix run --no-halt --no-compile --no-start #{script}; " <>
         "echo $? > #{status}; } | head -c 0'"
 
     # `stderr_to_stdout` so the broken VM's own EPIPE report lands in the port

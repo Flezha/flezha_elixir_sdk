@@ -1,9 +1,8 @@
 defmodule Flezha.SDK.TimersTest do
   @moduledoc """
-  The pending-timer set and the session over a copy of it: the twin of
-  `flz_core/src/timer.rs`'s own tests, minus the arming (the BEAM's) and the
-  registry (telemetry's). Then the ctx's four timer calls over it, and their
-  refusal where timers are unavailable.
+  The host's copy of a Cell's pending timers and the session over a copy of
+  it, which the timer cap and a cancel's answer read. Then the ctx's four
+  timer calls over it, and their refusal where timers are unavailable.
   """
   use ExUnit.Case, async: true
 
@@ -11,72 +10,14 @@ defmodule Flezha.SDK.TimersTest do
 
   @policy %{tasklet: "counter_probe_tasklet", cap: 10_000, clock: :wall}
 
-  describe "the pending set" do
-    test "registration is idempotent and cancellation removes" do
-      pending = Timers.new()
-      assert {true, pending} = Timers.apply(pending, Timers.register_op(:processing_time, 31_000))
-
-      assert {false, pending} =
-               Timers.apply(pending, Timers.register_op(:processing_time, 31_000))
-
-      assert Timers.size(pending) == 1
-      assert {true, pending} = Timers.apply(pending, Timers.cancel_op(:processing_time, 31_000))
-      assert Timers.empty?(pending)
-    end
-
-    test "the two kinds are separate sets" do
-      pending =
-        Timers.new()
-        |> Timers.apply_all([
-          Timers.register_op(:event_time, 100),
-          Timers.register_op(:processing_time, 100)
-        ])
-
-      assert Timers.size(pending) == 2
-      {true, pending} = Timers.apply(pending, Timers.cancel_op(:event_time, 100))
-      assert Timers.contains?(pending, :processing_time, 100)
-      refute Timers.contains?(pending, :event_time, 100)
-    end
-
-    test "due is ascending and inclusive of the bound" do
-      pending =
-        Timers.new()
-        |> Timers.apply_all(Enum.map([300, 100, 200], &Timers.register_op(:event_time, &1)))
-
-      assert Timers.due(pending, :event_time, 200) == [100, 200]
-      assert Timers.due(pending, :event_time, 99) == []
-      assert Timers.due(pending, :processing_time, 1_000) == []
-    end
-
-    # The compaction re-statement is the only record of the timers once the
-    # ops below the snapshot are truncated.
-    test "register_ops round-trips the whole set" do
-      pending =
-        Timers.new()
-        |> Timers.apply_all([
-          Timers.register_op(:event_time, 5),
-          Timers.register_op(:processing_time, 9),
-          Timers.register_op(:processing_time, 7)
-        ])
-
-      # Set equality, not tree equality: a balanced tree's shape follows its
-      # insertion order.
-      rebuilt = Timers.new() |> Timers.apply_all(Timers.register_ops(pending))
-      assert Timers.all(rebuilt, :event_time) == Timers.all(pending, :event_time)
-      assert Timers.all(rebuilt, :processing_time) == Timers.all(pending, :processing_time)
-      assert Enum.map(Timers.register_ops(pending), & &1.scheduled_at) == [5, 7, 9]
-    end
-  end
-
   describe "the session" do
     test "register_after anchors on now and answers the absolute timestamp; a duplicate is no op" do
       session = Timers.session(Timers.new(), @policy, 1_000)
       assert {:ok, 31_000, session} = Timers.register_after(session, 30_000)
       assert {:ok, 31_000, session} = Timers.register_after(session, 30_000)
-      assert {pending, [op], tally} = Timers.commit(session)
+      assert {pending, [op]} = Timers.commit(session)
       assert op == Timers.register_op(:processing_time, 31_000)
       assert Timers.contains?(pending, :processing_time, 31_000)
-      assert tally == %{registered: 1, fired: 0, cancelled: 0, refused: 0}
     end
 
     test "past the cap a registration is refused naming the tasklet and the bound; the set is unchanged" do
@@ -90,7 +31,7 @@ defmodule Flezha.SDK.TimersTest do
 
       # Re-registering a pending timestamp is not an allocation.
       assert {:ok, 31_000, session} = Timers.register_after(session, 30_000)
-      assert {pending, [_], %{registered: 1, refused: 1}} = Timers.commit(session)
+      assert {pending, [_]} = Timers.commit(session)
       assert Timers.size(pending) == 1
     end
 
@@ -103,49 +44,55 @@ defmodule Flezha.SDK.TimersTest do
                 details: %{"tasklet" => "counter_probe_tasklet", "clock" => "wall"}
               }, session} = Timers.register(session, :event_time, 5_000)
 
-      assert {pending, [], %{refused: 1}} = Timers.commit(session)
-      assert Timers.empty?(pending)
+      assert {pending, []} = Timers.commit(session)
+      assert Timers.size(pending) == 0
 
       session = Timers.session(Timers.new(), %{@policy | clock: :event_time}, 1_000)
       assert {:ok, 5_000, session} = Timers.register(session, :event_time, 5_000)
-      assert {pending, [_], _} = Timers.commit(session)
+      assert {pending, [_]} = Timers.commit(session)
       assert Timers.contains?(pending, :event_time, 5_000)
     end
 
-    test "a cancel produces an op only when something was pending" do
-      {pending, _, _} =
+    # A Cell the core restored holds timers this host copy never saw, so a
+    # cancel is recorded whether or not the copy held it.
+    test "a cancel answers whether it was pending here, and is recorded either way" do
+      {pending, _} =
         Timers.new() |> Timers.session(@policy, 1_000) |> elem_register(30_000) |> Timers.commit()
 
       session = Timers.session(pending, @policy, 2_000)
       assert {false, session} = Timers.cancel(session, :processing_time, 5)
       assert {true, session} = Timers.cancel(session, :processing_time, 31_000)
-      assert {pending, [op], %{cancelled: 1}} = Timers.commit(session)
-      assert op == Timers.cancel_op(:processing_time, 31_000)
-      assert Timers.empty?(pending)
+      assert {pending, ops} = Timers.commit(session)
+
+      assert ops == [
+               Timers.cancel_op(:processing_time, 5),
+               Timers.cancel_op(:processing_time, 31_000)
+             ]
+
+      assert Timers.size(pending) == 0
     end
 
     # The removal is op 0 so it rides the same record as what `on_timer`
     # applies: either both land or the whole firing repeats.
-    test "a firing session opens on the removal, counted as fired, and now is the scheduled time" do
-      {pending, _, _} =
+    test "a firing session opens on the removal, and now is the scheduled time" do
+      {pending, _} =
         Timers.new() |> Timers.session(@policy, 1_000) |> elem_register(8_000) |> Timers.commit()
 
       session = Timers.session(pending, @policy, 9_000, {:processing_time, 9_000})
       assert Timers.now(session) == 9_000
       # A chained registration anchors on the firing that woke it.
       assert {:ok, 39_000, session} = Timers.register_after(session, 30_000)
-      assert {pending, [removal, chained], tally} = Timers.commit(session)
+      assert {pending, [removal, chained]} = Timers.commit(session)
       assert removal == Timers.cancel_op(:processing_time, 9_000)
       assert chained == Timers.register_op(:processing_time, 39_000)
-      assert tally == %{registered: 1, fired: 1, cancelled: 0, refused: 0}
       refute Timers.contains?(pending, :processing_time, 9_000)
       assert Timers.contains?(pending, :processing_time, 39_000)
     end
   end
 
   describe "the ctx" do
-    # A steps stage hands its Cells `timers: :unavailable`; a flow relay's Cell
-    # hands its pending set.
+    # A compensate hook's ctx hands `timers: :unavailable`; a run's hands the
+    # Cell's pending set.
     test "with timers unavailable every timer call is refused and nothing is armed" do
       ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy, timers: :unavailable)
 
@@ -154,15 +101,15 @@ defmodule Flezha.SDK.TimersTest do
       assert Ctx.timer_at_event_time(ctx, 5) == unavailable
       assert Ctx.cancel_processing_time_timer(ctx, 2_000) == unavailable
       assert Ctx.cancel_event_time_timer(ctx, 5) == unavailable
-      assert {pending, [], _tally} = Ctx.take_timers(ctx)
-      assert Timers.empty?(pending)
+      assert {pending, []} = Ctx.take_timers(ctx)
+      assert Timers.size(pending) == 0
     end
 
-    test "a flow relay's ctx still arms the same call" do
+    test "a run's ctx arms the same call" do
       ctx = Ctx.new(nil, nil, 1_000, timer_policy: @policy)
 
       assert Ctx.timer_after(ctx, 1_000) == {:ok, 2_000}
-      assert {pending, [op], _tally} = Ctx.take_timers(ctx)
+      assert {pending, [op]} = Ctx.take_timers(ctx)
       assert op == Timers.register_op(:processing_time, 2_000)
       assert Timers.contains?(pending, :processing_time, 2_000)
     end

@@ -20,7 +20,6 @@ defmodule Tradedesk.Application do
     namespace = List.first(System.argv(), "trading")
 
     children = [
-      # `:uds` because this node is not the controller's.
       {Flezha.SDK,
        namespace: namespace,
        relays: [Tradedesk.TradeWatcher, Tradedesk.OrderExecutor],

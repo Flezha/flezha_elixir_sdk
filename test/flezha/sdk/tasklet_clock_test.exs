@@ -8,7 +8,7 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   import Flezha.SDK.Test.Refused
 
-  alias Flezha.SDK.{Tasklet, Topology}
+  alias Flezha.SDK.{Declaration, Tasklet}
 
   defmodule Session do
     @moduledoc false
@@ -82,9 +82,9 @@ defmodule Flezha.SDK.TaskletClockTest do
     assert Tasklet.clock(Nochange) == :logical
 
     assert {:error, %Flezha.SDK.Error{code: "topology.unservable_clock", details: details}} =
-             Topology.build(NochangeRelay)
+             Declaration.check(NochangeRelay)
 
-    assert details["tasklet"] == inspect(Nochange)
+    assert details["tasklet"] == Nochange.name()
     assert length(details["issues"]) == 1
   end
 
@@ -166,12 +166,12 @@ defmodule Flezha.SDK.TaskletClockTest do
 
   test "a hand-written tasklet with two clocks, or a retired callback, is refused at registration" do
     assert {:error, %Flezha.SDK.Error{code: "topology.two_clocks", details: two}} =
-             Topology.build(TwoClocksRelay)
+             Declaration.check(TwoClocksRelay)
 
-    assert two["tasklet"] == inspect(TwoClocksByHand)
+    assert two["tasklet"] == TwoClocksByHand.name()
 
     assert {:error, %Flezha.SDK.Error{details: %{"issues" => issues}}} =
-             Topology.build(RetiredRelay)
+             Declaration.check(RetiredRelay)
 
     assert for(
              %{"code" => "topology.retired_callback", "details" => details} <- issues,
