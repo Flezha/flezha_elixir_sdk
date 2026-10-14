@@ -99,11 +99,11 @@ undone, in reverse: the order is cancelled, then the money is released. `record_
 the booking stays. The runner prints:
 
 ```
-[book] EUR/USD 136 as ord-e015c2df9402f4625d9cef4def51f243
-[flezha] tasklet confirm_fill attempt 1/3 failed (retrying in 62 ms): the exchange fills at most 100 a time, and this is 136
-[flezha] tasklet confirm_fill attempt 2/3 failed (retrying in 100 ms): the exchange fills at most 100 a time, and this is 136
-[undo] cancelled ord-e015c2df9402f4625d9cef4def51f243
-[undo] released res-e0d09a3a6a33661df98dd0a4768bb45a
+[book] EUR/USD 136 as ord-8d77f1d5e001f0e1d0ba82e0d52d23c2
+[flezha] tasklet confirm_fill attempt 1/3 failed (retrying in 47 ms): the exchange fills at most 100 a time, and this is 136
+[flezha] tasklet confirm_fill attempt 2/3 failed (retrying in 112 ms): the exchange fills at most 100 a time, and this is 136
+[undo] cancelled ord-8d77f1d5e001f0e1d0ba82e0d52d23c2
+[undo] released res-0074b24e42ff82a541af69e1e369de53
 ```
 
 ```sh
