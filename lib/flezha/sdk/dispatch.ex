@@ -220,7 +220,17 @@ defmodule Flezha.SDK.Dispatch do
     firing = {item.timer_kind, item.scheduled_at}
     item = Map.put(item, :now, item.scheduled_at)
     ctx = new_ctx(act, at, index, item, timers: timers, firing: firing)
-    result = invoke(fn -> module.on_timer(item.scheduled_at, item.timer_kind, state, ctx) end)
+
+    # A tasklet with no handler parks the firing by name, without the retries
+    # a raise would climb.
+    result =
+      if Tasklet.on_timer?(module),
+        do: invoke(fn -> module.on_timer(item.scheduled_at, item.timer_kind, state, ctx) end),
+        else:
+          {:error,
+           {:non_retryable,
+            "tasklet `#{module.name()}` registered a timer but does not export on_timer/4"}}
+
     settle(result, ctx, item, act, at)
   end
 

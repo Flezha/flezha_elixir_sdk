@@ -96,20 +96,9 @@ flz relay start order_executor --id order_too_big --namespace trading \
 each, and then the order ends in failure. The booking prints at once, beside
 the tries, and once the last try is spent every step that had finished is
 undone, in reverse: the order is cancelled, then the money is released. `record_order` has no undo, so
-the booking stays. The tries are logged at the `debug` level, which a
-`mix run` in the `dev` environment shows:
-
-```
-[book] EUR/USD 500 as ord-e015c2df9402f4625d9cef4def51f243
-
-20:31:32.672 [debug] [Flezha.SDK] order_too_big/node/single attempt 1/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
-
-20:31:42.717 [debug] [Flezha.SDK] order_too_big/node/single attempt 2/3 failed: the exchange fills at most 100 a time, and this is 500; retrying
-[undo] cancelled ord-e015c2df9402f4625d9cef4def51f243
-
-20:31:52.825 [debug] [Flezha.SDK] order_too_big compensating task 1
-[undo] released res-e0d09a3a6a33661df98dd0a4768bb45a
-```
+the booking stays. The runner prints the booking, a
+`[flezha] tasklet confirm_fill attempt N/3 failed (retrying in … ms): …` line
+for each try that fails, then the two undo lines.
 
 ```sh
 flz relay info order_too_big --namespace trading

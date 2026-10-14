@@ -165,6 +165,15 @@ defmodule Flezha.SDK.DispatchTest do
              Dispatch.answer(activation(:key_request, %{key_request: request}), env)
   end
 
+  test "a firing on a tasklet without on_timer/4 parks by name, not retried", %{env: env} do
+    timer = %{kind: :timer, timer_kind: :processing_time, scheduled_at: 2_000, replay: false}
+
+    assert %{effects: [%{verdict: :non_retryable, message: message}]} =
+             Dispatch.answer(activation(:work, %{items: [timer]}), env)
+
+    assert message =~ "counter" and message =~ "on_timer/4"
+  end
+
   test "a compensation runs the hook over the outputs it undoes", %{env: env} do
     outputs = Enum.map(["x", "y"], &:erlang.term_to_binary/1)
 
