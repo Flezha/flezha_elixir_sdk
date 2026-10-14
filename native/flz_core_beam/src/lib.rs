@@ -90,18 +90,24 @@ impl Core {
     /// core for it; a refused `begin` gives the core back.
     fn begin(&self, begin: impl FnOnce(CtxPtr) -> Result<(), Refusal>) -> NifResult<Atom> {
         let me = self.ctx.load(Ordering::SeqCst) as usize;
-        {
+        let took = {
             let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
             if *live != 0 && *live != me {
                 return Err(refusal(flz_core::Code::CoreInUse.with([]).json()));
             }
+            let took = *live == 0;
             *live = me;
-        }
-        begin(self.enter()?.ctx()).map_err(|r| {
+            took
+        };
+        let begun = self
+            .enter()
+            .and_then(|inside| begin(inside.ctx()).map_err(refused));
+        // Only a claim this call took is given back: a refused second begin
+        // leaves the context's live run its claim.
+        if begun.is_err() && took {
             self.release();
-            refused(r)
-        })?;
-        Ok(atoms::ok())
+        }
+        begun.map(|()| atoms::ok())
     }
 
     fn release(&self) {
@@ -150,15 +156,18 @@ fn context_free(core: ResourceArc<Core>) -> Atom {
     if core.freed.swap(true, Ordering::SeqCst) {
         return atoms::ok();
     }
-    core.release();
+    // The claim outlives the calls still inside: a poller in its wait would
+    // otherwise take the next run's first activation.
     let deadline = Instant::now() + CALLS_LEAVE_WITHIN;
     while core.inside.load(Ordering::SeqCst) > 0 {
         if Instant::now() >= deadline {
+            core.release();
             return atoms::ok();
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     veneer::context_free(CtxPtr::of(core.ctx.load(Ordering::SeqCst)));
+    core.release();
     atoms::ok()
 }
 
@@ -243,7 +252,12 @@ fn complete<'a>(
     result: Term<'a>,
 ) -> NifResult<Atom> {
     let answered = match shape::result(&Source(env), &result) {
-        Ok(result) => veneer::complete(core.enter()?.ctx(), &result).map_err(refused),
+        // Taken first: an activation `release_thread` already failed back is
+        // not answered a second time.
+        Ok(result) => match thread.take_token() {
+            Some(_) => veneer::complete(core.enter()?.ctx(), &result).map_err(refused),
+            None => Ok(()),
+        },
         Err(f) => {
             if let Some(token) = thread.take_token() {
                 let _ = veneer::complete(core.enter()?.ctx(), &threads::failure(token, &f.0));

@@ -475,6 +475,17 @@ defmodule Flezha.SDK.LocalTest do
     assert payloads() == ["caught ran"]
   end
 
+  test "a run whose pool died still frees the core for the next run" do
+    Process.flag(:trap_exit, true)
+    {:ok, run} = Local.start(WordCount)
+    ref = Process.monitor(run)
+
+    Process.exit(:sys.get_state(run).pool, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^run, _reason}, 10_000
+
+    assert is_pid(start_run(CounterOp))
+  end
+
   test "one local run is live in this VM at a time" do
     first = start_run(WordCount)
     assert {:error, %Flezha.SDK.Error{code: "runtime.core_in_use"}} = Local.start(CounterOp)

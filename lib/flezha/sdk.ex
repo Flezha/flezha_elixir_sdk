@@ -286,6 +286,17 @@ defmodule Flezha.SDK do
   meanwhile.
   """
   def child_spec(opts) do
+    # The credential rides as a function, so a supervisor's report of the
+    # child's start arguments prints none of it.
+    opts =
+      case Keyword.fetch(opts, :namespace_secret) do
+        {:ok, secret} when is_binary(secret) ->
+          Keyword.put(opts, :namespace_secret, fn -> secret end)
+
+        _ ->
+          opts
+      end
+
     %{
       id: Keyword.get(opts, :id, __MODULE__),
       start: {__MODULE__, :start_link, [opts]},
@@ -301,6 +312,12 @@ defmodule Flezha.SDK do
   @doc false
   def start_link(opts) do
     namespace = Keyword.fetch!(opts, :namespace)
+
+    opts =
+      Keyword.update(opts, :namespace_secret, nil, fn
+        secret when is_function(secret, 0) -> secret.()
+        secret -> secret
+      end)
 
     handle =
       Enum.reduce(

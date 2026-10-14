@@ -429,7 +429,7 @@ defmodule Flezha.SDK.Dispatch do
           target: :edge,
           channel: channel.index,
           consumer: consumer,
-          event_time: event_time_of(elem(class.nodes, consumer), transform(value, transforms)),
+          event_time: steps_event_time(elem(class.nodes, consumer), value, transforms),
           metadata: [],
           payload: encode_term(value)
         }
@@ -461,6 +461,14 @@ defmodule Flezha.SDK.Dispatch do
     do: if(Tasklet.exports?(module, :event_time, 1), do: module.event_time(value))
 
   defp event_time_of(_module, []), do: nil
+
+  # In steps the consumer runs its edge's transforms on its own side, so a
+  # failure here is left for it to report rather than failing the producer.
+  defp steps_event_time(module, value, transforms) do
+    event_time_of(module, transform(value, transforms))
+  rescue
+    _ -> nil
+  end
 
   defp calls(%{call: nil}, _value, _meta, ordinal), do: {[], ordinal}
 

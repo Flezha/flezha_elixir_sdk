@@ -170,5 +170,7 @@ defmodule Flezha.SDK.DeclarationTest do
 
     status = %{state: %{opts: [namespace: "ns", namespace_secret: "s3cret"], core: nil}}
     refute inspect(Flezha.SDK.Runner.format_status(status)) =~ "s3cret"
+
+    refute inspect(Flezha.SDK.child_spec(namespace: "ns", namespace_secret: "s3cret")) =~ "s3cret"
   end
 end

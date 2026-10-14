@@ -50,7 +50,8 @@ defmodule Flezha.SDK.Pool do
 
   def close(%{core: core, pool: pool}, stop, wait_ms, how) do
     stop.(core)
-    if Process.alive?(pool) and drain(pool, wait_ms, how) == 0, do: Native.context_free(core)
+    # A pool already gone has no worker left to wait for.
+    if not Process.alive?(pool) or drain(pool, wait_ms, how) == 0, do: Native.context_free(core)
     :ok
   end
 

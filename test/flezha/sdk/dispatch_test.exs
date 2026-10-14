@@ -197,6 +197,12 @@ defmodule Flezha.SDK.DispatchTest do
 
     assert %{effects: [%{verdict: :ok, outputs: [edge]}]} = Dispatch.answer(act, env)
     assert %{target: :edge, consumer: 1, event_time: 42} = edge
+
+    # The consumer reports its own failure: the producer's item still succeeds.
+    act = activation(:work, %{factory: "dispatch_staged", items: [input("not a number")]})
+
+    assert %{effects: [%{verdict: :ok, outputs: [%{event_time: nil}]}]} =
+             Dispatch.answer(act, env)
   end
 
   test "a firing on a tasklet without on_timer/4 parks by name, not retried", %{env: env} do

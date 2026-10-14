@@ -20,8 +20,8 @@ defmodule Tradedesk.ConfirmFill do
 
   @impl true
   def run(%{order: order, order_id: order_id}, state, ctx) do
-    # The paper exchange takes ten seconds to answer. Each cell is a process of
-    # its own, so only this order waits; every other cell keeps running.
+    # The paper exchange takes ten seconds to answer. Only the worker running
+    # this order waits; the runner's other workers keep serving every other cell.
     Process.sleep(10_000)
 
     if order.quantity > @exchange_max do

@@ -2427,7 +2427,7 @@
     },
     "runtime.core_shut_down": {
       "class": "unavailable",
-      "message": "this process's core was shut down: a runner or a local run starts once per process",
+      "message": "this process's core was shut down: no runner or local run starts on it again in this process",
       "details": []
     },
     "runtime.edge_closure_panicked": {
