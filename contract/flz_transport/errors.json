@@ -735,6 +735,12 @@
       "message": "the listener on relay '{relay}' was disabled by another caller",
       "details": ["relay"]
     },
+    "listener.no_channels": {
+      "class": "invalid",
+      "message": "relay '{relay}' has no output channel a tally could count",
+      "hint": "flz relay graph {relay} shows whether the relay announces its graph, and which channels end at an output",
+      "details": ["relay"]
+    },
     "listener.overrun": {
       "class": "unavailable",
       "message": "the listener on relay '{relay}' fell more than {bytes} bytes or {frames} frames behind and was ended",

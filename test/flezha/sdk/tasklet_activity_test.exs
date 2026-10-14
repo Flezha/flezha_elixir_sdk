@@ -1,7 +1,8 @@
 defmodule Flezha.SDK.TaskletActivityTest do
   @moduledoc """
   The activity read: one row per tasklet with its live Cells and queued
-  items, every total absent, and a relay the runner does not host refused.
+  items, every total absent, no Cell answer, and a relay or tasklet the runner
+  does not host refused.
   """
   # The deadline case sets an application-wide knob.
   use ExUnit.Case, async: false
@@ -99,6 +100,20 @@ defmodule Flezha.SDK.TaskletActivityTest do
     assert "elsewhere" in Map.values(refusal.details)
   end
 
+  test "a Cell read answers the tasklet rows and no Cells", %{op: op} do
+    assert {"success", [], raw} = read(op, "gate-1", "gate")
+    answer = RunnerCommands.TaskletActivityResponse.decode!(raw)
+    assert answer.rows |> Enum.map(& &1.tasklet) |> Enum.sort() == ["gate", "quiet"]
+    assert answer.cells == nil, "this runtime keeps no per-Cell counters"
+  end
+
+  test "a Cell read naming an undeclared tasklet is refused by name", %{op: op} do
+    assert {"error", [%{code: "state.tasklet_not_found"} = refusal], ""} =
+             read(op, "gate-1", "nope")
+
+    assert "nope" in Map.values(refusal.details)
+  end
+
   # One input running and held, `n` more queued behind it in its Cell.
   defp backlog(op, n) do
     Inbox.input(op, "in", "first", %{})
@@ -108,11 +123,12 @@ defmodule Flezha.SDK.TaskletActivityTest do
     cell
   end
 
-  defp read(op, relay_id) do
+  defp read(op, relay_id, cells_of \\ nil) do
     me = self()
     respond = fn status, errors, raw, _meta -> send(me, {:read, {status, errors, raw}}) end
+    command = %RunnerCommands.TaskletActivity{relay_id: relay_id, cells_of: cells_of}
 
-    Commands.dispatch(:tasklet_activity, %{relay_id: relay_id}, respond, %{
+    Commands.dispatch(:tasklet_activity, command, respond, %{
       relays: %{"gate-1" => {op, "f"}}
     })
 

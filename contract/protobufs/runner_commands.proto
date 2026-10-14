@@ -840,9 +840,14 @@ message RelayExited {
 // Controller -> SDK: what each tasklet of relay instance `relay_id` is doing,
 // read on request from figures the data path already keeps. Answered with an
 // encoded TaskletActivityResponse as the CommandResponse raw_data; a relay the
-// runner does not host is refused as `runtime.relay_not_found`.
+// runner does not host is refused as `runtime.relay_not_found`. `cells_of`
+// also asks for that tasklet's Cells, at most `limit` of them (default 50,
+// clamped to 500); a tasklet the class does not declare is refused as
+// `state.tasklet_not_found`.
 message TaskletActivity {
     string relay_id = 1;
+    optional string cells_of = 2;
+    optional uint32 limit = 3;
 }
 
 // `read_at_ms` is the runner's monotonic clock at the read. `instance_seq`
@@ -852,6 +857,28 @@ message TaskletActivityResponse {
     repeated TaskletActivityRow rows = 1;
     uint64 read_at_ms = 2;
     uint64 instance_seq = 3;
+    optional TaskletCells cells = 4;
+}
+
+// The Cells of the tasklet `cells_of` named, most recently admitted first.
+// Absent, never empty, from a runtime that keeps no per-Cell counters.
+message TaskletCells {
+    string tasklet = 1;
+    uint64 cells_total = 2;
+    repeated CellActivityRow rows = 3;
+}
+
+// One Cell's figures. `key` is absent for an unkeyed Cell; `last_admitted_ms`
+// is on the clock of `read_at_ms`, and a Cell that has admitted nothing yet
+// carries the time it was created.
+message CellActivityRow {
+    optional string key = 1;
+    uint64 queued = 2;
+    uint64 admitted_total = 3;
+    uint64 blocked_total = 4;
+    uint64 dropped_newest_total = 5;
+    uint64 dropped_oldest_total = 6;
+    uint64 last_admitted_ms = 7;
 }
 
 // One tasklet's figures, summed over its Cells. A figure the runtime does not

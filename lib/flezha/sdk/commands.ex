@@ -85,7 +85,7 @@ defmodule Flezha.SDK.Commands do
   end
 
   def dispatch(:tasklet_activity, cmd, respond, s),
-    do: answer_off_loop(respond, fn -> activity(s, cmd.relay_id) end)
+    do: answer_off_loop(respond, fn -> activity(s, cmd.relay_id, cmd.cells_of) end)
 
   def dispatch(:migration_serialization, cmd, respond, s) do
     answer_off_loop(respond, fn ->
@@ -253,16 +253,18 @@ defmodule Flezha.SDK.Commands do
   # --- the live read ---
 
   # Live Cells and their queued items per tasklet. This runtime keeps no
-  # per-Cell totals, so every total is absent; a tasklet with a Cell that does
-  # not answer by the deadline reports its queue as absent too. The router and
-  # every Cell answer inside one deadline. The instance is the relay process,
-  # so its hash tells a new one apart.
-  defp activity(s, relay_id) do
+  # per-Cell totals, so every total is absent, and a Cell read (`cells_of`) is
+  # answered without Cells once its tasklet is found; a tasklet with a Cell
+  # that does not answer by the deadline reports its queue as absent too. The
+  # router and every Cell answer inside one deadline. The instance is the relay
+  # process, so its hash tells a new one apart.
+  defp activity(s, relay_id, cells_of) do
     now = System.monotonic_time(:millisecond)
     deadline = now + Knob.get(:sdk_activity_read_ms)
 
     with {:ok, op} <- relay(s, relay_id),
-         {:ok, nodes} <- nodes(op, relay_id, deadline - now) do
+         {:ok, nodes} <- nodes(op, relay_id, deadline - now),
+         {:ok, _named} <- select_nodes(nodes, relay_id, cells_of) do
       # The wire's clock is unsigned; the VM's monotonic clock may be negative.
       read_at_ms =
         now - System.convert_time_unit(:erlang.system_info(:start_time), :native, :millisecond)
