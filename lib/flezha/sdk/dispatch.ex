@@ -46,6 +46,7 @@ defmodule Flezha.SDK.Dispatch do
 
   defp answer_kind(:work, act, at) do
     {state, timers} = load(at)
+    timers = restored_timers(timers, act, at)
 
     {effects, state, timers} =
       act.items
@@ -64,7 +65,7 @@ defmodule Flezha.SDK.Dispatch do
   defp answer_kind(:restore_fold, act, %{module: module, cell: {_, _, key}} = at) do
     with {:ok, state} <- restored_snapshot(Map.get(act, :snapshot), module, key),
          {:ok, state} <- fold_changes(act.changes, module, state) do
-      store(at, state, Timers.new())
+      store(at, state, :restored)
       %{token: act.token, outcome: :restored}
     else
       {:error, reason} -> failed(act.token, reason, true)
@@ -111,6 +112,17 @@ defmodule Flezha.SDK.Dispatch do
   end
 
   defp answer_kind(kind, act, _at), do: failed(act.token, "unknown activation kind #{kind}", true)
+
+  # A restore hands the host its state and not its timers: the first work
+  # after one reads the pending set the core rebuilt.
+  defp restored_timers(:restored, act, at) do
+    case Native.answered(Native.pending_timers(at.env.core, act.token)) do
+      {:error, error} -> raise "the restored timers could not be read: #{error.message}"
+      pending -> Timers.of(pending)
+    end
+  end
+
+  defp restored_timers(timers, _act, _at), do: timers
 
   @doc "A whole activation answered as failed."
   @spec failed(non_neg_integer(), String.t(), boolean()) :: map()
@@ -398,12 +410,17 @@ defmodule Flezha.SDK.Dispatch do
 
   # In steps a value rides to its first consumer untransformed, and an
   # inter-tasklet terminal's value goes to the core as the pass's handoff.
-  defp edges(true, channel, node, value, _key, _cell_key, _meta, _class) do
-    consumer =
+  defp edges(true, channel, node, value, _key, _cell_key, _meta, class) do
+    {consumer, transforms} =
       cond do
-        channel.consumers != [] -> hd(channel.consumers).tasklet
-        channel.sink == nil and channel.call == nil -> node
-        true -> nil
+        channel.consumers != [] ->
+          {hd(channel.consumers).tasklet, hd(channel.consumers).transforms}
+
+        channel.sink == nil and channel.call == nil ->
+          {node, nil}
+
+        true ->
+          {nil, nil}
       end
 
     if consumer,
@@ -412,6 +429,7 @@ defmodule Flezha.SDK.Dispatch do
           target: :edge,
           channel: channel.index,
           consumer: consumer,
+          event_time: event_time_of(elem(class.nodes, consumer), transform(value, transforms)),
           metadata: [],
           payload: encode_term(value)
         }
@@ -427,7 +445,7 @@ defmodule Flezha.SDK.Dispatch do
         target: :edge,
         channel: channel.index,
         consumer: edge.tasklet,
-        event_time: if(Tasklet.exports?(consumer, :event_time, 1), do: consumer.event_time(v)),
+        event_time: event_time_of(consumer, [v]),
         key: key || (edge.key && to_string(edge.key.(v))) || cell_key,
         metadata: meta,
         payload: encode_term(v)
@@ -436,6 +454,13 @@ defmodule Flezha.SDK.Dispatch do
   end
 
   defp encode_term(value), do: :erlang.term_to_binary(value)
+
+  # The event time a consumer reads off the first value it will run, when it
+  # declares a clock that reads one.
+  defp event_time_of(module, [value | _]),
+    do: if(Tasklet.exports?(module, :event_time, 1), do: module.event_time(value))
+
+  defp event_time_of(_module, []), do: nil
 
   defp calls(%{call: nil}, _value, _meta, ordinal), do: {[], ordinal}
 

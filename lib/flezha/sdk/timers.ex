@@ -30,6 +30,12 @@ defmodule Flezha.SDK.Timers do
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
+  @doc "The set holding `pending`, `{kind, at}` pairs."
+  @spec of([{kind(), non_neg_integer()}]) :: t()
+  def of(pending) do
+    Enum.reduce(pending, new(), fn {kind, at}, t -> elem(fold_op(t, register_op(kind, at)), 1) end)
+  end
+
   @spec register_op(kind(), non_neg_integer()) :: op()
   def register_op(kind, at), do: %{kind: kind, scheduled_at: at, register: true}
 

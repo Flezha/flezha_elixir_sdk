@@ -8,7 +8,7 @@ defmodule Flezha.SDK.NativeTest do
   """
   use ExUnit.Case, async: false
 
-  alias Flezha.SDK.{Channels, Declaration, Native}
+  alias Flezha.SDK.{Channels, Declaration, Dispatch, Native, Timers}
 
   defmodule Echo do
     use Flezha.SDK.Tasklet, name: "echo"
@@ -26,7 +26,7 @@ defmodule Flezha.SDK.NativeTest do
 
   setup do
     core = Native.context_new(Native.schema_version())
-    {:ok, _class} = Declaration.declare(core, EchoOp)
+    {:ok, class} = Declaration.declare(core, EchoOp)
     :ok = Native.local_start(core, "native_echo", "native_echo-1")
     :ok = Native.local_on_sink(core, "out")
     thread = Native.poller(core, self())
@@ -37,7 +37,7 @@ defmodule Flezha.SDK.NativeTest do
       Native.context_free(core)
     end)
 
-    %{core: core}
+    %{core: core, class: class}
   end
 
   defp next_activation do
@@ -89,6 +89,42 @@ defmodule Flezha.SDK.NativeTest do
 
     effect = %{verdict: :ok, changes: [], outputs: [], timers: [], event_time: 0}
     assert :ok = Native.complete(core, thread, %{token: again, outcome: :work, effects: [effect]})
+    assert :ok = Native.local_run_until_idle(core, 5_000)
+  end
+
+  test "a restored Cell's first work reads its pending timers from the core",
+       %{core: core, class: class} do
+    at = 4_102_444_800_000
+    timer = %{kind: :processing_time, scheduled_at: at, register: true}
+
+    :ok = Native.local_feed(core, "in", "first")
+    {thread, %{token: token}} = next_activation()
+    effect = %{verdict: :ok, changes: [], outputs: [], timers: [timer], event_time: 0}
+    assert :ok = Native.complete(core, thread, %{token: token, outcome: :work, effects: [effect]})
+
+    :ok = Native.local_feed(core, "in", "second")
+    {thread, act} = next_activation()
+    assert Native.pending_timers(core, act.token) == [{:processing_time, at}]
+
+    # The Cell as a restore leaves it: the dispatcher reads the core's set.
+    :ok = Dispatch.register(class)
+    cells = Dispatch.cells()
+
+    :ets.insert(
+      cells,
+      {{act.relay, act.tasklet, Map.get(act, :cell_key)}, nil, :restored, "native_echo"}
+    )
+
+    assert %{outcome: :work} = Dispatch.answer(act, %{core: core, cells: cells})
+    assert [{_cell, _state, timers, _factory}] = :ets.tab2list(cells)
+    assert Timers.contains?(timers, :processing_time, at)
+
+    # The timer is cancelled: a pending one keeps every later local run busy.
+    cancel = %{effect | timers: [%{timer | register: false}]}
+
+    assert :ok =
+             Native.complete(core, thread, %{token: act.token, outcome: :work, effects: [cancel]})
+
     assert :ok = Native.local_run_until_idle(core, 5_000)
   end
 

@@ -57,10 +57,38 @@ defmodule Flezha.SDK.DispatchTest do
     end
   end
 
+  defmodule Stamp do
+    use Flezha.SDK.Tasklet, name: "stamp"
+
+    @impl true
+    def run(input, state, ctx) do
+      emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
+  defmodule Timed do
+    use Flezha.SDK.Tasklet, name: "timed"
+
+    @impl true
+    def event_time(input), do: String.to_integer(input)
+
+    @impl true
+    def run(_input, state, _ctx), do: {:ok, state}
+  end
+
+  defmodule Staged do
+    use Flezha.SDK.Relay, factory_id: "dispatch_staged", run: {:steps, each: :per_input}
+
+    @impl true
+    def channels(c), do: c |> input("in") |> into(Stamp) |> map(&String.trim/1) |> into(Timed)
+  end
+
   setup_all do
     core = Native.context_new(Native.schema_version())
     {:ok, class} = Declaration.declare(core, Probe)
     :ok = Dispatch.register(class)
+    :ok = Dispatch.declare(core, Staged)
     on_exit(fn -> Native.context_free(core) end)
     %{core: core}
   end
@@ -89,8 +117,10 @@ defmodule Flezha.SDK.DispatchTest do
         extra
       )
 
-  defp live(env) do
-    %{outcome: :state_json, json: json} = Dispatch.answer(activation(:live_state_read, %{}), env)
+  defp live(env, key \\ "a") do
+    %{outcome: :state_json, json: json} =
+      Dispatch.answer(activation(:live_state_read, %{cell_key: key}), env)
+
     Jason.decode!(json)
   end
 
@@ -123,17 +153,14 @@ defmodule Flezha.SDK.DispatchTest do
     assert live(env) == %{"value" => 0}, "a failed item records nothing"
   end
 
+  # A Cell of its own: a restored Cell's next work reads its timers from a live core.
   test "a restore folds the snapshot and the changes, migrating what asks for it", %{env: env} do
     snapshot = %{bytes: :erlang.term_to_binary(%{v: 10}), from_version: 1}
     changes = [%{bytes: :erlang.term_to_binary({:add, 2})}]
+    fold = %{snapshot: snapshot, changes: changes, cell_key: "restored"}
 
-    assert %{outcome: :restored} =
-             Dispatch.answer(
-               activation(:restore_fold, %{snapshot: snapshot, changes: changes}),
-               env
-             )
-
-    assert live(env) == %{"value" => 12}
+    assert %{outcome: :restored} = Dispatch.answer(activation(:restore_fold, fold), env)
+    assert live(env, "restored") == %{"value" => 12}
 
     unmigratable = %{bytes: :erlang.term_to_binary({:add, 1}), from_version: 1}
 
@@ -163,6 +190,13 @@ defmodule Flezha.SDK.DispatchTest do
 
     assert %{outcome: :prepared, prepared: [%{keys: ["b"]}, %{non_retryable: true}]} =
              Dispatch.answer(activation(:key_request, %{key_request: request}), env)
+  end
+
+  test "a steps edge carries the event time its consumer reads off the value", %{env: env} do
+    act = activation(:work, %{factory: "dispatch_staged", items: [input(" 42 ")]})
+
+    assert %{effects: [%{verdict: :ok, outputs: [edge]}]} = Dispatch.answer(act, env)
+    assert %{target: :edge, consumer: 1, event_time: 42} = edge
   end
 
   test "a firing on a tasklet without on_timer/4 parks by name, not retried", %{env: env} do
