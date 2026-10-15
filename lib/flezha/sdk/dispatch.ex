@@ -111,6 +111,14 @@ defmodule Flezha.SDK.Dispatch do
     end
   end
 
+  defp answer_kind(:leave, act, %{env: env, cell: {relay, _, _} = cell}) do
+    if act.whole_relay,
+      do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_, :_, :_}),
+      else: :ets.delete(env.cells, cell)
+
+    %{token: act.token, outcome: :state_applied}
+  end
+
   defp answer_kind(kind, act, _at), do: failed(act.token, "unknown activation kind #{kind}", true)
 
   # A restore hands the host its state and not its timers: the first work

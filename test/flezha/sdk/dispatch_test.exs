@@ -214,6 +214,20 @@ defmodule Flezha.SDK.DispatchTest do
     assert Jason.decode!(json) == %{"value" => 4}
   end
 
+  test "a Cell that left starts again from init_state, as does every Cell of a relay that left",
+       %{env: env} do
+    for key <- ["a", "b"] do
+      Dispatch.answer(activation(:work, %{cell_key: key, items: [input("#{key}:3")]}), env)
+    end
+
+    assert %{outcome: :state_applied} =
+             Dispatch.answer(activation(:leave, %{whole_relay: false}), env)
+
+    assert {live(env), live(env, "b")} == {%{"value" => 0}, %{"value" => 3}}
+    Dispatch.answer(activation(:leave, %{whole_relay: true}), env)
+    assert live(env, "b") == %{"value" => 0}
+  end
+
   test "a key request answers each payload's keys", %{env: env} do
     request = %{
       channel: coded("json"),
