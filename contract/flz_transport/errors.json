@@ -516,6 +516,11 @@
       "hint": "fix the cause named here; the controller retries the bind on its own, with a growing delay",
       "details": ["relay", "seconds", "reason"]
     },
+    "diagnose.plugin_disabled": {
+      "class": "unavailable",
+      "message": "plugin '{plugin}' bound to relay '{relay}' is disabled; its guaranteed outputs are held until a plugin of that name is enabled again",
+      "details": ["relay", "plugin"]
+    },
     "diagnose.plugin_missing": {
       "class": "not_found",
       "message": "plugin '{plugin}' bound to relay '{relay}' needs provider {provider}, which is not installed on controller {node}",
