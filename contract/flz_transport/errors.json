@@ -774,6 +774,15 @@
         {"tag": "namespace_exists", "args": ["namespace"]}
       ]
     },
+    "namespace.in_use": {
+      "class": "conflict",
+      "message": "namespace '{namespace}' still has relays [{relays}] and runners [{runners}] attached; stop them before deleting it",
+      "hint": "flz relay list --namespace {namespace}",
+      "details": ["namespace", "relays", "runners"],
+      "reasons": [
+        {"tag": "namespace_in_use", "at": ["authz.namespace_delete"], "args": ["namespace", "relays", "runners"]}
+      ]
+    },
     "namespace.invalid_name": {
       "class": "invalid",
       "message": "'{namespace}' is not a valid namespace name: a lowercase letter, then up to 62 lowercase letters, digits, '_' or '-'",
