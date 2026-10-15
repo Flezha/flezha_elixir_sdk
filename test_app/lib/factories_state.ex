@@ -49,7 +49,7 @@ defmodule ElixirRunner.StoreInputOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.StoreInputTask)
     |> output("sink")
   end
@@ -94,7 +94,7 @@ defmodule ElixirRunner.StatefulCounterOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.CounterEntryTask)
     |> named("ticks")
     |> into(ElixirRunner.CounterTask)
@@ -138,7 +138,7 @@ defmodule ElixirRunner.PersistenceOffCounterOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.PersistenceOffEntryTask)
     |> named("ticks")
     |> into(ElixirRunner.PersistenceOffCounterTask)
@@ -181,7 +181,7 @@ defmodule ElixirRunner.SleepingCounterOp do
   @impl true
   def channels(c) do
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> key_by(&ElixirRunner.Key.prefix/1)
     |> into(ElixirRunner.SleepingCounterTask)
     |> output("totals")
@@ -236,7 +236,7 @@ defmodule ElixirRunner.CoalescingCounterOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.TickEntryTask)
     |> named("ticks")
     |> into(ElixirRunner.TickTask)
@@ -277,7 +277,7 @@ defmodule ElixirRunner.ResumeProbeOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.ResumeProbeTask)
     |> output("total")
   end
@@ -350,7 +350,7 @@ defmodule ElixirRunner.SchemaEvolutionV1Op do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.EvolvingCartV1Task)
     |> output("total")
   end
@@ -365,7 +365,7 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.EvolvingCartV2Task)
     |> output("total")
   end
@@ -429,7 +429,7 @@ defmodule ElixirRunner.SessionTimeoutOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.SessionTimeoutTask)
     |> output("kafka")
   end
@@ -539,7 +539,7 @@ defmodule ElixirRunner.TierChainOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> into(ElixirRunner.TierPassTask)
     |> key_by(&(&1 |> Flezha.Bench.TierStoreTask.split() |> elem(0)))
@@ -560,7 +560,7 @@ defmodule ElixirRunner.CheckpointStoreOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
     |> output("sink")
@@ -582,7 +582,7 @@ defmodule ElixirRunner.CheckpointBatchedOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.CheckpointStoreTask)
     |> keyed()
     |> output("sink")
@@ -655,7 +655,7 @@ defmodule ElixirRunner.CandleOp do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(ElixirRunner.CandleTask)
     |> keyed()
     |> output("sink")

@@ -85,7 +85,8 @@ being `call.timeout`), `target` (the callee's instance id) and `created`.
 Every entry channel is part of its relay's API, with its format and the output
 that answers it. `input/3` takes `codec:` (`:json`, the default, `:text`,
 `:bytes` or `:msgpack`), `description:`, and for a JSON channel `schema:`, a
-JSON Schema map with a `type`; the tasklet still receives the payload's bytes:
+JSON Schema map with a `type`; the key and the tasklet receive the payload
+decoded by that codec:
 
 ```elixir
 c

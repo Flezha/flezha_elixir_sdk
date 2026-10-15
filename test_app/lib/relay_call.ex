@@ -178,7 +178,7 @@ defmodule ElixirRunner.RelayCall do
     @behaviour Flezha.SDK.Relay
     import Flezha.SDK.Channels
     def factory_id, do: "call_pricing"
-    def channels(c), do: c |> input("in") |> into(PricingQuote) |> output("quotes")
+    def channels(c), do: c |> input("in", codec: :text) |> into(PricingQuote) |> output("quotes")
   end
 
   defmodule OrdersOp do
@@ -190,7 +190,7 @@ defmodule ElixirRunner.RelayCall do
 
     def channels(c) do
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(OrderAsk)
       |> named("order")
       |> call("pricing", deadline_ms: RelayCall.deadline_ms(), answer_channel: "quotes")
@@ -207,7 +207,7 @@ defmodule ElixirRunner.RelayCall do
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
     def durable, do: ElixirRunner.fixture_durable()
     def max_duration_ms, do: 600_000
-    def channels(c), do: c |> input("turn") |> into(AgentTurn) |> output()
+    def channels(c), do: c |> input("turn", codec: :text) |> into(AgentTurn) |> output()
   end
 
   defmodule GatewayOp do
@@ -219,7 +219,7 @@ defmodule ElixirRunner.RelayCall do
     def run, do: {:flow, exactly: :effectively_once}
 
     def channels(c) do
-      account = c |> input("in") |> into(GatewayAccount) |> named("gateway")
+      account = c |> input("in", codec: :text) |> into(GatewayAccount) |> named("gateway")
 
       account
       |> filter(&RelayCall.turn?/1)
@@ -255,7 +255,7 @@ defmodule ElixirRunner.RelayCall do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      turn = c |> input("turn") |> into(ToolTurn) |> named("tool")
+      turn = c |> input("turn", codec: :text) |> into(ToolTurn) |> named("tool")
 
       turn
       |> filter(&(not RelayCall.outcome?(&1)))
@@ -271,8 +271,7 @@ defmodule ElixirRunner.RelayCall do
     use Flezha.SDK.Tasklet, name: "place_order"
 
     @impl true
-    def run(input, state, ctx) do
-      %{"pair" => pair, "amount" => amount} = Jason.decode!(input)
+    def run(%{"pair" => pair, "amount" => amount}, state, ctx) do
       emit(ctx, %{"pair" => pair, "amount" => amount, "status" => "placed"})
       {:ok, state}
     end

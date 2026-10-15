@@ -173,7 +173,7 @@ defmodule Flezha.SDK.Tasklet do
 
   # The §5 short form's options, taken by the relay macro beside the
   # tasklet's own. A tasklet refuses them.
-  @short_form_options [:output, :input]
+  @short_form_options [:output, :input, :codec]
   # Everything a short form takes beyond `factory_id` and the class settings:
   # its own options and its tasklet's.
   @short_form_only @short_form_options ++ @use_options
@@ -484,7 +484,7 @@ defmodule Flezha.SDK.Tasklet do
     wired =
       quote do
         c
-        |> Flezha.SDK.Channels.input(unquote(entry))
+        |> Flezha.SDK.Channels.input(unquote(entry), unquote(Keyword.take(options, [:codec])))
         |> Flezha.SDK.Channels.into(unquote(tasklet))
       end
 

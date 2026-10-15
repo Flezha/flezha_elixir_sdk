@@ -83,7 +83,11 @@ defmodule Flezha.SDK.LocalTest do
     def factory_id, do: "local_effector"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Effector) |> Channels.output("out")
+      do:
+        c
+        |> Channels.input("in", codec: :text)
+        |> Channels.into(Effector)
+        |> Channels.output("out")
   end
 
   defmodule SpawnerOp do
@@ -92,7 +96,11 @@ defmodule Flezha.SDK.LocalTest do
     def factory_id, do: "spawner"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Spawner) |> Channels.output("out")
+      do:
+        c
+        |> Channels.input("in", codec: :text)
+        |> Channels.into(Spawner)
+        |> Channels.output("out")
   end
 
   # --- the moduledoc's worked example ---
@@ -134,7 +142,7 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c) do
       c
-      |> Channels.input("lines")
+      |> Channels.input("lines", codec: :text)
       |> Channels.filter(&(not String.starts_with?(&1, "#")))
       |> Channels.flat_map(&String.split/1)
       |> Channels.into(Normalise)
@@ -155,7 +163,7 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c) do
       c
-      |> Channels.input("in")
+      |> Channels.input("in", codec: :text)
       |> Channels.into(Normalise)
       |> Channels.named("out")
       |> Channels.keyed()
@@ -167,7 +175,7 @@ defmodule Flezha.SDK.LocalTest do
     @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "local_job"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(Normalise)
+    def channels(c), do: c |> Channels.input("in", codec: :text) |> Channels.into(Normalise)
   end
 
   # Asks to end its relay on `end`. Reports every invocation, so a retry
@@ -191,7 +199,8 @@ defmodule Flezha.SDK.LocalTest do
     def factory_id, do: "local_closer"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Closer) |> Channels.output("out")
+      do:
+        c |> Channels.input("in", codec: :text) |> Channels.into(Closer) |> Channels.output("out")
   end
 
   # A tasklet that does not return until the test releases it, so what makes
@@ -218,7 +227,7 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c) do
       c
-      |> Channels.input("in")
+      |> Channels.input("in", codec: :text)
       |> Channels.into(Held)
       |> Channels.named("out")
       |> Channels.output()
@@ -266,7 +275,7 @@ defmodule Flezha.SDK.LocalTest do
   defmodule StamperOp do
     @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_stamper"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(Stamper)
+    def channels(c), do: c |> Channels.input("in", codec: :text) |> Channels.into(Stamper)
   end
 
   # --- helpers ---

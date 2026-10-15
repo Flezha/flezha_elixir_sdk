@@ -88,12 +88,14 @@ defmodule Flezha.SDK.Channels do
   # --- openers ---
 
   @doc """
-  Bytes-passthrough entry channel: its tasklet receives the payload as it
-  arrives. The options are announced in the relay's API: `codec:` the
-  payload's format (`:json`, the default, `:text`, `:bytes` or `:msgpack`),
-  `description:` what the channel is for, and `schema:` a `:json` channel's
-  JSON Schema, a map with a `type`; any other schema refuses the class as
-  `SchemaInvalid`.
+  Entry channel: its key and its tasklet receive the payload decoded by
+  `codec:`, which the relay's API also announces. `:json`, the default, hands
+  the decoded JSON value (`nil` for an empty payload), `:text` the payload as
+  a UTF-8 string, and `:bytes` the payload as it arrives; `:msgpack` hands the
+  payload as it arrives too, since this SDK carries no MessagePack decoder. A
+  payload its codec cannot read is unreadable. `description:` says what the
+  channel is for, and `schema:` is a `:json` channel's JSON Schema, a map with
+  a `type`; any other schema refuses the class as `SchemaInvalid`.
 
       c |> input("place", description: "Places an order", schema: %{"type" => "object"})
   """
@@ -103,24 +105,29 @@ defmodule Flezha.SDK.Channels do
     unless codec in [:json, :text, :bytes, :msgpack],
       do: raise(ArgumentError, "input codec: is one of :json, :text, :bytes or :msgpack")
 
-    api = %{
-      codec: Atom.to_string(codec),
-      schema: opts[:schema],
-      description: Keyword.get(opts, :description, "")
-    }
-
-    open(c, name, &default_parse/1, api)
+    open(c, name, &parse(codec, &1), Atom.to_string(codec), opts)
   end
 
-  @doc "Entry channel with a custom parser; a parse failure rides the entry ladder."
-  def input_with(%__MODULE__{} = c, name, parser)
-      when is_binary(name) and is_function(parser, 1),
-      do: open(c, name, parser, %{codec: "custom", schema: nil, description: ""})
+  @doc """
+  Entry channel with a custom parser, `{:ok, value}` or `{:error, reason}`; a
+  parse failure rides the entry ladder. `description:` is announced as
+  `input/3` announces it; the API names the codec `custom`, so a `schema:`
+  refuses the class as `SchemaInvalid`.
+  """
+  def input_with(%__MODULE__{} = c, name, parser, opts \\ [])
+      when is_binary(name) and is_function(parser, 1) and is_list(opts),
+      do: open(c, name, parser, "custom", opts)
 
   # An entry channel and what the relay's API announces for it.
-  defp open(%__MODULE__{ref: ref}, name, parser, api) do
+  defp open(%__MODULE__{ref: ref}, name, parser, codec, opts) do
     update(ref, fn acc ->
-      entry = Map.merge(api, %{parser: parser, after_nodes: map_size(acc.nodes)})
+      entry = %{
+        codec: codec,
+        schema: opts[:schema],
+        description: Keyword.get(opts, :description, ""),
+        parser: parser,
+        after_nodes: map_size(acc.nodes)
+      }
 
       %{
         acc
@@ -279,7 +286,7 @@ defmodule Flezha.SDK.Channels do
   def call(%Stream{builder: ref} = s, target, opts) when is_list(opts) do
     name = channel_name(Process.get(acc_key(ref)), s.source) <> ".response"
     _ = link(s, {:call, call_end(target, opts, name), opts[:serialize] || (&default_serialize/1)})
-    decode = opts[:decode] || (&default_parse/1)
+    decode = opts[:decode] || (&parse(:bytes, &1))
     input_with(%__MODULE__{ref: ref}, name, &Response.decode(&1, decode))
   end
 
@@ -369,8 +376,13 @@ defmodule Flezha.SDK.Channels do
 
   # --- default codecs ---
 
-  defp default_parse(bytes) when is_binary(bytes), do: {:ok, bytes}
-  defp default_parse(other), do: {:ok, other}
+  defp parse(:json, ""), do: {:ok, nil}
+  defp parse(:json, bytes), do: Jason.decode(bytes)
+
+  defp parse(:text, bytes),
+    do: if(String.valid?(bytes), do: {:ok, bytes}, else: {:error, :invalid_utf8})
+
+  defp parse(_bytes_or_msgpack, bytes), do: {:ok, bytes}
 
   # `output/2`'s serializer, captured by its remote name so the API can tell an
   # output that writes JSON from one with a serializer of its own.

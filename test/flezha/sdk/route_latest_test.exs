@@ -13,8 +13,8 @@ defmodule Flezha.SDK.RouteLatestTest do
     def factory_id, do: "router_op"
 
     def channels(c) do
-      documents = Channels.input(c, "thresholds")
-      trades = Channels.input(c, "trades")
+      documents = Channels.input(c, "thresholds", codec: :text)
+      trades = Channels.input(c, "trades", codec: :text)
 
       c
       |> Channels.route_latest(documents, trades, &(&1 |> String.split(":") |> hd()))

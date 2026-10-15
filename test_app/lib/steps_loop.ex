@@ -158,7 +158,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReply)
@@ -197,7 +197,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.BlockingReply)
@@ -239,7 +239,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("trades")
+      |> input("trades", codec: :text)
       |> key_by(&ElixirRunner.Key.prefix/1)
       |> into(ElixirRunner.StepsLoop.KeyedLoopCount)
       |> output("keyed_loop_steps_out")
@@ -262,7 +262,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.StepsLoop.ChatReply)
       |> output("out")
     end
@@ -365,7 +365,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.StepsLoop.ChatTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReplyUndoable)
@@ -386,7 +386,7 @@ defmodule ElixirRunner.StepsLoop do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.StepsLoop.BenchTurn)
       |> named("mid")
       |> into(ElixirRunner.StepsLoop.ChatReply)
@@ -404,7 +404,7 @@ defmodule ElixirRunner.StepsLoop do
     [first | rest] = steps
 
     rest
-    |> Enum.reduce(c |> input("in") |> into(first), fn step, s ->
+    |> Enum.reduce(c |> input("in", codec: :text) |> into(first), fn step, s ->
       s |> named("edge_" <> step.name()) |> into(step)
     end)
     |> output("out")
@@ -478,7 +478,7 @@ defmodule ElixirRunner.StepsLoop do
     def channels(c),
       do:
         c
-        |> input("input")
+        |> input("input", codec: :text)
         |> into(ElixirRunner.StepsLoop.CompleteFlow)
         |> output("complete_flow_out")
   end
@@ -504,7 +504,11 @@ defmodule ElixirRunner.StepsLoop do
     use Flezha.SDK.Relay, factory_id: "chained_steps", run: {:steps, each: :chained}
 
     def channels(c),
-      do: c |> input("in") |> into(ElixirRunner.StepsLoop.ChainedCountdown) |> named("carry")
+      do:
+        c
+        |> input("in", codec: :text)
+        |> into(ElixirRunner.StepsLoop.ChainedCountdown)
+        |> named("carry")
   end
 
   @doc "The durable-loop and bench steps classes this runner advertises."
@@ -535,7 +539,7 @@ defmodule ElixirRunner.StepsLoop do
     import Flezha.SDK.Channels
 
     c
-    |> input("in")
+    |> input("in", codec: :text)
     |> into(ElixirRunner.StepsLoop.Note)
     |> named("noted")
     |> into(ElixirRunner.StepsLoop.Answer)

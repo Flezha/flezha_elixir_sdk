@@ -380,7 +380,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.Echo)
       |> output("out")
     end
@@ -413,7 +413,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input_with("order", &Jason.decode/1)
+      |> input("order")
       |> into(ElixirRunner.Steps.OncePlaced)
       |> output("placed")
     end
@@ -430,7 +430,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.CommitA)
       |> named("mid")
       |> into(ElixirRunner.Steps.BlockB)
@@ -459,7 +459,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.EffectOnce)
     end
   end
@@ -475,7 +475,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.EffectBlock)
     end
   end
@@ -491,7 +491,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.CommitA)
       |> named("mid")
       |> into(ElixirRunner.Steps.BlockB)
@@ -509,7 +509,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.CommitA)
       |> output_with("mid", fn s -> "a-ran:" <> s end)
       |> into(ElixirRunner.Steps.BlockB)
@@ -529,7 +529,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.TierCommitA)
       |> output_with("mid", & &1)
       |> into(ElixirRunner.Steps.BlockB)
@@ -547,7 +547,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.SagaA)
       |> named("s1")
       |> into(ElixirRunner.Steps.SagaB)
@@ -564,7 +564,7 @@ defmodule ElixirRunner.Steps do
     import Flezha.SDK.Channels
 
     c
-    |> input("in")
+    |> input("in", codec: :text)
     |> into(ElixirRunner.Steps.KeySplit)
     |> named("keys")
     |> key_by(& &1)
@@ -627,7 +627,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.OutboxA)
       |> keyed()
       |> output_with("mid", fn s -> "a-out:" <> s end)
@@ -646,7 +646,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.UndoOutboxA)
       |> output_with("mid", fn s -> "out:" <> s end)
       |> into(ElixirRunner.Steps.UndoC)
@@ -680,7 +680,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.KeySplit)
       |> into(ElixirRunner.Steps.FailedStage)
       |> output_with("mid", fn s -> "lost:" <> s end)
@@ -701,7 +701,7 @@ defmodule ElixirRunner.Steps do
 
       mid =
         c
-        |> input("in")
+        |> input("in", codec: :text)
         |> into(ElixirRunner.Steps.BranchA)
         |> output_with("mid", fn s -> "a:" <> s end)
 
@@ -734,7 +734,7 @@ defmodule ElixirRunner.Steps do
 
       fan =
         c
-        |> input("in")
+        |> input("in", codec: :text)
         |> into(ElixirRunner.Steps.DiamA)
         |> output_with("dfan", fn s -> "a:" <> s end)
 
@@ -764,7 +764,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.RetryA)
       |> output_with("mid", fn s -> "res:" <> s end)
       |> into(ElixirRunner.Steps.RetryFlaky)
@@ -833,7 +833,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.Tick)
       |> named("ticked")
       |> into(ElixirRunner.Steps.Tock)
@@ -879,7 +879,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.EventTick)
       |> output("out")
     end
@@ -913,7 +913,7 @@ defmodule ElixirRunner.Steps do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Steps.StaticCellStep)
       |> output("out")
     end

@@ -90,7 +90,7 @@ defmodule ElixirRunner.Call do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> into(ElixirRunner.Call.Echo) |> output()
+      c |> input("in", codec: :text) |> into(ElixirRunner.Call.Echo) |> output()
     end
   end
 
@@ -103,7 +103,7 @@ defmodule ElixirRunner.Call do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> into(ElixirRunner.Call.Parse)
       |> into(ElixirRunner.Call.Answer)
       |> output()
@@ -119,7 +119,7 @@ defmodule ElixirRunner.Call do
     def channels(c) do
       import Flezha.SDK.Channels
 
-      admitted = c |> input("in") |> into(ElixirRunner.Call.Admit)
+      admitted = c |> input("in", codec: :text) |> into(ElixirRunner.Call.Admit)
 
       admitted
       |> filter(&(not String.starts_with?(&1, "no")))
@@ -143,7 +143,7 @@ defmodule ElixirRunner.Call do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> into(ElixirRunner.Call.Turn) |> output()
+      c |> input("in", codec: :text) |> into(ElixirRunner.Call.Turn) |> output()
     end
   end
 

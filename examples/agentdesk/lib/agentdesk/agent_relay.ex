@@ -17,14 +17,14 @@ defmodule Agentdesk.AgentRelay do
   def channels(c) do
     c
     # entry 1: `flz relay call`
-    |> input("turn")
+    |> input("turn", codec: :text)
     |> into(Reply)
     # to whoever called, and whoever listens
     |> output("answer")
 
     # entry 2: the gateway, into the same Reply
     c
-    |> input_with("message", &Jason.decode/1)
+    |> input("message")
     |> map(& &1["text"])
     |> into(Reply)
   end

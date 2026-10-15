@@ -33,7 +33,7 @@ defmodule Flezha.Bench.DoNothing do
 
   def channels(c) do
     import Flezha.SDK.Channels
-    c |> input("input") |> into(Flezha.Bench.EchoTask) |> output("echo")
+    c |> input("input", codec: :text) |> into(Flezha.Bench.EchoTask) |> output("echo")
   end
 end
 
@@ -120,7 +120,7 @@ defmodule Flezha.Bench.CellStress do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> into(Flezha.Bench.StressA)
     |> named("a_to_b")
     |> into(Flezha.Bench.StressB)
@@ -174,7 +174,7 @@ defmodule Flezha.Bench.DynamicCell do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> filter(fn s -> s != "drop" end)
     |> key_by(&ElixirRunner.Key.prefix/1)
@@ -192,7 +192,7 @@ defmodule Flezha.Bench.BenchEcho do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.EchoTask)
     |> output("echo")
@@ -245,7 +245,7 @@ defmodule Flezha.Bench.BenchKeyed do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.TierStoreTask)
     |> keyed()
@@ -280,7 +280,7 @@ defmodule Flezha.Bench.TierStore do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> retry_backoff_ms(300)
     |> into(Flezha.Bench.TierStoreTask)
@@ -348,7 +348,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
     import Flezha.SDK.Channels
 
     c
-    |> input("input")
+    |> input("input", codec: :text)
     |> on_full(:drop_nothing)
     |> into(Flezha.Bench.BenchCheckpointTask)
     |> keyed()

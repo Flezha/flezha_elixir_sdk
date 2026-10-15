@@ -34,7 +34,7 @@ defmodule Tradedesk.TradeWatcher do
   def channels(c) do
     c
     # JSON from the exchange
-    |> input_with("trades", &Jason.decode/1)
+    |> input("trades")
     # trade messages only
     |> filter(&(&1["channel"] == "trade"))
     # a message into its trades

@@ -13,8 +13,6 @@ defmodule Starter.Relay do
   def channels(c) do
     c
     |> input("hit", description: "Counts visits per page", schema: @hit)
-    # the body arrives as JSON text
-    |> map(&Jason.decode!/1)
     # one cell, and one count, per page
     |> key_by(& &1["page"])
     |> into(Starter.Count)

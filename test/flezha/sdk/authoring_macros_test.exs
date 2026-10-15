@@ -129,7 +129,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      c |> Channels.input("in") |> Channels.into(HandWritten) |> Channels.output("out")
+      c
+      |> Channels.input("in", codec: :text)
+      |> Channels.into(HandWritten)
+      |> Channels.output("out")
     end
   end
 
@@ -508,7 +511,12 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defmodule Place do
     @moduledoc false
-    use Flezha.SDK.Relay, factory_id: "place", output: "placed", input: "order", run: :steps
+    use Flezha.SDK.Relay,
+      factory_id: "place",
+      output: "placed",
+      input: "order",
+      codec: :text,
+      run: :steps
 
     def run(input, state, ctx) do
       emit(ctx, input)
@@ -562,6 +570,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {:ok, short} = Declaration.check(Upcase)
     assert {:ok, hand} = Declaration.check(UpcaseTwinRelay)
     assert entry_names(Upcase) == entry_names(UpcaseTwinRelay)
+    assert codec_of(Upcase, "input") == "json"
     assert sink_names(short) == sink_names(hand)
   end
 
@@ -572,6 +581,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {:ok, _derived} = Declaration.check(Place)
     assert Place.run() == :steps
     assert entry_names(Place) == ["order"]
+    assert codec_of(Place, "order") == "text"
   end
 
   test "a short form that runs in steps declares its loop shape" do
@@ -734,7 +744,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   test "a short form runs" do
     run = start_run(Upcase)
     collect(run, "out")
-    :ok = Local.feed(run, "input", "hello")
+    :ok = Local.feed(run, "input", ~s("hello"))
     :ok = Local.run_until_idle(run, 5_000)
 
     assert ["HELLO"] = Enum.map(drained(), & &1.payload)
@@ -755,6 +765,10 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     {:ok, class} = Declaration.build(module)
     class.json
   end
+
+  defp codec_of(module, channel),
+    do:
+      Enum.find(Jason.decode!(class_json(module))["channels"], &(&1["name"] == channel))["codec"]
 
   defp behaviours(module),
     do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()

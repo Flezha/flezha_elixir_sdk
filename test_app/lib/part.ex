@@ -64,7 +64,12 @@ defmodule ElixirRunner.Part do
 
     def channels(c) do
       import Flezha.SDK.Channels
-      c |> input("in") |> retry_backoff_ms(25) |> into(ElixirRunner.Part.Echo) |> output("answer")
+
+      c
+      |> input("in", codec: :text)
+      |> retry_backoff_ms(25)
+      |> into(ElixirRunner.Part.Echo)
+      |> output("answer")
     end
   end
 
@@ -80,7 +85,7 @@ defmodule ElixirRunner.Part do
       import Flezha.SDK.Channels
 
       c
-      |> input("in")
+      |> input("in", codec: :text)
       |> retry_backoff_ms(25)
       |> into(ElixirRunner.Part.EchoTurn)
       |> output("answer")

@@ -13,7 +13,7 @@ defmodule Echo.Relay do
   @impl true
   def channels(c) do
     c
-    |> input("in")
+    |> input("in", codec: :text)
     |> into(Echo.Tasklet)
     |> output("out")
   end

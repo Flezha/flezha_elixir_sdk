@@ -122,8 +122,9 @@ defmodule Flezha.SDK.Relay do
 
   It generates the tasklet module `Upcase.Tasklet`, whose `name/0` is the
   factory id and which delegates to this module's tasklet callbacks, and a
-  `channels/1` wiring the entry channel (`input:`, `"input"` when absent) into
-  it and, with `output:`, it to that plugin channel. With no `output:` nothing
+  `channels/1` wiring the entry channel (`input:`, `"input"` when absent, read
+  by `codec:` as `Flezha.SDK.Channels.input/3` reads it) into it and, with
+  `output:`, it to that plugin channel. With no `output:` nothing
   leaves the tasklet but its state. `run/3` is written as in a tasklet, with
   the ctx functions and a `state do ... end` block available; the options
   `use Flezha.SDK.Tasklet` takes (`max_cells:`, `logical_clock:`, ...) apply

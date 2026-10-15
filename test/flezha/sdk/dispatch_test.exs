@@ -81,7 +81,35 @@ defmodule Flezha.SDK.DispatchTest do
     use Flezha.SDK.Relay, factory_id: "dispatch_staged", run: {:steps, each: :per_input}
 
     @impl true
-    def channels(c), do: c |> input("in") |> into(Stamp) |> map(&String.trim/1) |> into(Timed)
+    def channels(c),
+      do: c |> input("in", codec: :text) |> into(Stamp) |> map(&String.trim/1) |> into(Timed)
+  end
+
+  defmodule Shown do
+    use Flezha.SDK.Tasklet, name: "shown"
+
+    @impl true
+    def run(input, state, ctx) do
+      emit(ctx, inspect(input))
+      {:ok, state}
+    end
+  end
+
+  # One entry channel per codec into one tasklet, each keyed on its decoded value.
+  defmodule Coded do
+    use Flezha.SDK.Relay, factory_id: "dispatch_coded"
+
+    @impl true
+    def channels(c) do
+      c |> input("json") |> key_by(& &1["page"]) |> into(Shown)
+      c |> input("text", codec: :text) |> key_by(& &1) |> into(Shown)
+
+      c
+      |> input("bytes", codec: :bytes)
+      |> key_by(&Base.encode16/1)
+      |> into(Shown)
+      |> output("out")
+    end
   end
 
   setup_all do
@@ -89,6 +117,7 @@ defmodule Flezha.SDK.DispatchTest do
     {:ok, class} = Declaration.declare(core, Probe)
     :ok = Dispatch.register(class)
     :ok = Dispatch.declare(core, Staged)
+    :ok = Dispatch.declare(core, Coded)
     on_exit(fn -> Native.context_free(core) end)
     %{core: core}
   end
@@ -186,7 +215,12 @@ defmodule Flezha.SDK.DispatchTest do
   end
 
   test "a key request answers each payload's keys", %{env: env} do
-    request = %{channel: 0, payloads: ["b:1", "bad"], want_keys: true, want_event_time: false}
+    request = %{
+      channel: coded("json"),
+      payloads: ["b:1", "bad"],
+      want_keys: true,
+      want_event_time: false
+    }
 
     assert %{outcome: :prepared, prepared: [%{keys: ["b"]}, %{non_retryable: true}]} =
              Dispatch.answer(activation(:key_request, %{key_request: request}), env)
@@ -201,6 +235,50 @@ defmodule Flezha.SDK.DispatchTest do
     # A value the consumer's clock cannot read fails where it is read, as in flow.
     act = activation(:work, %{factory: "dispatch_staged", items: [input("not a number")]})
     assert %{effects: [%{verdict: :retryable}]} = Dispatch.answer(act, env)
+  end
+
+  defp coded(name) do
+    class = :persistent_term.get({Dispatch, "dispatch_coded"})
+    Enum.find(Tuple.to_list(class.channels), &(&1.name == name)).index
+  end
+
+  # What the tasklet shows for `payload`, run on the Cell its decoded value keys to.
+  defp shown(env, channel, payload, key) do
+    act =
+      activation(:work, %{
+        factory: "dispatch_coded",
+        cell_key: key,
+        items: [input(payload, %{channel: coded(channel)})]
+      })
+
+    case Dispatch.answer(act, env) do
+      %{effects: [%{verdict: :ok, outputs: [%{payload: shown}]}]} -> shown
+      %{effects: [%{verdict: verdict}]} -> verdict
+    end
+  end
+
+  test "a JSON entry hands its key and its tasklet the decoded value", %{env: env} do
+    request = %{
+      channel: 0,
+      payloads: [~s({"page":"home"})],
+      want_keys: true,
+      want_event_time: false
+    }
+
+    assert %{prepared: [%{keys: ["home"]}]} =
+             Dispatch.answer(
+               activation(:key_request, %{factory: "dispatch_coded", key_request: request}),
+               env
+             )
+
+    assert shown(env, "json", ~s({"page":"home"}), "home") == ~s(%{"page" => "home"})
+    assert shown(env, "json", "{not json", "home") == :unreadable
+  end
+
+  test "a text entry is its UTF-8 string and a bytes entry its payload as it came", %{env: env} do
+    assert shown(env, "text", "héllo", "héllo") == ~s("héllo")
+    assert shown(env, "text", <<0xFF>>, "x") == :unreadable
+    assert shown(env, "bytes", <<0xFF>>, "FF") == "<<255>>"
   end
 
   test "a firing on a tasklet without on_timer/4 parks by name, not retried", %{env: env} do
