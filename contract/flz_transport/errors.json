@@ -193,6 +193,15 @@
         {"tag": ["forbidden", "role_insufficient"]}
       ]
     },
+    "authz.role_not_issuable": {
+      "class": "invalid",
+      "message": "'{role}' is a role a runner's principal is bound to, so no token is issued for it; issue that principal a runner token and bind '{role}' to it",
+      "hint": "flz role bind <principal> {role} <namespace>",
+      "details": ["role"],
+      "reasons": [
+        {"tag": "role_not_issuable", "args": ["role"]}
+      ]
+    },
     "authz.runner_token_expiry": {
       "class": "invalid",
       "message": "a runner credential cannot expire",
