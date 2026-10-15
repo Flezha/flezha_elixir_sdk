@@ -90,10 +90,14 @@ defmodule Flezha.SDK.Control do
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
   def list_plugins(runner), do: call(runner, "PluginManager.list", [])
 
-  @doc "One cell's live state, and the change sequence it was read at."
-  @spec cell_state(runner(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  def cell_state(runner, relay_id, cell_key),
-    do: call(runner, "Relay.cell_state", [relay_id, cell_key])
+  @doc """
+  A relay's live state, and the change sequence it was read at. `cell` is
+  `<tasklet>[/<cell_key>]`: a tasklet's Cells, or one of them; `nil` reads
+  every Cell of the relay.
+  """
+  @spec cell_state(runner(), String.t(), String.t() | nil) :: {:ok, term()} | {:error, term()}
+  def cell_state(runner, relay_id, cell \\ nil),
+    do: call(runner, "Relay.cell_state", [relay_id, cell])
 
   @doc """
   Any published function, by name.
