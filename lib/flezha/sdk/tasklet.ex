@@ -24,7 +24,9 @@ defmodule Flezha.SDK.Tasklet do
   answers `nil` for a module that declares no state), `run/3` (input, state,
   ctx) returning
   `{:ok, new_state} | {:error, reason} | {:error, {:non_retryable, reason}}`.
-  Optional, with defaults: `cell_keys/0` (static keyset, `[]`), `cells_for/1`,
+  Optional, with defaults: `cell_keys/0` (static keyset, `[]`; a keyset is
+  refused as `topology.cells_for_missing` without `cells_for/1`, which names
+  the keys an input routes to),
   `mailbox_capacity/0` (1024, env `FLEZHA_MAILBOX_CAPACITY`, range 1..=1_048_576),
   `max_cells/0` (100_000 — the cap on a dynamic node's live Cells; at it
   a new key's input is dropped and counted), `idle_ttl_seconds/0` (nil — a
@@ -518,13 +520,6 @@ defmodule Flezha.SDK.Tasklet do
   @doc "Static cell keyset (`[]` unless the tasklet overrides `cell_keys/0`)."
   def cell_keys(module) do
     if exports?(module, :cell_keys, 0), do: module.cell_keys(), else: []
-  end
-
-  @doc "Which static cells an input targets (defaults to the full keyset)."
-  def cells_for(module, input) do
-    if exports?(module, :cells_for, 1),
-      do: module.cells_for(input),
-      else: cell_keys(module)
   end
 
   @doc """

@@ -37,16 +37,10 @@ end
 
 defmodule ElixirRunner.Conformance.StaticTask do
   @moduledoc false
-  use Flezha.SDK.Tasklet, name: "static"
+  use Flezha.SDK.Tasklet, name: "static", cell_keys: ["a", "b"]
 
-  # The role is "the static declaration missing its other half". In this SDK
-  # `cells_for/1` defaults to the whole keyset, so keys without a router are
-  # complete and a router without keys is the incomplete half — the mirror of
-  # the reference's, and the shape `topology.cells_for_missing` names here.
   @impl true
   def run(_input, state, _ctx), do: {:ok, state}
-  @impl true
-  def cells_for(_input), do: ["a"]
   @impl true
   def mailbox_capacity, do: ElixirRunner.Conformance.mailbox_capacity("static")
 end

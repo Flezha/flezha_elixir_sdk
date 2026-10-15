@@ -96,8 +96,20 @@ defmodule Flezha.SDK.DeclarationTest do
 
     def channels(c) do
       c |> Channels.input("in") |> Channels.keyed()
-      c |> Channels.input("other") |> Channels.into(RouterNoKeys)
+      c |> Channels.input("other") |> Channels.named("hop")
     end
+  end
+
+  defmodule Unrouted do
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "unrouted"
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(Keyset)
+  end
+
+  defmodule RouterOnly do
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "router_only"
+    def channels(c), do: c |> Channels.input("in") |> Channels.into(RouterNoKeys)
   end
 
   defp class(module) do
@@ -128,8 +140,7 @@ defmodule Flezha.SDK.DeclarationTest do
 
     [keyset, compensating] = decl["tasklets"]
 
-    assert %{"cell_mode" => "static", "cell_keys" => ~w(a b c d), "cells_for_overridden" => true} =
-             keyset
+    assert %{"cell_mode" => "static", "cell_keys" => ~w(a b c d)} = keyset
 
     assert %{"change_is_nochange" => true, "compensate_overridden" => false, "clock" => "wall"} =
              keyset
@@ -147,8 +158,17 @@ defmodule Flezha.SDK.DeclarationTest do
     assert {:error, %Error{code: "topology.keyed_on_entry", details: details}} =
              Declaration.build(SurfaceRefused)
 
-    assert ["topology.keyed_on_entry", "topology.cells_for_missing"] =
+    assert ["topology.keyed_on_entry", "topology.named_on_entry"] =
              Enum.map(details["issues"], & &1["code"])
+  end
+
+  test "a keyset needs its cells_for/1, and the core is the one that says so" do
+    assert {:error, %Error{code: "topology.cells_for_missing", details: %{"name" => "keyset"}}} =
+             Declaration.check(Unrouted)
+
+    assert %{"cells_for_overridden" => false} = hd(class(Unrouted)["tasklets"])
+    assert %{"cells_for_overridden" => true} = hd(class(RouterOnly)["tasklets"])
+    assert {:ok, _derived} = Declaration.check(RouterOnly)
   end
 
   test "the transport is uds or quic, and the native one is refused by name" do

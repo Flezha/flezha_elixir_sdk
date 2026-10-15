@@ -49,10 +49,12 @@ defmodule Flezha.Bench.StressA do
         {:ok, s}
       )
 
-  # The shared 8-key static set (Rust's `STRESS_KEYS`); B/C/D declare the same
-  # keyset and narrow the routing to `p0` through `cells_for/1`.
+  # The shared 8-key static set (Rust's `STRESS_KEYS`), every key routed; B/C/D
+  # declare the same keyset and narrow the routing to `p0`.
   @impl true
   def cell_keys, do: ~w(p0 p1 p2 p3 p4 p5 p6 p7)
+  @impl true
+  def cells_for(_), do: cell_keys()
 end
 
 defmodule Flezha.Bench.StressB do

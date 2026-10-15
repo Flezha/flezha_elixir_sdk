@@ -372,7 +372,7 @@ defmodule Flezha.SDK.Dispatch do
 
     cond do
       edge && edge.key -> to_string(edge.key.(value)) == key
-      Tasklet.cell_keys(module) != [] -> key in Tasklet.cells_for(module, value)
+      Tasklet.cell_keys(module) != [] -> key in module.cells_for(value)
       true -> true
     end
   end
@@ -544,7 +544,7 @@ defmodule Flezha.SDK.Dispatch do
       if request.want_keys and edge do
         values
         |> Enum.flat_map(fn v ->
-          if edge.key, do: [to_string(edge.key.(v))], else: Tasklet.cells_for(module, v)
+          if edge.key, do: [to_string(edge.key.(v))], else: module.cells_for(v)
         end)
         |> Enum.uniq()
       else

@@ -8,9 +8,8 @@ defmodule Flezha.SDK.Declaration do
   attached to those edges here, for `Flezha.SDK.Dispatch` to run.
 
   What the Elixir surface implies without writing it is declared outright: a
-  tasklet with a keyset and no `cells_for/1` routes to every key, a tasklet
-  exporting `compensate/3` declares its hook, and the clock is the one
-  `Flezha.SDK.Tasklet.clock/1` answers.
+  tasklet exporting `cells_for/1` or `compensate/3` declares that override, and
+  the clock is the one `Flezha.SDK.Tasklet.clock/1` answers.
   """
 
   alias Flezha.SDK.{Channels, Error, Native, Tasklet}
@@ -21,7 +20,6 @@ defmodule Flezha.SDK.Declaration do
 
   # The refusals the builder makes itself, before anything reaches the core.
   @surface_issues %{
-    CellsForMissing: [:name],
     ChannelNamedTwice: [:channel, :named, :output],
     DeferredBuilderSurface: [:module, :reason],
     KeyedOnEntry: [:channel],
@@ -99,7 +97,7 @@ defmodule Flezha.SDK.Declaration do
   end
 
   # What an Elixir tasklet can write that the declaration cannot carry: the
-  # core sees one clock and one router default, so these are judged here.
+  # core sees one clock, so these are judged here.
   defp tasklet_issues(acc) do
     for {_ref, %{module: m} = node} <- Enum.sort_by(acc.nodes, fn {_, n} -> n.seq end),
         name = Channels.node_tasklet_name(node),
@@ -109,17 +107,13 @@ defmodule Flezha.SDK.Declaration do
   end
 
   defp tasklet_issues(module, name) do
-    # A router defaults to the whole keyset here, so a static declaration's
-    # incomplete half is a `cells_for/1` with no keys to route among.
-    router? = Tasklet.exports?(module, :cells_for, 1) and Tasklet.cell_keys(module) == []
-    two_clocks? = Tasklet.exports?(module, :event_time, 1) and Tasklet.logical_clock?(module)
-
-    for(
-      {true, issue} <- [{router?, {:CellsForMissing, name}}, {two_clocks?, {:TwoClocks, name}}],
-      do: issue
-    ) ++
+    retired =
       for {callback, instead} <- Tasklet.retired_callbacks(module),
           do: {:RetiredCallback, name, callback, instead}
+
+    if Tasklet.exports?(module, :event_time, 1) and Tasklet.logical_clock?(module),
+      do: [{:TwoClocks, name} | retired],
+      else: retired
   end
 
   defp declare_on(module, c) do
@@ -390,8 +384,7 @@ defmodule Flezha.SDK.Declaration do
       cell_keys: keys,
       idle_ttl_ms: Tasklet.idle_ttl_ms(module),
       max_cells: if(mode == "dynamic", do: Tasklet.max_cells(module)),
-      # Without `cells_for/1` the host answers the whole keyset.
-      cells_for_overridden: keys != [] or Tasklet.exports?(module, :cells_for, 1),
+      cells_for_overridden: Tasklet.exports?(module, :cells_for, 1),
       compensate_overridden: Tasklet.compensates?(module),
       clock: Atom.to_string(Tasklet.clock(module)),
       mailbox_capacity: Tasklet.mailbox_capacity(module),
