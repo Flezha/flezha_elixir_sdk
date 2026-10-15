@@ -578,6 +578,12 @@
       "hint": "try again in a few seconds: flz relay diagnose {relay} --namespace {namespace}",
       "details": ["relay", "namespace"]
     },
+    "diagnose.unread": {
+      "class": "unavailable",
+      "message": "relay '{relay}' did not answer for its own state ({live_read}), so these findings come from the controller's last verdict alone",
+      "hint": "try again in a few seconds: flz relay diagnose {relay} --namespace {namespace}",
+      "details": ["relay", "live_read", "namespace"]
+    },
     "dlq.bad_entry_ref": {
       "class": "invalid",
       "message": "'{entry}' is not an entry reference; write it as <relay>/<tasklet>/<entry-id>",
