@@ -164,7 +164,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      c |> input("in") |> into(Stateless) |> output("out")
+      c |> input("in") |> into(Stateless) |> named("out")
     end
   end
 

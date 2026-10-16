@@ -12,6 +12,8 @@ defmodule Flezha.SDK.CallBoundsTest do
   """
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
+
   alias Flezha.SDK.{Control, Error, Knob, Local, Runner}
 
   # Longer than the control bound every site waits, so a site that waits with
@@ -46,14 +48,21 @@ defmodule Flezha.SDK.CallBoundsTest do
       local_until_idle: fn -> Local.run_until_idle(w, 50) end
     ]
 
-    answers =
-      sites
-      |> Enum.map(fn {name, call} -> {name, Task.async(call)} end)
-      |> Enum.map(fn {name, task} -> {name, Task.yield(task, @budget) || Task.shutdown(task)} end)
+    {answers, log} =
+      with_log(fn ->
+        sites
+        |> Enum.map(fn {name, call} -> {name, Task.async(call)} end)
+        |> Enum.map(fn {name, task} ->
+          {name, Task.yield(task, @budget) || Task.shutdown(task)}
+        end)
+      end)
 
     for {name, answer} <- answers do
       assert {:ok, {:error, %Error{}}} = answer, "#{name} answered #{inspect(answer)}"
     end
+
+    failed = "[convergence] bounded call failed server=#{inspect(w)}"
+    assert length(String.split(log, failed)) - 1 == length(sites), log
   end
 
   test "nothing else in the SDK waits on its own processes without a bound" do
