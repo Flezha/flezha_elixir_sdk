@@ -1880,10 +1880,10 @@
     "plugin.provider_bad_answer": {
       "class": "internal",
       "message": "the plugin's provider answered with a value it may not return",
-      "details": ["answer"],
+      "details": ["reason"],
       "reasons": [
-        {"tag": "invalid_init_provider_return", "args": ["answer"]},
-        {"tag": "invalid_activate_return", "args": ["answer"]}
+        {"tag": "invalid_init_provider_return", "args": ["reason"]},
+        {"tag": "invalid_activate_return", "args": ["reason"]}
       ]
     },
     "plugin.provider_conflict": {
