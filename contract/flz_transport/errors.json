@@ -3633,7 +3633,7 @@
     "no_topic_in_response", "not_a_regular_file", "not_a_target", "not_an_ed25519_private_key",
     "not_an_object", "not_grouped_hashing",
     "not_in_manifest", "not_pem", "not_reusable", "not_running", "not_seq_addressed", "not_snapshotted",
-    "not_whole_payload", "nothing_to_correct", "part_ahead_of_progress", "partial", "pem_decode_failed",
+    "not_whole_payload", "nothing_to_correct", "overwatch_down", "part_ahead_of_progress", "partial", "pem_decode_failed",
     "permanent", "ping_failed", "precondition_failed", "process_not_found", "progress_ahead",
     "progress_corrupt", "progress_unreadable", "queue_full", "raised", "record_append_failed",
     "refused", "remote_node_rejected", "remove", "replaced", "restart_failed", "retiring", "retries_exhausted",
