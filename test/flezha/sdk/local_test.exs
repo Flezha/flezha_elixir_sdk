@@ -489,8 +489,13 @@ defmodule Flezha.SDK.LocalTest do
     {:ok, run} = Local.start(WordCount)
     ref = Process.monitor(run)
 
-    Process.exit(:sys.get_state(run).pool, :kill)
-    assert_receive {:DOWN, ^ref, :process, ^run, _reason}, 10_000
+    log =
+      capture_log(fn ->
+        Process.exit(:sys.get_state(run).pool, :kill)
+        assert_receive {:DOWN, ^ref, :process, ^run, _reason}, 10_000
+      end)
+
+    assert log =~ "terminating" and log =~ "** (stop) killed"
 
     assert is_pid(start_run(CounterOp))
   end
