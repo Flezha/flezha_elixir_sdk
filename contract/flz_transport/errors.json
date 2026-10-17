@@ -471,7 +471,7 @@
     },
     "diagnose.asleep": {
       "class": "unavailable",
-      "message": "relay '{relay}' is asleep, and the next message wakes it",
+      "message": "relay '{relay}' is suspended at a committed boundary; the next message wakes it on a runner",
       "details": ["relay"]
     },
     "diagnose.data_plane_wedge": {
