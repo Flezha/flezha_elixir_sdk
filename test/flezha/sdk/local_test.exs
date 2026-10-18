@@ -2,8 +2,8 @@ defmodule Flezha.SDK.LocalTest do
   @moduledoc """
   The Elixir SDK's local mode: a user's own relay module, its declared
   two-tasklet graph, and no controller anywhere. `Normalise`, `Tally` and
-  `WordCount` below are the worked example in `docs/quickstart.md`, copied
-  verbatim so the documented graph is the one that runs here.
+  `WordCount` below are the word count of the "Local mode" section of
+  https://github.com/flezha/flezha/blob/main/docs/topics/core/running_and_testing.md#local-mode.
   """
   # async: false: a local run's tasklets reach the test through registered names.
   use ExUnit.Case, async: false
