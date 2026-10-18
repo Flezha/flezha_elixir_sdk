@@ -2885,11 +2885,6 @@
       "message": "the state could not be applied: {reason}",
       "details": ["reason"]
     },
-    "state.apply_not_supported": {
-      "class": "unavailable",
-      "message": "this runner does not apply state to a live relay",
-      "details": []
-    },
     "state.bad_cell_path": {
       "class": "invalid",
       "message": "'{path}' is not a Cell path; write it as <relay>/<tasklet>/<cell_key>",
