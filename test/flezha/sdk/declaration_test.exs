@@ -6,7 +6,7 @@ defmodule Flezha.SDK.DeclarationTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Declaration, Error}
+  alias Flezha.SDK.{Channels, Contract, Declaration, Error}
 
   defmodule Entry do
     use Flezha.SDK.Tasklet, name: "entry"
@@ -117,6 +117,44 @@ defmodule Flezha.SDK.DeclarationTest do
     Jason.decode!(class.json)
   end
 
+  # A row of the shared constants fixture, which the core holds to its sources.
+  defp constant(table, name) do
+    "test/fixtures/wire_constants.txt"
+    |> Contract.path!()
+    |> File.read!()
+    |> String.split("\n")
+    |> Enum.find_value(fn line ->
+      case String.split(line, "|") do
+        [^table, ^name, value] -> String.to_integer(value)
+        _ -> nil
+      end
+    end)
+  end
+
+  test "the builder spells no key the core's declaration never learned" do
+    learned =
+      "test/fixtures/host_class_decl_keys.txt"
+      |> Contract.path!()
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.reject(&String.starts_with?(&1, "#"))
+      |> MapSet.new()
+
+    spelled =
+      for decl <- [class(Defaults), class(Hop)],
+          {section, entries} <- [
+            {"class", [decl]},
+            {"channel", decl["channels"]},
+            {"tasklet", decl["tasklets"]}
+          ],
+          entry <- entries,
+          key <- Map.keys(entry),
+          into: MapSet.new(),
+          do: "#{section}.#{key}"
+
+    assert MapSet.difference(spelled, learned) == MapSet.new()
+  end
+
   test "named/2 names the channel and leaves the tasklet its own name" do
     decl = class(Hop)
     assert Enum.map(decl["tasklets"], & &1["name"]) == ["entry", "next"]
@@ -136,7 +174,8 @@ defmodule Flezha.SDK.DeclarationTest do
   test "the defaults the Elixir surface implies are declared outright" do
     decl = class(Defaults)
     assert decl["run"] == %{"steps" => %{"each" => "per_input"}}
-    assert %{"sdk_lang" => 3, "change_format_id" => 7} = decl
+    assert decl["sdk_lang"] == constant("sdk_lang", "elixir")
+    assert decl["change_format_id"] == constant("format_id", "etf")
 
     [keyset, compensating] = decl["tasklets"]
 
