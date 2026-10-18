@@ -177,5 +177,5 @@
     "recorded_effects": ["effect_block_steps", "effect_flow"],
     "relay_api": ["orders"]
   },
-  "docs": "docs/sdk/elixir_sdk.md"
+  "docs": "docs/internal/sdk/elixir_sdk.md"
 }

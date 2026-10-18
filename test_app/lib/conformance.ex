@@ -138,7 +138,7 @@ defmodule ElixirRunner.Conformance do
 
   Two entry points, both in `ElixirRunner.Application`:
 
-    * `--conformance-report <path>` writes the report `docs/sdk/conformance.md`
+    * `--conformance-report <path>` writes the report `docs/internal/sdk/conformance.md`
       § "The refusal table" specifies and exits 0 without connecting;
     * `FLEZHA_REFUSAL_FIXTURE=<topology id>` registers ONLY that row's
       topology at boot, so a refused one exits non-zero naming its refusal.

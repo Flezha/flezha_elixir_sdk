@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Spawn do
   the handle is the core's: it is read inside the invocation that made it, and
   released when that invocation's activation completes. A failure nobody read
   is logged once by the core. Nothing here faults the invocation: every
-  refusal resolves the handle. The contract is `docs/topics/core/workflows.md`.
+  refusal resolves the handle. The contract is `docs/public/topics/core/workflows.md`.
   """
 
   alias Flezha.SDK.{Ctx, Error, Knob, Native}

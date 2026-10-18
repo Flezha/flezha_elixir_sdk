@@ -6,7 +6,7 @@ controller places them, keeps their state durable, retries failures and moves
 work when a host goes away.
 
 **Support tier:**
-[tier 1](https://github.com/flezha/flezha/blob/main/docs/publishing/maturity.md#sdk-elixir),
+[tier 1](https://github.com/flezha/flezha/blob/main/docs/public/publishing/maturity.md#sdk-elixir),
 run by the maintainer in a live deployment, passes the full conformance run in CI and is
 permanently supported.
 

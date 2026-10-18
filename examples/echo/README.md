@@ -7,7 +7,7 @@ way your own project would.
 It is a runner of its own, a separate BEAM node that connects to a controller
 over its socket. Code running inside the controller's own node is the other way
 to run the SDK, described in
-[`docs/sdk/elixir_sdk.md`](../../../../docs/sdk/elixir_sdk.md).
+[`docs/internal/sdk/elixir_sdk.md`](../../../../docs/internal/sdk/elixir_sdk.md).
 
 Three files, one for each part the guides describe:
 

@@ -41,7 +41,7 @@ defmodule Echo.Application do
     #
     # {:ok, _} = Flezha.SDK.send(runner, "my_echo", "hello world", "in", msg_id: "hello-1")
     #
-    # docs/topics/core/sending_and_calling.md covers sending. An
+    # docs/public/topics/core/sending_and_calling.md covers sending. An
     # enforced controller refuses all of it until
     # `flz role bind runner@default app default`.
 
