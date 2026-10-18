@@ -469,11 +469,6 @@
       "hint": "flz controller start",
       "details": ["socket"]
     },
-    "diagnose.asleep": {
-      "class": "unavailable",
-      "message": "relay '{relay}' is suspended at a committed boundary; the next message wakes it on a runner",
-      "details": ["relay"]
-    },
     "diagnose.data_plane_wedge": {
       "class": "unavailable",
       "message": "relay '{relay}' has had its data plane wedged at the {layer} layer for {seconds}s",
@@ -490,6 +485,12 @@
       "class": "conflict",
       "message": "relay '{relay}' finished as {status}",
       "details": ["relay", "status", "error"]
+    },
+    "diagnose.halted": {
+      "class": "conflict",
+      "message": "relay '{relay}' has been halted for {seconds}s: {reason}",
+      "hint": "fix the cause named here; the controller retries the bind on its own, with a growing delay",
+      "details": ["relay", "seconds", "reason"]
     },
     "diagnose.healthy": {
       "class": "unavailable",
@@ -518,12 +519,6 @@
       "message": "relay '{relay}' has had its outputs unread for {seconds}s",
       "hint": "a listener or output plugin downstream is not reading: flz plugin list --namespace {namespace}",
       "details": ["relay", "seconds", "namespace"]
-    },
-    "diagnose.parked": {
-      "class": "conflict",
-      "message": "relay '{relay}' has been parked for {seconds}s: {reason}",
-      "hint": "fix the cause named here; the controller retries the bind on its own, with a growing delay",
-      "details": ["relay", "seconds", "reason"]
     },
     "diagnose.plugin_disabled": {
       "class": "unavailable",
@@ -565,6 +560,11 @@
       "message": "relay '{relay}' takes input but has not moved forward for {seconds}s ({detail})",
       "hint": "restart the runner it is bound to: flz runner list --namespace {namespace}",
       "details": ["relay", "seconds", "detail", "namespace"]
+    },
+    "diagnose.suspended": {
+      "class": "unavailable",
+      "message": "relay '{relay}' is suspended at a committed boundary; the next message wakes it on a runner",
+      "details": ["relay"]
     },
     "diagnose.unbound": {
       "class": "unavailable",
