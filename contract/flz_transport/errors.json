@@ -3065,11 +3065,6 @@
       "message": "channel '{channel}' calls a factory with create: false and no key_by before the call, so nothing names the instance it may reach; key the chain, or let the call create its callee",
       "details": ["channel"]
     },
-    "topology.cell_keys_without_static_mode": {
-      "class": "invalid",
-      "message": "tasklet '{tasklet}' declares cell_keys without static mode",
-      "details": ["tasklet"]
-    },
     "topology.cells_for_missing": {
       "class": "invalid",
       "message": "tasklet '{name}' declares non-empty cell_keys but does not override cells_for; write its cells_for (a Rust tasklet also sets CELLS_FOR_OVERRIDDEN)",

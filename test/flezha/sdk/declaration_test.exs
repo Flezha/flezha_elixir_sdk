@@ -179,7 +179,7 @@ defmodule Flezha.SDK.DeclarationTest do
 
     [keyset, compensating] = decl["tasklets"]
 
-    assert %{"cell_mode" => "static", "cell_keys" => ~w(a b c d)} = keyset
+    assert %{"cell_keys" => ~w(a b c d)} = keyset
 
     assert %{"change_is_nochange" => true, "compensate_overridden" => false, "clock" => "wall"} =
              keyset

@@ -161,15 +161,8 @@ defmodule Flezha.SDK.Declaration do
         channel(acc, source, index, chains, index_of)
       end
 
-    keyed_nodes =
-      for ch <- channels, chain <- ch.chains, i <- chain.keyed_into, into: MapSet.new(), do: i
-
     node_list = Enum.map(nodes, fn {_ref, node} -> node end)
-
-    tasklets =
-      node_list
-      |> Enum.with_index()
-      |> Enum.map(fn {node, i} -> tasklet(node, MapSet.member?(keyed_nodes, i)) end)
+    tasklets = Enum.map(node_list, &tasklet/1)
 
     decl =
       %{
@@ -311,8 +304,7 @@ defmodule Flezha.SDK.Declaration do
       key: nil,
       sink: nil,
       call: nil,
-      keyed?: false,
-      keyed_into: []
+      keyed?: false
     }
 
     links
@@ -327,14 +319,11 @@ defmodule Flezha.SDK.Declaration do
   defp read_link(:keyed, r, _index_of), do: %{r | keyed?: true}
 
   defp read_link({:into, ref}, r, index_of),
-    do: %{
-      keyed_into(r, index_of[ref])
-      | links: [%{link: "into", tasklet: index_of[ref]} | r.links]
-    }
+    do: %{r | links: [%{link: "into", tasklet: index_of[ref]} | r.links]}
 
   defp read_link({:merge, ref, group}, r, index_of) do
     link = %{link: "merge", tasklet: index_of[ref], group: group}
-    %{keyed_into(r, index_of[ref]) | links: [link | r.links]}
+    %{r | links: [link | r.links]}
   end
 
   defp read_link({:sink, name, serializer}, r, _index_of),
@@ -365,32 +354,22 @@ defmodule Flezha.SDK.Declaration do
   defp read_link({:branch, arms}, r, _index_of),
     do: %{r | links: [%{link: "branch", arms: arms} | r.links]}
 
-  defp keyed_into(%{key: nil} = r, _tasklet), do: r
-  defp keyed_into(r, tasklet), do: %{r | keyed_into: [tasklet | r.keyed_into]}
-
-  defp tasklet(%{module: module} = node, keyed?) do
-    keys = Tasklet.cell_keys(module)
-
-    mode =
-      cond do
-        keys != [] -> "static"
-        keyed? -> "dynamic"
-        true -> "single"
-      end
-
+  defp tasklet(%{module: module} = node) do
     drop_nil(%{
       name: Channels.node_tasklet_name(node),
-      cell_mode: mode,
-      cell_keys: keys,
+      cell_keys: Tasklet.cell_keys(module),
       idle_ttl_ms: Tasklet.idle_ttl_ms(module),
-      max_cells: if(mode == "dynamic", do: Tasklet.max_cells(module)),
+      max_cells: Tasklet.max_cells(module),
       cells_for_overridden: Tasklet.exports?(module, :cells_for, 1),
       compensate_overridden: Tasklet.compensates?(module),
       clock: Atom.to_string(Tasklet.clock(module)),
       mailbox_capacity: Tasklet.mailbox_capacity(module),
       change_is_nochange: not Tasklet.changeful?(module),
       schema_version: Tasklet.schema_version(module),
-      min_readable_schema_version: Tasklet.min_readable_schema_version(module)
+      min_readable_schema_version: Tasklet.min_readable_schema_version(module),
+      migrates:
+        Tasklet.exports?(module, :migrate_state, 2) or
+          Tasklet.exports?(module, :migrate_change, 2)
     })
   end
 
