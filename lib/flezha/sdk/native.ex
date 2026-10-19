@@ -166,6 +166,12 @@ defmodule Flezha.SDK.Native do
   def send_message(_core, _relay, _channel, _message, _msg_id, _key, _local),
     do: :erlang.nif_error(:not_loaded)
 
+  @doc """
+  A `Response` channel payload as the core reads it:
+  `{target, created, request, {:ok, value} | {:error, document}}`.
+  """
+  def response_decode(_payload), do: :erlang.nif_error(:not_loaded)
+
   # --- the local run ---
 
   def local_start(_core, _factory_id, _relay_id), do: :erlang.nif_error(:not_loaded)

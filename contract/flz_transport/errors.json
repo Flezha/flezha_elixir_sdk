@@ -305,6 +305,11 @@
       "hint": "flz dlq list {relay}",
       "details": ["relay", "dlq_ref", "error"]
     },
+    "call.malformed_response": {
+      "class": "invalid",
+      "message": "a Response channel payload is not a call outcome: {reason}",
+      "details": ["reason"]
+    },
     "call.not_accepted": {
       "class": "conflict",
       "message": "relay '{relay}' runs once over one input and has already taken it, so it cannot take the call's input",

@@ -23,7 +23,7 @@ use threads::Thread;
 
 mod atoms {
     rustler::atoms! {
-        ok, kept, run, unrecorded, flz_activation, flz_starved, flz_shutting_down, flz_poll_failed,
+        ok, error, kept, run, unrecorded, flz_activation, flz_starved, flz_shutting_down, flz_poll_failed,
         flz_notice, event_time, processing_time
     }
 }
@@ -427,6 +427,20 @@ fn set_notice_sink(sink: LocalPid) -> NifResult<Atom> {
     veneer::notice::forward_to(&NOTICE_SINKS, sink, threads::send_notice)
         .map_err(|e| refusal(format!("the notice thread did not start: {e}")))?;
     Ok(atoms::ok())
+}
+
+/// A `Response` payload as the core reads it: `{target, created, request,
+/// {:ok, value} | {:error, document}}`.
+#[rustler::nif]
+fn response_decode<'a>(env: Env<'a>, payload: Binary) -> NifResult<Term<'a>> {
+    veneer::response_decode(payload.as_slice(), |r| {
+        let result = match r.result {
+            Ok(value) => (atoms::ok(), bin(env, value)).encode(env),
+            Err(document) => (atoms::error(), document).encode(env),
+        };
+        (r.target, r.created, bin(env, r.request), result).encode(env)
+    })
+    .map_err(refused)
 }
 
 // --- the local run -----------------------------------------------------------------

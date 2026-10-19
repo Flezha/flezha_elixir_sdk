@@ -8,7 +8,7 @@ defmodule Flezha.SDK.Response do
   started the callee.
   """
 
-  alias Flezha.SDK.Error
+  alias Flezha.SDK.{Error, Native}
 
   @enforce_keys [:request, :result, :target, :created]
   defstruct [:request, :result, :target, :created]
@@ -21,37 +21,23 @@ defmodule Flezha.SDK.Response do
         }
 
   @doc """
-  The Response a controller's envelope carries: a JSON object whose `request`
-  and `value` are padded base64 and whose `error` is an error object. `decode`
-  reads the answer's bytes as an `input_with/3` parser does.
+  The Response a controller's envelope carries, read by the core's decoder.
+  `decode` reads the answer's bytes as an `input_with/3` parser does. A
+  payload that is no envelope is `{:error, %Flezha.SDK.Error{}}` with the code
+  `call.malformed_response`.
   """
   @spec decode(binary(), (binary() -> {:ok, term()} | {:error, term()})) ::
           {:ok, t()} | {:error, term()}
   def decode(payload, decode) when is_binary(payload) and is_function(decode, 1) do
-    with {:ok, %{"target" => target, "created" => created, "request" => request} = envelope}
-         when is_binary(target) and is_boolean(created) and is_binary(request) <-
-           Jason.decode(payload),
-         {:ok, request} <- Base.decode64(request),
-         {:ok, result} <- result(envelope, decode) do
+    with {target, created, request, result} <- Native.answered(Native.response_decode(payload)),
+         {:ok, result} <- result(result, decode) do
       {:ok, %__MODULE__{request: request, result: result, target: target, created: created}}
-    else
-      {:error, reason} -> {:error, reason}
-      _malformed -> {:error, :malformed_response_envelope}
     end
   end
 
-  defp result(%{"value" => value}, decode) when is_binary(value) do
-    with {:ok, bytes} <- Base.decode64(value),
-         {:ok, answer} <- decode.(bytes),
-         do: {:ok, {:ok, answer}}
+  defp result({:ok, value}, decode) do
+    with {:ok, answer} <- decode.(value), do: {:ok, {:ok, answer}}
   end
 
-  defp result(%{"error" => error}, _decode) do
-    case Error.from_object(error) do
-      nil -> :error
-      error -> {:ok, {:error, error}}
-    end
-  end
-
-  defp result(_envelope, _decode), do: :error
+  defp result({:error, document}, _decode), do: {:ok, {:error, Error.from_document(document)}}
 end
