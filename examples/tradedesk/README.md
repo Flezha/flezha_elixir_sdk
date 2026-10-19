@@ -1,12 +1,12 @@
-# Tradedesk: the Elixir project for guides Part 2
+# Tradedesk: the Elixir project of the tradedesk tutorial
 
-The toy trader the [Part 2 guides](../../../../docs/guides/guides.md) build, as a
+The toy trader the [tradedesk tutorial](https://github.com/flezha/flezha/blob/main/docs/public/tutorials/tradedesk/tradedesk.md) builds, as a
 standalone project. It depends on `flezha_sdk` and Jason alone, the way your own
 project would; until `flezha_sdk` is released, `mix.exs` names it by a path into
 this checkout ([Building from a checkout](#building-from-a-checkout)).
 
 It holds the desk's two relays and the runner that serves them, a separate
-BEAM node that connects to a controller over its socket. The guides write them
+BEAM node that connects to a controller over its socket. The tutorial writes them
 one tasklet at a time.
 
 | File | What is in it |
@@ -30,9 +30,7 @@ values the tasklets hand each other are plain maps, and the order is an
 ## Run it
 
 You need a controller running, the `trading` namespace created and a key for it
-([`docs/guides/tradedesk/authorization.md`](../../../../docs/guides/tradedesk/authorization.md)
-and
-[`namespaces.md`](../../../../docs/guides/tradedesk/namespaces.md)). From this
+([Open the desk](https://github.com/flezha/flezha/blob/main/docs/public/tutorials/tradedesk/open_the_desk.md) does both). From this
 folder:
 
 ```sh
@@ -137,6 +135,6 @@ package's native library with a Rust toolchain, so it takes a few minutes.
 
 ## Where to go next
 
-The echo in [`../echo`](../echo/README.md) is the Part 1 project, and
-[`docs/guides/runner_deployment.md`](../../../../docs/guides/runner_deployment.md)
+The echo in [`../echo`](../echo/README.md) is the project of the getting-started pages, and
+[Building blocks](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/building_blocks.md)
 walks through what a tasklet, a relay and a runner each are.

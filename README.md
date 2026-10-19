@@ -10,13 +10,21 @@ work when a host goes away.
 run by the maintainer in a live deployment, passes the full conformance run in CI and is
 permanently supported.
 
+## Install
+
 ```elixir
 def deps do
   [{:flezha_sdk, "~> 0.1.0"}]
 end
 ```
 
-Elixir 1.17 or later.
+`flezha_sdk` 0.1.0 is not on Hex yet. Until it is, depend on it by path from a
+checkout as [`examples/echo`](examples/echo/README.md#building-from-a-checkout)
+shows.
+
+## Supported Elixir versions
+
+Elixir 1.17 or newer.
 
 ## Running
 
@@ -32,8 +40,6 @@ issue one with `flz token issue runner@<ns> <ns> runner` and pass it as
 `namespace_secret:`, or set `FLEZHA_NAMESPACE_SECRET`. Connection settings are
 read from the OS environment, then from `config :flezha_sdk, ...`.
 
-`Flezha.SDK.Local` runs a relay's declared graph in your own process with no
-controller at all, holding state in memory only.
 
 ## Declaring a relay
 
@@ -57,61 +63,29 @@ default; a flow instance never sleeps, a steps instance after six hours idle)
 or `:remote`. A setting written under
 the wrong parent does not compile. `Flezha.SDK.Relay` documents the tree.
 
-## Answering a caller, calling a relay
-
-A called relay answers with its outputs: the first output an input causes on an
-output answers the call that input came from, and still reaches the output's
-plugins and listeners. A channel can also end in `call/3`, which sends each
-value to another relay and hands the outcome back on a new entry channel,
-`<channel>.response`:
-
-```elixir
-def channels(c) do
-  turns = c |> input("in") |> into(Turn)
-  turns |> key_by(& &1.session) |> call(factory: "agent", deadline_ms: 60_000) |> into(Turn)
-end
-```
-
-`call/3` takes a target instance (`call(stream, "pricing", deadline_ms: 300)`)
-or `factory:` (with `create: false` to reach only a running instance), a
-required `deadline_ms:`, and optional `channel:`, `answer_channel:` (the
-callee's channel whose output answers), `serialize:` and `decode:`.
-Each outcome is a `%Flezha.SDK.Response{}`: `request` (the bytes sent),
-`result` (`{:ok, answer}` or `{:error, %Flezha.SDK.Error{}}`, a missed deadline
-being `call.timeout`), `target` (the callee's instance id) and `created`.
-
-## A relay's API
-
-Every entry channel is part of its relay's API, with its format and the output
-that answers it. `input/3` takes `codec:` (`:json`, the default, `:text`,
-`:bytes` or `:msgpack`), `description:`, and for a JSON channel `schema:`, a
-JSON Schema map with a `type`; the key and the tasklet receive the payload
-decoded by that codec:
-
-```elixir
-c
-|> input("place", description: "Places an order", schema: %{"type" => "object"})
-|> into(Place)
-|> output("placed")
-```
-
-Application code calls a channel by value with `Flezha.SDK.call/4`, beside
-`Flezha.SDK.send/5`. The value is encoded as `output/2` encodes it, and the
-answer is a JSON value, a string for text, the bytes for the binary formats, or
-`%{"accepted" => true}` from a channel no output answers:
-
-```elixir
-{:ok, placed} = Flezha.SDK.call(runner, "orders-eu", "place", %{"pair" => "EUR/USD", "amount" => 1000})
-```
-
 ## The native library
 
 The runtime is a native library, `Flezha.SDK.Native`, built over `flz_core`. It
 is precompiled for Linux (x86_64, aarch64), macOS (x86_64, arm64) and Windows
 (x86_64), downloaded when the package compiles and checked against the checksum
 file the package carries. On any other host, or with `FLEZHA_SDK_BUILD_NIF=1`,
-it is built from source, which needs a Rust toolchain. A node that never runs a
-runner sets `config :flezha_sdk, socket_nif: false` and compiles no library.
+it is built from source, which needs a Rust toolchain. A checkout carries no
+checksum file, so a build from one always compiles the library from source. A
+node that never runs a runner sets `config :flezha_sdk, socket_nif: false` and
+compiles no library.
+
+## Local mode, testing and the relay API
+
+- **Local mode**: `Flezha.SDK.Local.start/2` runs a relay's declared graph in
+  your own process, with no controller. See
+  [Local mode](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/running_and_testing.md#local-mode).
+- **Testing**: the SDK ships no tasklet test harness yet. See
+  [Check a tasklet on its own](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/running_and_testing.md#check-a-tasklet-on-its-own)
+  for the SDKs that do.
+- **The relay API**: a relay's entry channels, answering a caller, `call/3` to
+  another relay, and `Flezha.SDK.send/5` and `Flezha.SDK.call/4` from
+  application code. See
+  [Sending and calling](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/sending_and_calling.md).
 
 ## Configuration
 
