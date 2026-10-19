@@ -2447,8 +2447,8 @@
     },
     "runtime.connect_unconfirmed": {
       "class": "unreachable",
-      "message": "the controller connect was not confirmed within {seconds}s",
-      "details": ["seconds"]
+      "message": "the controller connect was not confirmed within {wait_ms} ms (FLEZHA_RUNNER_START_WAIT_MS)",
+      "details": ["wait_ms"]
     },
     "runtime.core_in_use": {
       "class": "conflict",
@@ -2474,11 +2474,6 @@
       "class": "unavailable",
       "message": "the {executor} executor cannot run here: {reason}",
       "details": ["executor", "reason"]
-    },
-    "runtime.factory_in_service": {
-      "class": "conflict",
-      "message": "'{module}' cannot be unregistered, because a running runner cannot stop serving a started declaration",
-      "details": ["module"]
     },
     "runtime.factory_run_mismatch": {
       "class": "conflict",

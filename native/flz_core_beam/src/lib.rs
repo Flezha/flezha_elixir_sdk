@@ -183,6 +183,14 @@ fn declare_class(core: ResourceArc<Core>, json: Binary) -> NifResult<Atom> {
     Ok(atoms::ok())
 }
 
+/// Undeclare a class; after start it waits on the runner's live-instance check.
+#[rustler::nif(schedule = "DirtyIo")]
+fn undeclare_class(core: ResourceArc<Core>, factory_id: String) -> NifResult<Atom> {
+    let factory_id = c("factory id", &factory_id)?;
+    veneer::undeclare_class(core.enter()?.ctx(), &factory_id).map_err(refused)?;
+    Ok(atoms::ok())
+}
+
 /// Connect with the settings the SDK read, never the process environment.
 #[rustler::nif(schedule = "DirtyIo")]
 fn start(core: ResourceArc<Core>, namespace: String, settings: Binary) -> NifResult<Atom> {

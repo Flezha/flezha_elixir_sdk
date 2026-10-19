@@ -8,7 +8,12 @@ defmodule Flezha.SDK.NativeTest do
   """
   use ExUnit.Case, async: false
 
+  # Each local run logs the core's banner, asserted in `setup`; the refused
+  # result's retry logs a warning, asserted by its test.
+  @moduletag :capture_log
+
   alias Flezha.SDK.{Channels, Declaration, Dispatch, Native, Timers}
+  alias Flezha.SDK.Test.Notices
 
   defmodule Echo do
     use Flezha.SDK.Tasklet, name: "echo"
@@ -25,9 +30,12 @@ defmodule Flezha.SDK.NativeTest do
   end
 
   setup do
+    Native.notice_sink()
+    Notices.forward()
     core = Native.context_new(Native.schema_version())
     {:ok, class} = Declaration.declare(core, EchoOp)
     :ok = Native.local_start(core, "native_echo", "native_echo-1")
+    Notices.banner()
     :ok = Native.local_on_sink(core, "out")
     thread = Native.poller(core, self())
 
@@ -87,6 +95,9 @@ defmodule Flezha.SDK.NativeTest do
     {thread, %{token: again, items: [%{payload: "once"}]}} = next_activation()
     refute again == token
 
+    assert {:warning, "tasklet echo attempt 1/3 failed (retrying in " <> retry} = Notices.next()
+    assert retry =~ ~s(unknown activation outcome "bogus")
+
     effect = %{verdict: :ok, changes: [], outputs: [], timers: [], event_time: 0}
     assert :ok = Native.complete(core, thread, %{token: again, outcome: :work, effects: [effect]})
     assert :ok = Native.local_run_until_idle(core, 5_000)
@@ -110,13 +121,10 @@ defmodule Flezha.SDK.NativeTest do
     :ok = Dispatch.register(class)
     cells = Dispatch.cells()
 
-    :ets.insert(
-      cells,
-      {{act.relay, act.tasklet, Map.get(act, :cell_key)}, nil, :restored, "native_echo"}
-    )
+    :ets.insert(cells, {{act.relay, act.tasklet, Map.get(act, :cell_key)}, nil, :restored})
 
     assert %{outcome: :work} = Dispatch.answer(act, %{core: core, cells: cells})
-    assert [{_cell, _state, timers, _factory}] = :ets.tab2list(cells)
+    assert [{_cell, _state, timers}] = :ets.tab2list(cells)
     assert Timers.contains?(timers, :processing_time, at)
 
     # The timer is cancelled: a pending one keeps every later local run busy.

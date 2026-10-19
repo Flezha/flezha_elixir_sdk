@@ -113,7 +113,7 @@ defmodule Flezha.SDK.Dispatch do
 
   defp answer_kind(:leave, act, %{env: env, cell: {relay, _, _} = cell}) do
     if act.whole_relay,
-      do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_, :_, :_}),
+      do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_, :_}),
       else: :ets.delete(env.cells, cell)
 
     %{token: act.token, outcome: :state_applied}
@@ -139,23 +139,13 @@ defmodule Flezha.SDK.Dispatch do
 
   defp load(%{env: env, cell: {_, _, key} = cell, module: module}) do
     case :ets.lookup(env.cells, cell) do
-      [{_, state, timers, _factory}] -> {state, timers}
+      [{_, state, timers}] -> {state, timers}
       [] -> {module.init_state(key), Timers.new()}
     end
   end
 
-  defp store(%{env: env, cell: cell, class: class}, state, timers),
-    do: :ets.insert(env.cells, {cell, state, timers, class.factory_id})
-
-  @doc "The relays of `factory_id` with a Cell in `cells` and bound now."
-  @spec relays_of(:ets.tid(), String.t(), [String.t()]) :: [String.t()]
-  def relays_of(cells, factory_id, bound) do
-    cells
-    |> :ets.match({{:"$1", :_, :_}, :_, :_, factory_id})
-    |> List.flatten()
-    |> Enum.uniq()
-    |> Enum.filter(&(&1 in bound))
-  end
+  defp store(%{env: env, cell: cell}, state, timers),
+    do: :ets.insert(env.cells, {cell, state, timers})
 
   defp state_json(state) do
     case Jason.encode(state) do

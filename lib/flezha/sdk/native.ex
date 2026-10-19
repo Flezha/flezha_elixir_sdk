@@ -127,6 +127,8 @@ defmodule Flezha.SDK.Native do
   def check_class(_core, _json), do: :erlang.nif_error(:not_loaded)
   @doc "Declare a class to the core."
   def declare_class(_core, _json), do: :erlang.nif_error(:not_loaded)
+  @doc "Undeclare a class; after start, the runner refuses one with live instances."
+  def undeclare_class(_core, _factory_id), do: :erlang.nif_error(:not_loaded)
   @doc "Connect as `namespace`, with the connection settings as a JSON object."
   def start(_core, _namespace, _settings), do: :erlang.nif_error(:not_loaded)
   @doc "Stop the runner and release every poller."

@@ -5,6 +5,9 @@ defmodule Starter.RelayTest do
   """
   use ExUnit.Case, async: false
 
+  # A local run logs the core's banner: nothing it holds is durable.
+  @moduletag :capture_log
+
   alias Flezha.SDK.Local
 
   test "counts each page on its own" do

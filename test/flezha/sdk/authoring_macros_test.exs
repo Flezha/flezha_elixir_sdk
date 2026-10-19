@@ -10,10 +10,11 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   """
   use ExUnit.Case, async: true
 
-  # A local run logs the core's local-mode banner, asserted in `LocalTest`.
+  # A local run logs the core's local-mode banner, asserted where it starts.
   @moduletag :capture_log
 
   import ExUnit.CaptureIO, only: [with_io: 2]
+  import Flezha.SDK.Test.Notices, only: [start_local: 1]
   import Flezha.SDK.Test.Refused
 
   alias Flezha.SDK.{Channels, Ctx, Declaration, Local, Tasklet}
@@ -148,7 +149,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     assert {[{:add, 7}], 7} = journal(HandWritten, "7")
     assert HandWritten.apply_change(HandWritten.init_state(nil), {:add, 7}) == 7
 
-    run = start_run(HandWrittenRelay)
+    run = start_local(HandWrittenRelay)
     collect(run, "out")
     :ok = Local.feed(run, "in", "1234")
     :ok = Local.run_until_idle(run, 5_000)
@@ -745,7 +746,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   test "a short form runs" do
-    run = start_run(Upcase)
+    run = start_local(Upcase)
     collect(run, "out")
     :ok = Local.feed(run, "input", ~s("hello"))
     :ok = Local.run_until_idle(run, 5_000)
@@ -775,12 +776,6 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
   defp behaviours(module),
     do: module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
-
-  defp start_run(module) do
-    {:ok, run} = Local.start(module)
-    on_exit(fn -> Local.stop(run) end)
-    run
-  end
 
   defp collect(run, channel) do
     reader = self()

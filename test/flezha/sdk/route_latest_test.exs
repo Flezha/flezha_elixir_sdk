@@ -6,10 +6,11 @@ defmodule Flezha.SDK.RouteLatestTest do
   # async: false: one local run per process at a time.
   use ExUnit.Case, async: false
 
-  # A local run logs the core's local-mode banner, asserted in `LocalTest`.
+  # A local run logs the core's local-mode banner, asserted where it starts.
   @moduletag :capture_log
 
   alias Flezha.SDK.{Channels, Declaration, Local}
+  alias Flezha.SDK.Test.Notices
 
   defmodule RouterOp do
     @behaviour Flezha.SDK.Relay
@@ -40,8 +41,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   end
 
   test "a document reaches each key once, on the key's own next trade" do
-    {:ok, run} = Local.start(RouterOp)
-    on_exit(fn -> Local.stop(run) end)
+    run = Notices.start_local(RouterOp)
 
     reader = self()
     :ok = Local.on_output(run, "routed", &send(reader, {:routed, &1.payload}))

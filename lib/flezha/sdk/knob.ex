@@ -34,6 +34,8 @@ defmodule Flezha.SDK.Knob do
     {:quic_addresses, "FLEZHA_QUIC_ADDRESSES", :string, "127.0.0.1:4433"},
     {:quic_client_cert, "FLEZHA_QUIC_CLIENT_CERT", :path, "app_data/certs/client.pem"},
     {:quic_client_key, "FLEZHA_QUIC_CLIENT_KEY", :path, "app_data/certs/client.key"},
+    # How long a start waits for the controller's answer; `0` waits for ever.
+    {:runner_start_wait_ms, "FLEZHA_RUNNER_START_WAIT_MS", :ms, 10_000},
     # A call into one of the runner's own processes: the runner or a local run.
     # None of them runs author code on the answering clause, so a wait here is
     # a wedged process rather than a busy one.

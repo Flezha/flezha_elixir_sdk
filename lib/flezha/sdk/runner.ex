@@ -15,18 +15,22 @@ defmodule Flezha.SDK.Runner do
   # shutdown budget.
   @drain_ms 4_000
 
-  # Inside the core's own ten-second wait for the controller's confirmation.
-  @connect_ms 15_000
+  # Past the core's own start wait, which this call waits on.
+  @call_slack_ms 5_000
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc "Declare and connect; the runner ends normally when it cannot."
-  def connect(server), do: Call.control(server, :connect, error(), @connect_ms)
+  def connect(server) do
+    wait = Knob.get(:runner_start_wait_ms)
+    timeout = if wait == 0, do: :infinity, else: wait + @call_slack_ms
+    Call.control(server, :connect, error(), timeout)
+  end
 
   @doc "Declare one more class to the live core."
   def define(server, module), do: Call.control(server, {:define, module}, error())
 
-  @doc "Stop serving a class; refused while an instance of it is bound."
+  @doc "Stop serving a class; the core refuses while an instance of it is bound."
   def remove(server, factory_id), do: Call.control(server, {:remove, factory_id}, error())
 
   @doc "The relay instances bound on this runner."
@@ -46,7 +50,8 @@ defmodule Flezha.SDK.Runner do
   end
 
   # The settings this node reads, handed to the core: the BEAM keeps its own
-  # copy of the environment, which the core never sees.
+  # copy of the environment, which the core never sees. The start wait is one
+  # of them, so the core waits what this call does.
   defp start_core(core, opts) do
     settings =
       %{
@@ -56,7 +61,8 @@ defmodule Flezha.SDK.Runner do
         ca_cert_path: Knob.get(:ca_cert_path),
         quic_client_cert: Knob.get(:quic_client_cert),
         quic_client_key: Knob.get(:quic_client_key),
-        namespace_secret: Keyword.get(opts, :namespace_secret) || Knob.get(:namespace_secret)
+        namespace_secret: Keyword.get(opts, :namespace_secret) || Knob.get(:namespace_secret),
+        start_wait_ms: Integer.to_string(Knob.get(:runner_start_wait_ms))
       }
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
@@ -73,27 +79,8 @@ defmodule Flezha.SDK.Runner do
 
   def handle_call({:define, module}, _from, s), do: {:reply, Dispatch.declare(s.core, module), s}
 
-  def handle_call({:remove, factory_id}, _from, s) do
-    case Native.answered(Native.relays(s.core)) do
-      {:error, _} = refused ->
-        {:reply, refused, s}
-
-      bound ->
-        case Dispatch.relays_of(s.cells, factory_id, bound) do
-          [] ->
-            {:reply, :ok, s}
-
-          live ->
-            error =
-              Error.new("runtime.relay_type_in_use",
-                factory_id: factory_id,
-                live_instances: length(live)
-              )
-
-            {:reply, {:error, error}, s}
-        end
-    end
-  end
+  def handle_call({:remove, factory_id}, _from, s),
+    do: {:reply, Native.answered(Native.undeclare_class(s.core, factory_id)), s}
 
   def handle_call(:relays, _from, s) do
     case Native.answered(Native.relays(s.core)) do

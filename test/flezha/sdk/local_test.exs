@@ -8,12 +8,14 @@ defmodule Flezha.SDK.LocalTest do
   # async: false: a local run's tasklets reach the test through registered names.
   use ExUnit.Case, async: false
 
-  # Every run logs the core's local-mode banner; the notices test below asserts it.
+  # Every run logs the core's local-mode banner, asserted where it starts.
   @moduletag :capture_log
 
   import ExUnit.CaptureLog, only: [capture_log: 1]
+  import Flezha.SDK.Test.Notices, only: [start_local: 1]
 
   alias Flezha.SDK.{Channels, Local, Spawn}
+  alias Flezha.SDK.Test.Notices
 
   # --- a changeful tasklet, and one that asks for a spawn ---
 
@@ -283,12 +285,6 @@ defmodule Flezha.SDK.LocalTest do
 
   # --- helpers ---
 
-  defp start_run(module) do
-    {:ok, run} = Local.start(module)
-    on_exit(fn -> Local.stop(run) end)
-    run
-  end
-
   defp collect(run, channel) do
     reader = self()
     :ok = Local.on_output(run, channel, fn output -> send(reader, {:sink, output}) end)
@@ -306,53 +302,24 @@ defmodule Flezha.SDK.LocalTest do
 
   # --- the core's notices ---
 
-  defmodule Forward do
-    @moduledoc false
-    # A `:logger` handler sending each event to the test that added it.
-    def log(event, %{config: %{to: test}}), do: send(test, {:logged, event})
-  end
-
-  # The next event logged under the domain `[:flezha]`, as `{level, text}`.
-  defp next_notice do
-    receive do
-      {:logged, %{meta: %{domain: domain}, level: level, msg: {:string, text}}} ->
-        if :flezha in domain,
-          do: {level, IO.chardata_to_string(text)},
-          else: next_notice()
-
-      {:logged, _other} ->
-        next_notice()
-    after
-      10_000 -> flunk("no core notice was logged")
-    end
-  end
-
   test "core notices reach Logger under [:flezha] at FLEZHA_LOG_LEVEL, the banner at any level" do
-    :ok = :logger.add_handler(:local_test_notices, Forward, %{config: %{to: self()}})
-    on_exit(fn -> :logger.remove_handler(:local_test_notices) end)
     on_exit(fn -> System.delete_env("FLEZHA_LOG_LEVEL") end)
-    banner = {:error, "LOCAL MODE: state is held in memory"}
 
     # At `error` the first run's unclaimed output is not logged: the second
     # run's banner, written after it, is the next notice.
     System.put_env("FLEZHA_LOG_LEVEL", "error")
-    first = start_run(WordCount)
+    first = start_local(WordCount)
     :ok = Local.feed(first, "lines", "a")
     :ok = Local.run_until_idle(first, 5_000)
     Local.stop(first)
-    second = start_run(WordCount)
-
-    for _run <- [first, second] do
-      {level, text} = next_notice()
-      assert {level, String.slice(text, 0, String.length(elem(banner, 1)))} == banner
-    end
+    second = start_local(WordCount)
 
     System.delete_env("FLEZHA_LOG_LEVEL")
     :ok = Local.feed(second, "lines", "a")
     :ok = Local.run_until_idle(second, 5_000)
 
     assert {:warning, "local mode: 3 bytes were released on output `counts`" <> _} =
-             next_notice()
+             Notices.next()
   end
 
   # --- the graph runs ---
@@ -365,7 +332,7 @@ defmodule Flezha.SDK.LocalTest do
       :persistent_term.erase({Stamper, :tried})
     end)
 
-    run = start_run(StamperOp)
+    run = start_local(StamperOp)
 
     :ok = Local.feed(run, "in", "flaky")
     assert_receive {:stamp, "flaky", first}, 5_000
@@ -392,7 +359,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   test "the worked example releases the output every core's local mode releases" do
-    run = start_run(WordCount)
+    run = start_local(WordCount)
     collect(run, "counts")
 
     Enum.each(scenario_rows("lines: "), &(:ok = Local.feed(run, "lines", &1)))
@@ -407,7 +374,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   test "one Cell exists per resolved key" do
-    run = start_run(WordCount)
+    run = start_local(WordCount)
     collect(run, "counts")
 
     :ok = Local.feed(run, "lines", "a b a c")
@@ -417,7 +384,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   test "a filtered value never reaches the consumer and flat_map fans out" do
-    run = start_run(WordCount)
+    run = start_local(WordCount)
     collect(run, "counts")
 
     :ok = Local.feed(run, "lines", "# a comment line")
@@ -428,7 +395,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   test "a keyed output carries the identity a deployed run would stamp" do
-    run = start_run(WordCount)
+    run = start_local(WordCount)
     collect(run, "counts")
 
     :ok = Local.feed(run, "lines", "fox")
@@ -441,7 +408,7 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   test "a changeful tasklet releases its outputs and nothing of its records" do
-    run = start_run(CounterOp)
+    run = start_local(CounterOp)
     collect(run, "c")
 
     :ok = Local.feed(run, "in", "2")
@@ -454,7 +421,7 @@ defmodule Flezha.SDK.LocalTest do
   # --- what local mode refuses ---
 
   test "an unknown channel is refused, naming the channel and the relay" do
-    run = start_run(WordCount)
+    run = start_local(WordCount)
 
     assert {:error, %{code: "runtime.channel_undeclared", message: entry}} =
              Local.feed(run, "lynes", "x")
@@ -481,7 +448,7 @@ defmodule Flezha.SDK.LocalTest do
 
   test "a flow tasklet's completion is the controller's to act on: a local run runs on" do
     Process.register(self(), @closer_probe)
-    run = start_run(CloserOp)
+    run = start_local(CloserOp)
     collect(run, "out")
 
     log =
@@ -507,7 +474,7 @@ defmodule Flezha.SDK.LocalTest do
 
   test "a run still working when the budget elapses is reported, not passed off as done" do
     Process.register(self(), @held_probe)
-    run = start_run(HeldOp)
+    run = start_local(HeldOp)
 
     :ok = Local.feed(run, "in", "x")
     assert_receive {:held, cell}, 5_000
@@ -526,11 +493,11 @@ defmodule Flezha.SDK.LocalTest do
     assert %Flezha.SDK{modules: [WordCount]} =
              "local-mode" |> Flezha.SDK.create_runner() |> Flezha.SDK.register_factory(WordCount)
 
-    assert is_pid(start_run(WordCount))
+    assert is_pid(start_local(WordCount))
   end
 
   test "an effect that throws is released, so the next one in the invocation runs" do
-    run = start_run(EffectorOp)
+    run = start_local(EffectorOp)
     collect(run, "out")
 
     :ok = Local.feed(run, "in", "x")
@@ -540,7 +507,9 @@ defmodule Flezha.SDK.LocalTest do
 
   test "a run whose pool died still frees the core for the next run" do
     Process.flag(:trap_exit, true)
+    Notices.forward()
     {:ok, run} = Local.start(WordCount)
+    Notices.banner()
     ref = Process.monitor(run)
 
     log =
@@ -551,19 +520,19 @@ defmodule Flezha.SDK.LocalTest do
 
     assert log =~ "terminating" and log =~ "** (stop) killed"
 
-    assert is_pid(start_run(CounterOp))
+    assert is_pid(start_local(CounterOp))
   end
 
   test "one local run is live in this VM at a time" do
-    first = start_run(WordCount)
+    first = start_local(WordCount)
     assert {:error, %Flezha.SDK.Error{code: "runtime.core_in_use"}} = Local.start(CounterOp)
 
     :ok = Local.stop(first)
-    assert is_pid(start_run(CounterOp))
+    assert is_pid(start_local(CounterOp))
   end
 
   test "a tasklet's spawn request is answered unavailable at once: there is no control plane" do
-    run = start_run(SpawnerOp)
+    run = start_local(SpawnerOp)
     collect(run, "out")
 
     :ok = Local.feed(run, "in", "w-local")
