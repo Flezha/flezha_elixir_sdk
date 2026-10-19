@@ -77,10 +77,9 @@ defmodule Flezha.SDK.Dispatch do
     %{token: act.token, outcome: :snapshot, state: encode_term(state)}
   end
 
-  defp answer_kind(kind, act, at) when kind in [:live_state_read, :migration_serialize] do
+  defp answer_kind(:live_state_read, act, at) do
     {state, _timers} = load(at)
-    outcome = if kind == :live_state_read, do: :state_json, else: :migration_state
-    %{token: act.token, outcome: outcome, json: state_json(state)}
+    %{token: act.token, outcome: :state_json, json: state_json(state)}
   end
 
   defp answer_kind(:apply_state, act, %{module: module} = at) do

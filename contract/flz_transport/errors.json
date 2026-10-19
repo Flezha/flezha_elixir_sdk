@@ -2860,6 +2860,11 @@
         {"tag": "partial_drain", "args": ["still_local"]}
       ]
     },
+    "spawn.if_running_without_id": {
+      "class": "invalid",
+      "message": "if_running applies only to a running instance named by an id; pass an id with if_running, or leave if_running out to start a new instance",
+      "details": []
+    },
     "spawn.outside_invocation": {
       "class": "invalid",
       "message": "spawn_steps of factory '{factory}' was called outside the invocation it belongs to: from another process, or after it returned",

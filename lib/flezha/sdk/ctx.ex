@@ -190,7 +190,8 @@ defmodule Flezha.SDK.Ctx do
   With `id:` the instance starts under that id when it is free; while it runs,
   `if_running: :deliver` (the default) hands it `payload` as one more input and
   `if_running: :error` resolves `already_running`. `if_running:` without `id:`
-  raises `ArgumentError` and sends nothing.
+  resolves the core's `spawn.if_running_without_id` at the call and sends
+  nothing.
 
   Without `id:` the controller generates one, and every call starts a new
   instance: a call reissued after a lost or timed-out answer starts a second

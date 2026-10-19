@@ -56,7 +56,8 @@ defmodule Flezha.SDK.LocalTest do
 
     @impl true
     def run(instance_id, state, ctx) do
-      handle = spawn_steps(ctx, "worker", "payload", id: instance_id)
+      opts = if instance_id == "no-id", do: [if_running: :error], else: [id: instance_id]
+      handle = spawn_steps(ctx, "worker", "payload", opts)
       {:error, refusal} = Spawn.await(handle, 5_000)
       emit(ctx, refusal.code)
       {:ok, state}
@@ -538,5 +539,14 @@ defmodule Flezha.SDK.LocalTest do
     :ok = Local.feed(run, "in", "w-local")
     assert :ok = Local.run_until_idle(run, 5_000)
     assert payloads() == ["spawn.unavailable"]
+  end
+
+  test "if_running without an id resolves the core's refusal at the call" do
+    run = start_local(SpawnerOp)
+    collect(run, "out")
+
+    :ok = Local.feed(run, "in", "no-id")
+    assert :ok = Local.run_until_idle(run, 5_000)
+    assert payloads() == ["spawn.if_running_without_id"]
   end
 end

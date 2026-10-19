@@ -129,10 +129,8 @@ defmodule Flezha.SDK.Control do
   defp started(_other),
     do: {:error, Error.new("control.unreadable_answer", verb: "Relay.start")}
 
-  @doc false
-  # The `keys` set in `opts`, added to `fields` under their names; the
-  # runner's send reads its own options the same way.
-  def given(fields, opts, keys) do
+  # The `keys` set in `opts`, added to `fields` under their names.
+  defp given(fields, opts, keys) do
     for key <- keys,
         (value = Keyword.get(opts, key)) != nil,
         into: fields,

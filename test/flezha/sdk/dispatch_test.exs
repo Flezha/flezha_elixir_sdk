@@ -199,7 +199,7 @@ defmodule Flezha.SDK.DispatchTest do
     assert error =~ "no migration from schema_version 1"
   end
 
-  test "a snapshot, a state applied and a migration read answer the Cell", %{env: env} do
+  test "a snapshot, a state applied and a state read answer the Cell", %{env: env} do
     assert %{outcome: :state_applied} =
              Dispatch.answer(activation(:apply_state, %{state_json: ~s({"value": 4})}), env)
 
@@ -208,8 +208,8 @@ defmodule Flezha.SDK.DispatchTest do
 
     assert :erlang.binary_to_term(state) == %{value: 4}
 
-    assert %{outcome: :migration_state, json: json} =
-             Dispatch.answer(activation(:migration_serialize, %{}), env)
+    assert %{outcome: :state_json, json: json} =
+             Dispatch.answer(activation(:live_state_read, %{}), env)
 
     assert Jason.decode!(json) == %{"value" => 4}
   end

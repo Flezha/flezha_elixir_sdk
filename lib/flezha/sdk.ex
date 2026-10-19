@@ -167,20 +167,15 @@ defmodule Flezha.SDK do
   @spec send(result() | pid() | atom(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, term()} | {:error, Error.t()}
   def send(runner, relay_id, message, channel, opts \\ []) do
-    fields = Flezha.SDK.Control.given(%{}, opts, [:msg_id, :key])
+    [msg_id, key] = Enum.map([:msg_id, :key], &to_string(opts[&1]))
+    local = Keyword.get(opts, :local, false)
 
-    cond do
-      not Keyword.get(opts, :local, false) ->
-        args = [relay_id, message, channel | if(fields == %{}, do: [], else: [fields])]
-        Flezha.SDK.Control.call(runner, "Relay.send", args)
-
-      fields != %{} ->
-        other = Enum.find(["msg_id", "key"], &Map.has_key?(fields, &1))
-        {:error, Error.new("usage.options_conflict", option: "local", other: other)}
-
-      true ->
-        send_local(runner, relay_id, message, channel)
-    end
+    with {:ok, core} <- core(runner),
+         json when is_binary(json) <-
+           Native.answered(
+             Native.send_message(core, relay_id, channel, message, msg_id, key, local)
+           ),
+         do: {:ok, Jason.decode!(json)}
   end
 
   @doc """
@@ -216,15 +211,6 @@ defmodule Flezha.SDK do
   @spec relays(result() | pid() | atom()) :: {:ok, [String.t()]} | {:error, Error.t()}
   def relays(runner) do
     with {:ok, server} <- server(runner), do: Runner.relays(server)
-  end
-
-  defp send_local(runner, relay_id, message, channel) do
-    with {:ok, core} <- core(runner) do
-      case Native.answered(Native.send_message(core, relay_id, channel, message, "", "", true)) do
-        {:error, _} = refused -> refused
-        _null -> {:ok, nil}
-      end
-    end
   end
 
   @doc "Block until the runner terminates."

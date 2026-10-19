@@ -27,8 +27,9 @@ defmodule Flezha.SDK.Spawn do
 
   @typedoc """
   `id:` names the instance; without it the controller generates one and the
-  request always starts a new instance. `if_running:` needs an `id:` and
-  defaults to `:deliver`.
+  request always starts a new instance. `if_running:` needs an `id:` (the core
+  refuses it without one, `spawn.if_running_without_id`) and defaults to
+  `:deliver`.
   """
   @type option :: {:id, String.t()} | {:if_running, if_running()}
 
@@ -57,7 +58,7 @@ defmodule Flezha.SDK.Spawn do
         factory_id,
         instance_id,
         payload,
-        Atom.to_string(if_running),
+        if_running,
         ctx.replay?,
         ctx.offset
       )
@@ -69,26 +70,18 @@ defmodule Flezha.SDK.Spawn do
     end
   end
 
-  # An empty instance id is the wire's request for a generated one. A policy is
-  # refused without an id, because a request without one never finds a running
-  # instance to apply it to.
+  # An empty instance id is the wire's request for a generated one, and an empty
+  # policy the core's default; the core refuses a policy without an id.
   defp options!(opts) do
     opts = Keyword.validate!(opts, [:id, :if_running])
 
     case {opts[:id], opts[:if_running]} do
-      {nil, nil} ->
-        {"", :deliver}
-
-      {nil, _policy} ->
-        raise ArgumentError,
-              "spawn_steps: `if_running` needs an `id`; without one every spawn starts a new instance"
-
-      {id, _policy} when not is_binary(id) or id == "" ->
+      {id, _policy} when not (is_nil(id) or (is_binary(id) and id != "")) ->
         raise ArgumentError,
               "spawn_steps: `id` must be a non-empty string, got: #{inspect(id)}"
 
       {id, policy} when policy in [nil, :deliver, :error] ->
-        {id, policy || :deliver}
+        {id || "", to_string(policy)}
 
       {_id, policy} ->
         raise ArgumentError,
