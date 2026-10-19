@@ -61,7 +61,8 @@ end
 effectively-once tier) or `:steps`; `durable` is `false`, `:local` (the
 default; a flow instance never sleeps, a steps instance after six hours idle)
 or `:remote`. A setting written under
-the wrong parent does not compile. `Flezha.SDK.Relay` documents the tree.
+the wrong parent is refused when the class is registered, as
+`topology.unknown_field`. `Flezha.SDK.Relay` documents the tree.
 
 ## The native library
 

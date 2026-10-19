@@ -35,58 +35,21 @@ defmodule Flezha.SDK.Relay do
   `sleep_after` defaults by the run: a flow instance never sleeps, a steps
   instance sleeps after six hours; `false` never sleeps.
 
-  A setting written under a parent that does not carry it is a `CompileError`
-  naming the setting and the parent. A module that writes the callbacks by
-  hand (`@behaviour Flezha.SDK.Relay`) meets the same check at
-  registration, as `topology.unknown_field`.
+  The core judges the tree when the class is registered: a setting written
+  under a parent that does not carry it is refused as `topology.unknown_field`
+  naming the setting and the parent, and a value outside its choices as
+  `topology.invalid_setting`, whether `use` or hand-written callbacks
+  (`@behaviour Flezha.SDK.Relay`) answer the tree.
 
   A tasklet of either run ends its instance with `complete/2`: a flow
   instance runs what its Cells already hold to its outputs first.
   `max_duration_ms` is a wall-clock stop for either run.
   """
 
-  alias Flezha.SDK.{Error, Tasklet}
+  alias Flezha.SDK.Tasklet
 
   # The scalar settings `use` takes, each named after the callback it defines.
   @use_options [:description, :max_duration_ms, :run, :durable]
-
-  @six_hours_ms 6 * 60 * 60 * 1000
-
-  defstruct description: nil,
-            max_duration_ms: nil,
-            run: :flow,
-            exactly: :at_least_once,
-            checkpoint: nil,
-            correction: nil,
-            each: :once,
-            on_failure: :undo_all,
-            durable: :local,
-            sleep_after_ms: nil
-
-  @typedoc """
-  The tree, read and checked: the chosen run with its members (the other
-  run's stay at their defaults), and the durability level with its sleep
-  interval (`nil`: never sleeps).
-  """
-  @type t :: %__MODULE__{
-          description: String.t() | nil,
-          max_duration_ms: pos_integer() | nil,
-          run: :flow | :steps,
-          exactly: :at_least_once | :effectively_once,
-          checkpoint:
-            nil
-            | %{
-                every: non_neg_integer() | nil,
-                max_delay_ms: non_neg_integer() | nil,
-                outputs: :as_produced | :at_checkpoint
-              },
-          correction:
-            nil | %{window_ms: non_neg_integer(), beyond_window: :process_as_arrival | :drop},
-          each: :once | :per_input | :chained,
-          on_failure: :undo_all | :keep_progress,
-          durable: :memory | :local | :remote,
-          sleep_after_ms: pos_integer() | nil
-        }
 
   @doc """
   Write a relay as a declaration rather than as one-line callbacks.
@@ -102,8 +65,7 @@ defmodule Flezha.SDK.Relay do
   `durable` are optional, and **only the options written define anything**, so
   a default stays where `settings/1` resolves it. `channels/1` takes an
   argument and stays a `def` the author writes. An unknown option is a
-  `CompileError` naming it, and so is a setting of the tree written under a
-  parent that does not carry it, or a value outside its choices.
+  `CompileError` naming it; the tree itself is judged at registration.
 
   `Flezha.SDK.Channels` is imported, so a whole pipe, a merge included, is
   written with no module prefix.
@@ -133,15 +95,7 @@ defmodule Flezha.SDK.Relay do
   beginning `topology.short_form_with_topology`, and writing neither is one
   naming both.
   """
-  defmacro __using__(opts) do
-    quoted = Tasklet.__relay_using__(opts, @use_options, __MODULE__)
-
-    with {:error, issue} <- parse(Keyword.fetch!(opts, :factory_id), opts) do
-      raise CompileError, description: "`use #{inspect(__MODULE__)}`: " <> message(issue)
-    end
-
-    quoted
-  end
+  defmacro __using__(opts), do: Tasklet.__relay_using__(opts, @use_options, __MODULE__)
 
   @doc "Stable, controller-facing factory identifier."
   @callback factory_id() :: String.t()
@@ -167,248 +121,4 @@ defmodule Flezha.SDK.Relay do
   @callback durable() :: term()
 
   @optional_callbacks description: 0, max_duration_ms: 0, run: 0, durable: 0
-
-  @doc false
-  # The tree as `use` options or callback answers, read into `t()`.
-  @spec parse(term(), keyword()) :: {:ok, t()} | {:error, tuple()}
-  def parse(factory_id, values) do
-    with {:ok, settings} <- class(values),
-         {:ok, settings} <- run(Keyword.get(values, :run), settings),
-         {:ok, settings} <- durable(Keyword.get(values, :durable), settings) do
-      {:ok, settle_sleep(settings)}
-    else
-      {:error, {:unknown, parent, fields}} ->
-        {:error, {:UnknownField, "'#{parent}' of relay '#{factory_id}'", fields}}
-
-      {:error, {:invalid, setting, value, expected}} ->
-        {:error, {:InvalidSetting, "relay '#{factory_id}'", setting, value, expected}}
-    end
-  end
-
-  # --- the class members ---
-
-  defp class(values) do
-    with {:ok, description} <- optional(values, :description, &is_binary/1, "a string"),
-         {:ok, max} <-
-           optional(
-             values,
-             :max_duration_ms,
-             &pos_integer?/1,
-             "a positive number of milliseconds"
-           ) do
-      {:ok, %__MODULE__{description: description, max_duration_ms: max}}
-    end
-  end
-
-  defp optional(values, key, valid?, expected) do
-    case Keyword.get(values, key) do
-      nil -> {:ok, nil}
-      value -> if valid?.(value), do: {:ok, value}, else: invalid(key, value, expected)
-    end
-  end
-
-  # --- run ---
-
-  defp run(nil, settings), do: {:ok, settings}
-
-  defp run(value, settings) do
-    case branch(:run, value, [:flow, :steps]) do
-      {:ok, {:flow, members}} -> flow(members, settings)
-      {:ok, {:steps, members}} -> steps(members, settings)
-      error -> error
-    end
-  end
-
-  defp flow(members, settings) do
-    with :ok <- only(:flow, members, [:exactly]),
-         {:ok, settings} <- exactly(Keyword.get(members, :exactly), settings),
-         do: {:ok, %{settings | run: :flow}}
-  end
-
-  defp steps(members, settings) do
-    with :ok <- only(:steps, members, [:each, :on_failure]),
-         {:ok, each} <-
-           named(:each, Keyword.get(members, :each), [:once, :per_input, :chained], :once),
-         {:ok, on_failure} <-
-           named(
-             :on_failure,
-             Keyword.get(members, :on_failure),
-             [:undo_all, :keep_progress],
-             :undo_all
-           ),
-         do: {:ok, %{settings | run: :steps, each: each, on_failure: on_failure}}
-  end
-
-  defp exactly(nil, settings), do: {:ok, settings}
-
-  defp exactly(value, settings) do
-    case branch(:exactly, value, [:at_least_once, :effectively_once]) do
-      {:ok, {:at_least_once, members}} ->
-        with :ok <- only(:at_least_once, members, []), do: {:ok, settings}
-
-      {:ok, {:effectively_once, members}} ->
-        effectively_once(members, settings)
-
-      error ->
-        error
-    end
-  end
-
-  defp effectively_once(members, settings) do
-    with :ok <- only(:effectively_once, members, [:ack, :correction_ms, :beyond_window]),
-         {:ok, checkpoint} <- ack(Keyword.get(members, :ack)),
-         {:ok, window} <- integer(:correction_ms, Keyword.get(members, :correction_ms)),
-         {:ok, beyond} <-
-           named(
-             :beyond_window,
-             Keyword.get(members, :beyond_window),
-             [:process_as_arrival, :drop],
-             :process_as_arrival
-           ) do
-      {:ok,
-       %{
-         settings
-         | exactly: :effectively_once,
-           checkpoint: checkpoint,
-           correction: correction(window, beyond)
-       }}
-    end
-  end
-
-  # A beyond-window fate with no window is a window of zero, which is refused:
-  # a fate for a window nobody declared is an authoring error, not a default.
-  defp correction(nil, :process_as_arrival), do: nil
-  defp correction(window, beyond), do: %{window_ms: window || 0, beyond_window: beyond}
-
-  defp ack(nil), do: {:ok, nil}
-
-  defp ack(value) do
-    case branch(:ack, value, [:per_input, :checkpoint]) do
-      {:ok, {:per_input, members}} ->
-        with :ok <- only(:per_input, members, []), do: {:ok, nil}
-
-      {:ok, {:checkpoint, members}} ->
-        checkpoint(members)
-
-      error ->
-        error
-    end
-  end
-
-  defp checkpoint(members) do
-    with :ok <- only(:checkpoint, members, [:every, :max_delay_ms, :outputs]),
-         {:ok, every} <- integer(:every, Keyword.get(members, :every)),
-         {:ok, delay} <- integer(:max_delay_ms, Keyword.get(members, :max_delay_ms)),
-         {:ok, outputs} <-
-           named(
-             :outputs,
-             Keyword.get(members, :outputs),
-             [:as_produced, :at_checkpoint],
-             :as_produced
-           ),
-         do: {:ok, %{every: every, max_delay_ms: delay, outputs: outputs}}
-  end
-
-  # --- durable ---
-
-  defp durable(nil, settings), do: {:ok, %{settings | sleep_after_ms: :run_default}}
-  defp durable(false, settings), do: {:ok, %{settings | durable: :memory, sleep_after_ms: nil}}
-
-  defp durable(value, settings) do
-    case branch(:durable, value, [false, :local, :remote]) do
-      {:ok, {false, members}} ->
-        with :ok <- only(false, members, []),
-             do: {:ok, %{settings | durable: :memory, sleep_after_ms: nil}}
-
-      {:ok, {level, members}} ->
-        with :ok <- only(level, members, [:sleep_after]),
-             {:ok, after_ms} <- sleep_after(Keyword.fetch(members, :sleep_after)),
-             do: {:ok, %{settings | durable: level, sleep_after_ms: after_ms}}
-
-      error ->
-        error
-    end
-  end
-
-  defp sleep_after(:error), do: {:ok, :run_default}
-  defp sleep_after({:ok, false}), do: {:ok, nil}
-  defp sleep_after({:ok, ms}) when is_integer(ms) and ms > 0, do: {:ok, ms}
-
-  defp sleep_after({:ok, other}),
-    do: invalid(:sleep_after, other, "a positive number of milliseconds or false")
-
-  # A sleeping flow instance has its input journaled before it is forwarded,
-  # so a flow class pays for it only when it asks to sleep.
-  defp settle_sleep(%{sleep_after_ms: :run_default, run: run} = settings),
-    do: %{settings | sleep_after_ms: if(run == :steps, do: @six_hours_ms)}
-
-  defp settle_sleep(settings), do: settings
-
-  # --- the shapes every "one of" is written in ---
-
-  # A branch as the tree writes it: a bare name, or `{name, members}` with the
-  # members a keyword list.
-  defp branch(setting, value, names) do
-    case value do
-      name when is_atom(name) ->
-        choose(setting, name, [], names)
-
-      {name, members} when is_atom(name) and is_list(members) ->
-        choose(setting, name, members, names)
-
-      other ->
-        invalid(setting, other, expected(names))
-    end
-  end
-
-  defp choose(setting, name, members, names) do
-    cond do
-      name not in names -> invalid(setting, name, expected(names))
-      not Keyword.keyword?(members) -> invalid(name, members, "a keyword list")
-      true -> {:ok, {name, members}}
-    end
-  end
-
-  # Any member of `parent` outside `known` is written under the wrong parent.
-  defp only(parent, members, known) do
-    case for({key, _value} <- members, key not in known, do: key) |> Enum.uniq() do
-      [] -> :ok
-      unknown -> {:error, {:unknown, shown(parent), Enum.map_join(unknown, ", ", &shown/1)}}
-    end
-  end
-
-  # A leaf choice: a bare name of `names`, `default` when absent.
-  defp named(_setting, nil, _names, default), do: {:ok, default}
-
-  defp named(setting, value, names, _default) do
-    with {:ok, {name, members}} <- branch(setting, value, names),
-         :ok <- only(name, members, []),
-         do: {:ok, name}
-  end
-
-  defp integer(_setting, nil), do: {:ok, nil}
-  defp integer(_setting, n) when is_integer(n) and n >= 0, do: {:ok, n}
-  defp integer(setting, other), do: invalid(setting, other, "a non-negative integer")
-
-  defp invalid(setting, value, expected),
-    do: {:error, {:invalid, shown(setting), shown(value), expected}}
-
-  defp expected(names), do: Enum.map_join(names, " | ", &shown/1)
-
-  defp shown(value) when is_atom(value), do: Atom.to_string(value)
-  defp shown(value), do: inspect(value)
-
-  defp pos_integer?(value), do: is_integer(value) and value > 0
-
-  defp message({:UnknownField, declaration, fields}),
-    do: Error.new("topology.unknown_field", declaration: declaration, fields: fields).message
-
-  defp message({:InvalidSetting, declaration, setting, value, expected}) do
-    Error.new("topology.invalid_setting",
-      declaration: declaration,
-      setting: setting,
-      value: value,
-      expected: expected
-    ).message
-  end
 end

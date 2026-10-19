@@ -197,24 +197,19 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
-  test "a setting outside its choices fails to compile, naming the setting and the value" do
+  test "a setting outside its choices is refused at registration, naming the setting and the value" do
     for {option, setting, value} <- [
           {"run: {:steps, each: :forever}", "each", "forever"},
           {"run: {:steps, on_failure: :undo_everything}", "on_failure", "undo_everything"},
           {"run: :bounded", "run", "bounded"},
           {"durable: {:local, sleep_after: 0}", "sleep_after", "0"}
         ] do
-      error =
-        refused("""
-        use Flezha.SDK.Relay, factory_id: "w", #{option}
-        def channels(c), do: c
-        """)
-
-      assert error.description =~ "sets #{setting} to #{value}", "read: #{error.description}"
+      assert %{code: "topology.invalid_setting", details: details} = registered(option)
+      assert {details["setting"], details["value"]} == {setting, value}, option
     end
   end
 
-  test "a setting under a parent that does not carry it fails to compile, naming both" do
+  test "a setting under a parent that does not carry it is refused at registration, naming both" do
     for {option, parent, setting} <- [
           {"run: {:flow, each: :per_input}", "flow", "each"},
           {"run: {:steps, exactly: :effectively_once}", "steps", "exactly"},
@@ -222,19 +217,30 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
           {"run: {:flow, exactly: {:at_least_once, ack: :checkpoint}}", "at_least_once", "ack"},
           {"durable: {false, sleep_after: 1_000}", "false", "sleep_after"}
         ] do
-      error =
-        refused("""
-        use Flezha.SDK.Relay, factory_id: "w", #{option}
-        def channels(c), do: c
-        """)
-
-      assert error.description =~ "'#{parent}' of relay 'w' declares #{setting}",
-             "read: #{error.description}"
+      assert %{code: "topology.unknown_field", details: details} = registered(option)
+      assert details == %{"declaration" => "'#{parent}' of relay 'w'", "fields" => setting}
     end
 
     # A member of the tree written beside it is no option of the macro.
     error = refused(~s|use Flezha.SDK.Relay, factory_id: "w", each: :chained|)
     assert error.description =~ "has no option :each"
+  end
+
+  # The core's verdict on a class whose `use` writes `option`: the tree
+  # compiles as written and is judged when the class is registered.
+  defp registered(option) do
+    [{module, _binary}] =
+      Code.compile_string("""
+      defmodule Flezha.SDK.Tree#{System.unique_integer([:positive])} do
+        use Flezha.SDK.Relay, factory_id: "w", #{option}
+        def channels(c), do: c |> input("in") |> into(#{inspect(Stateless)})
+      end
+      """)
+
+    assert {:error, error} =
+             Flezha.SDK.register_factory(Flezha.SDK.create_runner("tree_ns"), module)
+
+    error
   end
 
   test "a relay macro refuses an unknown option and a missing factory_id" do
