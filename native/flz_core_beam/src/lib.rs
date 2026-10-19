@@ -24,7 +24,7 @@ use threads::Thread;
 mod atoms {
     rustler::atoms! {
         ok, kept, run, unrecorded, flz_activation, flz_starved, flz_shutting_down, flz_poll_failed,
-        event_time, processing_time
+        flz_notice, event_time, processing_time
     }
 }
 
@@ -404,6 +404,21 @@ fn send_message(
         local,
     )
     .map_err(refused)
+}
+
+// --- notices -----------------------------------------------------------------------
+
+/// The processes core notices are sent to, oldest first.
+static NOTICE_SINKS: Mutex<Option<Vec<LocalPid>>> = Mutex::new(None);
+
+/// Send every later core notice to `sink` as `{:flz_notice, level, target,
+/// text}`, from a thread this library owns: a notice written on a scheduler,
+/// a local run's banner, is queued there and never sent from it.
+#[rustler::nif]
+fn set_notice_sink(sink: LocalPid) -> NifResult<Atom> {
+    veneer::notice::forward_to(&NOTICE_SINKS, sink, threads::send_notice)
+        .map_err(|e| refusal(format!("the notice thread did not start: {e}")))?;
+    Ok(atoms::ok())
 }
 
 // --- the local run -----------------------------------------------------------------

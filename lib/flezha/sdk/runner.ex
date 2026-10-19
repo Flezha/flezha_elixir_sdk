@@ -41,6 +41,7 @@ defmodule Flezha.SDK.Runner do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    Native.notice_sink()
     {:ok, %{opts: opts, core: nil, pool: nil, cells: nil}}
   end
 

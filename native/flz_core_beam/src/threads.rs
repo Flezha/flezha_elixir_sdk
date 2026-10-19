@@ -6,10 +6,11 @@ use std::sync::Mutex;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use flz_core::schema::{ActivationOutcome, ActivationResult, WorkError};
+use flz_core_ffi::veneer::notice::Notice;
 use flz_core_ffi::veneer::{self, shape, Polled};
 use flz_core_ffi::{FLZ_POLL_TIMEOUT, FLZ_STARVATION_OBSERVED};
 use rustler::env::OwnedEnv;
-use rustler::{Encoder, LocalPid, Resource, ResourceArc};
+use rustler::{Atom, Encoder, LocalPid, Resource, ResourceArc};
 
 use crate::terms::Sink;
 use crate::{atoms, Core};
@@ -166,4 +167,20 @@ pub fn starvation_watch(core: ResourceArc<Core>, owner: LocalPid) -> ResourceArc
         })
         .expect("the starvation watch starts");
     thread
+}
+
+/// One core notice to `sink`; `false` when it is gone.
+pub fn send_notice(sink: LocalPid, notice: &Notice) -> bool {
+    let mut env = OwnedEnv::new();
+    env.send_and_clear(&sink, |e| {
+        let level = Atom::from_str(e, notice.level.name()).expect("a level name is an atom");
+        (
+            atoms::flz_notice(),
+            level,
+            notice.target,
+            notice.text.as_str(),
+        )
+            .encode(e)
+    })
+    .is_ok()
 }

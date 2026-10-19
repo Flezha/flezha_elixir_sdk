@@ -17,6 +17,10 @@ defmodule Flezha.SDK.Native do
   A refusal is `{:error, document}`, the core's JSON error document.
   """
 
+  require Logger
+
+  alias Flezha.SDK.Knob
+
   version = Mix.Project.config()[:version]
 
   if Application.compile_env(:flezha_sdk, :socket_nif, true) do
@@ -63,7 +67,55 @@ defmodule Flezha.SDK.Native do
 
   def answered(answer), do: answer
 
+  @sink Flezha.SDK.Notices
+
+  @doc """
+  The process that logs every core notice, started on first use and kept for
+  the life of the VM, so a notice outlives the run that wrote it. It logs
+  under the domain `[:flezha]` from the level `FLEZHA_LOG_LEVEL` names up,
+  and the local-mode banner at `:error` whatever that names.
+  """
+  @spec notice_sink() :: pid()
+  def notice_sink do
+    with nil <- Process.whereis(@sink) do
+      pid = spawn(&log_notices/0)
+
+      try do
+        Process.register(pid, @sink)
+        :ok = set_notice_sink(pid)
+        pid
+      rescue
+        ArgumentError ->
+          Process.exit(pid, :kill)
+          notice_sink()
+      end
+    end
+  end
+
+  defp log_notices do
+    receive do
+      {:flz_notice, level, _target, text} ->
+        level = logger_level(level)
+
+        if Logger.compare_levels(level, logger_level(Knob.get(:log_level))) != :lt,
+          do: Logger.log(level, text, domain: [:flezha])
+    end
+
+    log_notices()
+  end
+
+  # The local-mode banner at `:error`, which no `FLEZHA_LOG_LEVEL` hides.
+  defp logger_level(:warn), do: :warning
+  defp logger_level(:always), do: :error
+  defp logger_level(level), do: level
+
   # --- the context ---
+
+  @doc """
+  Send every later core notice to `pid` as `{:flz_notice, level, target, text}`.
+  Several may register; the oldest live one receives each notice.
+  """
+  def set_notice_sink(_pid), do: :erlang.nif_error(:not_loaded)
 
   @doc "The activation schema version the library speaks."
   def schema_version, do: :erlang.nif_error(:not_loaded)

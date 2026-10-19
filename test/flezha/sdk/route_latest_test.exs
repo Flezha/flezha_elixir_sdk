@@ -6,6 +6,9 @@ defmodule Flezha.SDK.RouteLatestTest do
   # async: false: one local run per process at a time.
   use ExUnit.Case, async: false
 
+  # A local run logs the core's local-mode banner, asserted in `LocalTest`.
+  @moduletag :capture_log
+
   alias Flezha.SDK.{Channels, Declaration, Local}
 
   defmodule RouterOp do

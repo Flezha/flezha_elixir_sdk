@@ -22,11 +22,13 @@ defmodule Flezha.SDK.Knob do
   @typedoc "A knob's name."
   @type name :: atom()
   @typedoc "How a knob's text is read."
-  @type type :: :ms | :int | :positive_int | :bool | :string | :path
+  @type type :: :ms | :int | :positive_int | :bool | :string | :path | {:enum, [atom()]}
 
   # {name, variable, type, default}
   @rows [
     {:ca_cert_path, "FLEZHA_CA_CERT_PATH", :path, "app_data/certs/ca.pem"},
+    # The lowest level of a core notice this runner logs.
+    {:log_level, "FLEZHA_LOG_LEVEL", {:enum, [:debug, :info, :warn, :error]}, :warn},
     {:mailbox_capacity, "FLEZHA_MAILBOX_CAPACITY", :positive_int, 1_024},
     {:namespace_secret, "FLEZHA_NAMESPACE_SECRET", :string, nil},
     {:quic_addresses, "FLEZHA_QUIC_ADDRESSES", :string, "127.0.0.1:4433"},
@@ -86,6 +88,7 @@ defmodule Flezha.SDK.Knob do
   defp fits?(:int, v), do: is_integer(v)
   defp fits?(:bool, v), do: is_boolean(v)
   defp fits?(text, v) when text in [:string, :path], do: is_binary(v)
+  defp fits?({:enum, values}, v), do: v in values
 
   @doc """
   The value `raw` means for `type`, or `:error` when it is not one. Text is
@@ -108,6 +111,13 @@ defmodule Flezha.SDK.Knob do
   defp parse_trimmed(:positive_int, raw), do: whole(raw, 1)
   defp parse_trimmed(:int, raw), do: whole(raw, nil)
   defp parse_trimmed(text, raw) when text in [:string, :path], do: {:ok, raw}
+
+  defp parse_trimmed({:enum, values}, raw) do
+    case Enum.find(values, &(Atom.to_string(&1) == String.downcase(raw))) do
+      nil -> :error
+      value -> {:ok, value}
+    end
+  end
 
   defp whole(raw, floor) do
     case Integer.parse(raw) do

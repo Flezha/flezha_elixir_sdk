@@ -10,6 +10,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   """
   use ExUnit.Case, async: true
 
+  # A local run logs the core's local-mode banner, asserted in `LocalTest`.
+  @moduletag :capture_log
+
   import ExUnit.CaptureIO, only: [with_io: 2]
   import Flezha.SDK.Test.Refused
 

@@ -17,15 +17,18 @@ defmodule Flezha.SDK.NativeSurfaceTest do
     poller: "flz_core_poll",
     starvation_watch: "flz_core_wait_starvation",
     release_thread: "flz_core_complete",
-    stop_thread: nil
+    stop_thread: nil,
+    set_notice_sink: nil
   }
 
   # Reached by no stub: the NIF frees no core buffer and reads no error slot,
   # since every refusal comes back as `{:error, document}`, and the runner
-  # needs no clock, no abandon, no log callback and no stdin watch of the core.
+  # needs no clock, no abandon, no stdin watch of the core, and neither notice
+  # entry: the NIF sends the notices to the sink itself.
   @unreached ~w(flz_core_abandon flz_core_buf_free flz_core_error_document
                 flz_core_init_error flz_core_last_error flz_core_monotonic_nanos
-                flz_core_set_log_callback flz_core_start flz_core_watch_stdin_eof)
+                flz_core_set_log_callback flz_core_start flz_core_take_notices
+                flz_core_watch_stdin_eof)
 
   test "the stubs reach exactly the entry points the fixture lists" do
     listed =

@@ -11,7 +11,7 @@ defmodule Flezha.SDK.Local do
   What a local run has not got: durability of any kind, plugins, placement and
   migration, the dead-letter queue, observability export, authz and
   multi-runner scale. Every one of those needs a controller, and every run says
-  so on stderr before it does any work. A class that runs in steps, or under
+  so through `Logger` before it does any work. A class that runs in steps, or under
   the effectively-once tier, is refused as `runtime.local_needs_controller`.
 
   ## Running a graph
@@ -112,6 +112,7 @@ defmodule Flezha.SDK.Local do
   @impl true
   def init({module, opts}) do
     Process.flag(:trap_exit, true)
+    Native.notice_sink()
     {:ok, %{module: module, opts: opts, core: nil, pool: nil, sinks: %{}}}
   end
 

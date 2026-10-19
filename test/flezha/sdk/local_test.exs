@@ -8,6 +8,9 @@ defmodule Flezha.SDK.LocalTest do
   # async: false: a local run's tasklets reach the test through registered names.
   use ExUnit.Case, async: false
 
+  # Every run logs the core's local-mode banner; the notices test below asserts it.
+  @moduletag :capture_log
+
   import ExUnit.CaptureLog, only: [capture_log: 1]
 
   alias Flezha.SDK.{Channels, Local, Spawn}
@@ -300,6 +303,57 @@ defmodule Flezha.SDK.LocalTest do
   end
 
   defp payloads, do: Enum.map(drained(), & &1.payload)
+
+  # --- the core's notices ---
+
+  defmodule Forward do
+    @moduledoc false
+    # A `:logger` handler sending each event to the test that added it.
+    def log(event, %{config: %{to: test}}), do: send(test, {:logged, event})
+  end
+
+  # The next event logged under the domain `[:flezha]`, as `{level, text}`.
+  defp next_notice do
+    receive do
+      {:logged, %{meta: %{domain: domain}, level: level, msg: {:string, text}}} ->
+        if :flezha in domain,
+          do: {level, IO.chardata_to_string(text)},
+          else: next_notice()
+
+      {:logged, _other} ->
+        next_notice()
+    after
+      10_000 -> flunk("no core notice was logged")
+    end
+  end
+
+  test "core notices reach Logger under [:flezha] at FLEZHA_LOG_LEVEL, the banner at any level" do
+    :ok = :logger.add_handler(:local_test_notices, Forward, %{config: %{to: self()}})
+    on_exit(fn -> :logger.remove_handler(:local_test_notices) end)
+    on_exit(fn -> System.delete_env("FLEZHA_LOG_LEVEL") end)
+    banner = {:error, "LOCAL MODE: state is held in memory"}
+
+    # At `error` the first run's unclaimed output is not logged: the second
+    # run's banner, written after it, is the next notice.
+    System.put_env("FLEZHA_LOG_LEVEL", "error")
+    first = start_run(WordCount)
+    :ok = Local.feed(first, "lines", "a")
+    :ok = Local.run_until_idle(first, 5_000)
+    Local.stop(first)
+    second = start_run(WordCount)
+
+    for _run <- [first, second] do
+      {level, text} = next_notice()
+      assert {level, String.slice(text, 0, String.length(elem(banner, 1)))} == banner
+    end
+
+    System.delete_env("FLEZHA_LOG_LEVEL")
+    :ok = Local.feed(second, "lines", "a")
+    :ok = Local.run_until_idle(second, 5_000)
+
+    assert {:warning, "local mode: 3 bytes were released on output `counts`" <> _} =
+             next_notice()
+  end
 
   # --- the graph runs ---
 
