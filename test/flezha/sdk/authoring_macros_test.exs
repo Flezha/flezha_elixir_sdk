@@ -218,7 +218,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
           {"durable: {false, sleep_after: 1_000}", "false", "sleep_after"}
         ] do
       assert %{code: "topology.unknown_field", details: details} = registered(option)
-      assert details == %{"declaration" => "'#{parent}' of relay 'w'", "fields" => setting}
+      # The core's refusal lists every issue it found beside the first one's details.
+      assert Map.delete(details, "issues") ==
+               %{"declaration" => "'#{parent}' of relay 'w'", "fields" => setting}
     end
 
     # A member of the tree written beside it is no option of the macro.
