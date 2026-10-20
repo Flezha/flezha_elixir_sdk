@@ -124,6 +124,9 @@ pub fn poller(
     thread
 }
 
+/// One poll turn, in the milliseconds the veneer's poll takes.
+const POLL_MS: u64 = poll_pool::POLL_TIMEOUT.as_millis() as u64;
+
 fn poll_for(
     core: ResourceArc<Core>,
     thread: ResourceArc<Thread>,
@@ -134,7 +137,6 @@ fn poll_for(
 ) {
     let mut env = OwnedEnv::new();
     let mut idle = Duration::ZERO;
-    let wait_ms = poll_pool::POLL_TIMEOUT.as_millis() as u64;
     while !thread.stopped() {
         // A freed context ends the pool: stopped before the seat is given
         // back, so the governor does not try to replace this thread.
@@ -143,7 +145,7 @@ fn poll_for(
             return;
         };
         let ctx = inside.ctx();
-        let act = match veneer::poll(ctx, wait_ms) {
+        let act = match veneer::poll(ctx, POLL_MS) {
             Ok(Polled::Activation(act)) => act,
             Ok(Polled::Timeout) if !pool.idle_turn(grown, &mut idle) => continue,
             last => return tell_last(&mut env, &worker, last),
@@ -163,9 +165,7 @@ fn poll_for(
         });
         if sent.is_err() {
             // The worker never saw it: handed back as if never polled.
-            if let Some(token) = thread.take_token() {
-                let _ = veneer::abandon(ctx, token);
-            }
+            let _ = thread.take_token().map(|token| veneer::abandon(ctx, token));
             return;
         }
         // Out of the context while the worker runs the activation.
