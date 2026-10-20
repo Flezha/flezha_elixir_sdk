@@ -25,6 +25,10 @@ defmodule Flezha.SDK.SafeCall do
   reason table, and each of its values is either the result or a 1-arity
   function of the RAW exit reason, for the sites whose answer quotes it. Any
   other term, a map included, is the single answer for every refusal.
+
+  `classify/1` and `orderly?/1` are the judgement of an exit reason every
+  bounded call makes, for a site that holds a reason of its own: a monitor's
+  `:DOWN`, a `terminate/2`, a caught exit.
   """
 
   require Logger
@@ -130,10 +134,27 @@ defmodule Flezha.SDK.SafeCall do
     )
   end
 
-  defp classify({:timeout, _}), do: :timeout
-  defp classify({:noproc, _}), do: :noproc
-  defp classify(:noproc), do: :noproc
-  defp classify(reason), do: reason
+  @doc """
+  An exit reason as a refusal names it: `:timeout` or `:noproc` for a call
+  that timed out or found no process, otherwise the reason itself.
+  """
+  @spec classify(term()) :: term()
+  def classify({:timeout, _}), do: :timeout
+  def classify({:noproc, _}), do: :noproc
+  def classify(:noproc), do: :noproc
+  def classify(reason), do: reason
+
+  @doc """
+  Whether `reason` is an orderly exit, a stop rather than a crash: `:normal`,
+  `:shutdown` or `{:shutdown, _}`, and a call's exit `{reason, {mod, fun,
+  args}}` judged on its own reason.
+  """
+  @spec orderly?(term()) :: boolean()
+  def orderly?({reason, {_mod, _fun, _args}}), do: orderly?(reason)
+  def orderly?(:normal), do: true
+  def orderly?(:shutdown), do: true
+  def orderly?({:shutdown, _}), do: true
+  def orderly?(_reason), do: false
 
   # Resolve the target (pid | name | {name, node}) to a pid and sample its
   # mailbox depth + current function. `current_function` is the high-signal
