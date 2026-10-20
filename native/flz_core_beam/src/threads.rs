@@ -136,7 +136,12 @@ fn poll_for(
     let mut idle = Duration::ZERO;
     let wait_ms = poll_pool::POLL_TIMEOUT.as_millis() as u64;
     while !thread.stopped() {
-        let Ok(inside) = core.enter() else { return };
+        // A freed context ends the pool: stopped before the seat is given
+        // back, so the governor does not try to replace this thread.
+        let Ok(inside) = core.enter() else {
+            pool.stop();
+            return;
+        };
         let ctx = inside.ctx();
         let act = match veneer::poll(ctx, wait_ms) {
             Ok(Polled::Activation(act)) => act,

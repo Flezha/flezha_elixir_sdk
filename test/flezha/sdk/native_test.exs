@@ -37,10 +37,14 @@ defmodule Flezha.SDK.NativeTest do
     :ok = Native.local_start(core, "native_echo", "native_echo-1")
     Notices.banner()
     :ok = Native.local_on_sink(core, "out")
-    thread = Native.poller(core, self())
+    # One base seat, which this process fills as the worker; the governor's
+    # ask for it is a `{:flz_grow, false}` nothing here receives.
+    governor = Native.pool_open(core, 1, 0, self())
+    thread = Native.poller(core, governor, self(), false)
 
     on_exit(fn ->
       Native.local_stop(core)
+      Native.pool_stop(governor)
       Native.stop_thread(thread)
       Native.context_free(core)
     end)

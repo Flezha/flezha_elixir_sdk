@@ -66,8 +66,11 @@ defmodule Flezha.SDK.Pool do
   end
 
   @doc """
-  Start a pool over `core`; `cells` is the Cell table its workers share, and
-  `:retire_ms` a test's short retire time for a grown worker.
+  Start a pool over `core`; `cells` is the Cell table its workers share.
+  A test's own sizing: `:retire_ms`, a short retire time for a grown worker,
+  and `:default_base`, the base when `FLEZHA_WORKER_POOL_SIZE` is unset (the
+  schedulers online), since a `System.put_env/2` never reaches the native
+  library's environment.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -93,7 +96,8 @@ defmodule Flezha.SDK.Pool do
     core = Keyword.fetch!(opts, :core)
     env = %{core: core, cells: Keyword.fetch!(opts, :cells)}
     retire_ms = Keyword.get(opts, :retire_ms, 0)
-    governor = Native.pool_open(core, System.schedulers_online(), retire_ms, self())
+    base = Keyword.get(opts, :default_base, System.schedulers_online())
+    governor = Native.pool_open(core, base, retire_ms, self())
     {:ok, %{core: core, env: env, governor: governor, workers: %{}}}
   end
 
@@ -115,6 +119,13 @@ defmodule Flezha.SDK.Pool do
     for {pid, thread} <- s.workers do
       if Map.has_key?(running, pid), do: Process.exit(pid, :kill)
       Native.release_thread(s.core, thread)
+    end
+
+    # A killed worker's exit would otherwise reach `handle_info` as a stranger's.
+    for {pid, _thread} <- running do
+      receive do
+        {:EXIT, ^pid, _} -> :ok
+      end
     end
 
     {:reply, map_size(running), %{s | workers: %{}}}

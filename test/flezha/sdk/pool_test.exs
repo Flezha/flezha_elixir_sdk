@@ -47,8 +47,6 @@ defmodule Flezha.SDK.PoolTest do
 
   setup do
     Process.register(self(), :pool_test)
-    System.put_env("FLEZHA_WORKER_POOL_SIZE", "1")
-    on_exit(fn -> System.delete_env("FLEZHA_WORKER_POOL_SIZE") end)
     :ok
   end
 
@@ -89,14 +87,15 @@ defmodule Flezha.SDK.PoolTest do
     send(holder, :go)
   end
 
-  # A local run of `GateOp` served by a pool of its own, `retire_ms` its grown
-  # workers' retire time (0 the governor's), closed when the test exits.
+  # A local run of `GateOp` served by a pool of one base worker, `retire_ms`
+  # its grown workers' retire time (0 the governor's), closed when the test exits.
   defp serve(retire_ms) do
     Native.notice_sink()
     core = Native.context_new(Native.schema_version())
     :ok = Dispatch.declare(core, GateOp)
     :ok = Native.answered(Native.local_start(core, GateOp.factory_id(), "pool-test"))
-    {:ok, pool} = Pool.start_link(core: core, cells: Dispatch.cells(), retire_ms: retire_ms)
+    opts = [core: core, cells: Dispatch.cells(), retire_ms: retire_ms, default_base: 1]
+    {:ok, pool} = Pool.start_link(opts)
     Process.unlink(pool)
     on_exit(fn -> Pool.close(%{core: core, pool: pool}, &Native.local_stop/1, 5_000, :stop) end)
     {core, pool}
