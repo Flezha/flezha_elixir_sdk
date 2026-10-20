@@ -82,13 +82,13 @@ defmodule Flezha.SDK.Control do
   @spec disable_plugin(runner(), String.t()) :: {:ok, term()} | {:error, term()}
   def disable_plugin(runner, name), do: call(runner, "PluginManager.disable", [name, %{}])
 
-  @doc "The relay ids running in this namespace."
+  @doc "The relays in this namespace, one row each."
   @spec list_relays(runner()) :: {:ok, term()} | {:error, term()}
-  def list_relays(runner), do: call(runner, "Relay.list_relays", [])
+  def list_relays(runner), do: call(runner, "Relay.list", [])
 
   @doc "The plugins enabled in this namespace: name, provider, single, bound relays."
   @spec list_plugins(runner()) :: {:ok, term()} | {:error, term()}
-  def list_plugins(runner), do: call(runner, "PluginManager.list", [])
+  def list_plugins(runner), do: call(runner, "PluginManager.enabled", [])
 
   @doc """
   A relay's live state, and the change sequence it was read at. `cell` is

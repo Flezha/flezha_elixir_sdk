@@ -42,7 +42,7 @@ defmodule Flezha.SDK.CallBoundsTest do
       runner_define: fn -> Runner.define(w, __MODULE__) end,
       runner_remove: fn -> Runner.remove(w, "factory") end,
       runner_relays: fn -> Runner.relays(w) end,
-      control: fn -> Control.call(w, "Relay.list_relays", []) end,
+      control: fn -> Control.call(w, "Relay.list", []) end,
       local_on_output: fn -> Local.on_output(w, "c", & &1) end,
       local_feed: fn -> Local.feed(w, "c", "v") end,
       local_until_idle: fn -> Local.run_until_idle(w, 50) end
