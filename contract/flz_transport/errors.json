@@ -3518,11 +3518,6 @@
       "message": "invalid {option} value '{value}'",
       "details": ["option", "value"]
     },
-    "usage.invalid_plugins": {
-      "class": "invalid",
-      "message": "--plugins is not a plugin list: {reason}",
-      "details": ["reason"]
-    },
     "usage.json_not_object": {
       "class": "invalid",
       "message": "{option} must be a JSON object",
