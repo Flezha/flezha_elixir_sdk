@@ -3306,16 +3306,6 @@
       "message": "tasklet '{tasklet}' sets {setting} to {value}, and it must not be negative",
       "details": ["tasklet", "setting", "value"]
     },
-    "topology.no_steps_body": {
-      "class": "invalid",
-      "message": "steps class '{factory_id}' declares no channels body, so it has no tasklets to run",
-      "details": ["factory_id"]
-    },
-    "topology.no_entry_channel": {
-      "class": "invalid",
-      "message": "the steps class declares no entry channel for its messages to arrive on",
-      "details": []
-    },
     "topology.no_relay_exported": {
       "class": "invalid",
       "message": "module '{module}' exports no relay declaration",
