@@ -199,9 +199,8 @@ defmodule Flezha.SDK.Dispatch do
 
     result =
       invoke(fn ->
-        item.payload
-        |> values_in(channel, act.tasklet, item.form)
-        |> Enum.filter(&routes_to?(&1, channel, act.tasklet, module, at.cell))
+        item
+        |> values_in(channel, act.tasklet)
         |> Enum.reduce_while({:ok, state}, fn value, {:ok, state} ->
           case module.run(value, state, ctx) do
             {:ok, state} -> {:cont, {:ok, state}}
@@ -323,12 +322,18 @@ defmodule Flezha.SDK.Dispatch do
 
   # --- payloads --------------------------------------------------------------------
 
+  # The prepare crossing decoded a keyed payload and ran this node's edge
+  # already; each value comes encoded as a value between tasklets.
+  defp values_in(%{form: :prepared, values: values}, _channel, _node),
+    do: Enum.map(values, &decode_term/1)
+
   # The edge's transforms run only on a payload the core marks untransformed:
   # a flow producer already ran them on its inter-tasklet output.
-  defp values_in(payload, channel, node, :untransformed),
+  defp values_in(%{form: :untransformed, payload: payload}, channel, node),
     do: transform(decode_in(payload, channel), edge_into(channel, node))
 
-  defp values_in(payload, channel, _node, :transformed), do: [decode_in(payload, channel)]
+  defp values_in(%{form: :transformed, payload: payload}, channel, _node),
+    do: [decode_in(payload, channel)]
 
   defp decode_in(payload, %{kind: "entry"} = channel) do
     case channel.parser.(payload) do
@@ -343,20 +348,6 @@ defmodule Flezha.SDK.Dispatch do
     case Enum.find(channel.consumers, &(&1.tasklet == node)) do
       nil -> nil
       edge -> edge.transforms
-    end
-  end
-
-  # The core hands an untransformed entry payload to every Cell its key
-  # request named, so a fan across keys keeps only the values keyed to this one.
-  defp routes_to?(_value, _channel, _node, _module, {_, _, nil}), do: true
-
-  defp routes_to?(value, channel, node, module, {_, _, key}) do
-    edge = Enum.find(channel.consumers, &(&1.tasklet == node))
-
-    cond do
-      edge && edge.key -> to_string(edge.key.(value)) == key
-      Tasklet.cell_keys(module) != [] -> key in module.cells_for(value)
-      true -> true
     end
   end
 
@@ -484,42 +475,40 @@ defmodule Flezha.SDK.Dispatch do
 
   # --- the key request -------------------------------------------------------------
 
-  # One key set for the whole payload, which the core hands every keyed
-  # consumer, so the first keyed consumer's edge is read: an unkeyed one's
-  # filter must not drop the key.
-  defp prepare(%{channel: idx, payloads: payloads} = request, class) do
-    channel = elem(class.channels, idx)
-
-    edge =
-      Enum.find(channel.consumers, fn e ->
-        e.key || Tasklet.cell_keys(elem(class.nodes, e.tasklet)) != []
-      end) || List.first(channel.consumers)
-
-    Enum.map(payloads, &prepare_one(&1, request, channel, edge, class))
+  defp prepared(edge, module, values) do
+    for v <- values do
+      keys = if edge.key, do: [to_string(edge.key.(v))], else: module.cells_for(v)
+      %{consumer: edge.tasklet, keys: keys, bytes: encode_term(v)}
+    end
   end
 
-  defp prepare_one(payload, request, channel, edge, class) do
-    module = edge && elem(class.nodes, edge.tasklet)
-    # A crossing is asked only of a payload no producer transformed.
-    values = values_in(payload, channel, edge && edge.tasklet, :untransformed)
+  defp prepare(%{channel: idx, payloads: payloads} = request, class) do
+    channel = elem(class.channels, idx)
+    Enum.map(payloads, &prepare_one(&1, request, channel, class))
+  end
 
-    keys =
-      if request.want_keys and edge do
-        values
-        |> Enum.flat_map(fn v ->
-          if edge.key, do: [to_string(edge.key.(v))], else: module.cells_for(v)
-        end)
-        |> Enum.uniq()
-      else
-        []
-      end
+  # One decoded payload's answer: every value each keyed consumer's own edge
+  # yields, with the Cells it names, and the event time the first timed
+  # consumer reads off its first value. A payload its chains filter answers no
+  # value, so the core mints no Cell for it.
+  defp prepare_one(payload, request, channel, class) do
+    value = decode_in(payload, channel)
 
-    event_time =
-      if request.want_event_time and module != nil and values != [] and
-           Tasklet.exports?(module, :event_time, 1),
-         do: module.event_time(hd(values))
+    Enum.reduce(channel.consumers, %{values: [], event_time: nil}, fn edge, answer ->
+      module = elem(class.nodes, edge.tasklet)
+      keyed? = request.want_keys and (edge.key != nil or Tasklet.cell_keys(module) != [])
 
-    %{keys: keys, event_time: event_time}
+      timed? =
+        request.want_event_time and answer.event_time == nil and
+          Tasklet.exports?(module, :event_time, 1)
+
+      values = if keyed? or timed?, do: transform(value, edge.transforms), else: []
+      answer = if timed?, do: %{answer | event_time: event_time_of(module, values)}, else: answer
+
+      if keyed?,
+        do: %{answer | values: answer.values ++ prepared(edge, module, values)},
+        else: answer
+    end)
   rescue
     e -> %{error: Exception.message(e), non_retryable: false}
   catch

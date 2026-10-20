@@ -255,7 +255,7 @@ defmodule Flezha.SDK.DispatchTest do
       want_event_time: false
     }
 
-    assert %{outcome: :prepared, prepared: [%{keys: ["b"]}, %{non_retryable: true}]} =
+    assert %{outcome: :prepared, prepared: [%{values: [%{keys: ["b"]}]}, %{non_retryable: true}]} =
              Dispatch.answer(activation(:key_request, %{key_request: request}), env)
   end
 
@@ -315,7 +315,7 @@ defmodule Flezha.SDK.DispatchTest do
       want_event_time: false
     }
 
-    assert %{prepared: [%{keys: ["home"]}]} =
+    assert %{prepared: [%{values: [%{keys: ["home"]}]}]} =
              Dispatch.answer(
                activation(:key_request, %{factory: "dispatch_coded", key_request: request}),
                env
@@ -323,6 +323,27 @@ defmodule Flezha.SDK.DispatchTest do
 
     assert shown(env, "json", ~s({"page":"home"}), "home") == ~s(%{"page" => "home"})
     assert shown(env, "json", "{not json", "home") == :unreadable
+  end
+
+  # The crossing decodes the payload and keys each value once; the Cell runs the
+  # values it is handed with neither the entry decoder nor the edge.
+  test "a keyed entry payload is decoded and transformed once", %{env: env} do
+    request = %{
+      channel: coded("json"),
+      payloads: [~s({"page":"home"})],
+      want_keys: true,
+      want_event_time: false
+    }
+
+    act = activation(:key_request, %{factory: "dispatch_coded", key_request: request})
+
+    assert %{prepared: [%{values: [%{consumer: 0, keys: ["home"], bytes: bytes}]}]} =
+             Dispatch.answer(act, env)
+
+    item = input("{not json", %{channel: coded("json"), form: :prepared, values: [bytes]})
+    act = activation(:work, %{factory: "dispatch_coded", cell_key: "home", items: [item]})
+    assert %{effects: [%{verdict: :ok, outputs: [%{payload: shown}]}]} = Dispatch.answer(act, env)
+    assert shown == ~s(%{"page" => "home"})
   end
 
   test "a text entry is its UTF-8 string and a bytes entry its payload as it came", %{env: env} do
