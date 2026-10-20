@@ -3604,7 +3604,7 @@
   "internal": [
     "already_exist", "already_exists", "already_loaded", "already_present", "already_registered", "already_started", "awake", "bad_cell_id", "bad_header_size",
     "bad_marker_body", "bad_option", "bad_payload", "bad_timer_op", "bad_varint", "call_not_relearned", "chmod", "claim_held", "client_not_running", "column_missing", "corrupt_index",
-    "crc_mismatch", "delivery_crashed", "delivery_failed", "dispatch_timeout", "dlq_entry_missing",
+    "crc_mismatch", "delivery_crashed", "delivery_failed", "dispatch_timeout", "dlq_entry_missing", "dropped",
     "durability_tier_disabled", "durability_tier_not_running", "einval", "enoent", "exception",
     "exit", "fetch_crashed", "gap", "http", "http_status", "id_taken", "input_log_unavailable",
     "invalid_area", "invalid_cert", "invalid_cluster_domain", "invalid_config", "invalid_description",
