@@ -38,7 +38,6 @@ defmodule Flezha.SDK.Declaration do
           factory_id: String.t(),
           json: binary(),
           steps?: boolean(),
-          records_effects?: boolean(),
           channels: tuple(),
           nodes: tuple(),
           names: tuple(),
@@ -181,7 +180,6 @@ defmodule Flezha.SDK.Declaration do
       factory_id: module.factory_id(),
       json: Jason.encode!(decl),
       steps?: steps?,
-      records_effects?: records_effects?(module, steps?),
       channels: Enum.map(channels, &Map.delete(&1, :decl)),
       nodes: node_list |> Enum.map(& &1.module) |> List.to_tuple(),
       names: tasklets |> Enum.map(& &1.name) |> List.to_tuple(),
@@ -198,17 +196,6 @@ defmodule Flezha.SDK.Declaration do
 
   defp run_name({name, _members}), do: name
   defp run_name(name), do: name
-
-  # Under the effectively-once tier, and for a durable steps class, the
-  # controller derives an output's identity from the durable effect record.
-  defp records_effects?(module, true), do: setting(module, :durable) != false
-
-  defp records_effects?(module, false) do
-    case setting(module, :run) do
-      {:flow, members} -> run_name(Keyword.get(members, :exactly)) == :effectively_once
-      _ -> false
-    end
-  end
 
   # The settings tree as the author wrote it; the core judges it.
   defp settings(module) do

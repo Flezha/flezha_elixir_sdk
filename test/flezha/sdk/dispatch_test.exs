@@ -161,14 +161,10 @@ defmodule Flezha.SDK.DispatchTest do
     assert Enum.map(effect.changes, &:erlang.binary_to_term/1) == [{:add, 3}]
     assert live(env) == %{"value" => 3}
 
-    # Keyed: every plugin output carries the identity, its ordinal counted per item.
+    # Keyed: the core stamps the identity at settle; the host hands it the key.
     [first, second] = effect.outputs
     assert %{target: :plugin, plugin_channel: "out", key: "a", payload: "a=3"} = first
-
-    assert {"flz.seq", "5.0"} in first.metadata and
-             {"flz.cell", "r-1/counter/a"} in first.metadata
-
-    assert {"note", "second"} in second.metadata and {"flz.seq", "5.1"} in second.metadata
+    assert first.metadata == [] and second.metadata == [{"note", "second"}]
   end
 
   test "an entry its parser refuses is unreadable, and a raise is retryable", %{env: env} do

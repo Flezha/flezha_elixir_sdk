@@ -291,8 +291,7 @@ defmodule Flezha.SDK.Dispatch do
     {timers, ops} = Ctx.take_timers(ctx)
     emits = Ctx.take_emits(ctx)
 
-    {outputs, _ordinal} =
-      Enum.flat_map_reduce(emits, 0, &outputs(&1, &2, ctx, act, at))
+    outputs = Enum.flat_map(emits, &outputs(&1, ctx, act, at))
 
     effect = %{
       verdict: :ok,
@@ -384,19 +383,16 @@ defmodule Flezha.SDK.Dispatch do
     end)
   end
 
-  # One emit's outputs, and the emit ordinal after them: it advances on every
-  # plugin-targeted output, stamped or not.
-  defp outputs({value, meta, key}, ordinal, ctx, act, %{class: class} = at) do
+  # One emit's outputs.
+  defp outputs({value, meta, key}, ctx, act, %{class: class}) do
     case out_channel(class, act.tasklet) do
       nil ->
-        {[], ordinal}
+        []
 
       channel ->
         meta = Enum.map(meta, fn {k, v} -> {to_string(k), to_string(v)} end)
         edges = edges(class.steps?, channel, act.tasklet, value, key, ctx.cell_key, meta, class)
-        {calls, ordinal} = calls(channel, value, meta, ordinal)
-        {plugin, ordinal} = plugin(channel, value, key || ctx.cell_key, meta, ordinal, act, at)
-        {edges ++ calls ++ plugin, ordinal}
+        edges ++ calls(channel, value, meta) ++ plugin(channel, value, key || ctx.cell_key, meta)
     end
   end
 
@@ -471,49 +467,31 @@ defmodule Flezha.SDK.Dispatch do
     _ -> []
   end
 
-  defp calls(%{call: nil}, _value, _meta, ordinal), do: {[], ordinal}
+  defp calls(%{call: nil}, _value, _meta), do: []
 
-  defp calls(%{call: call} = channel, value, meta, ordinal) do
-    requests =
-      for request <- transform(value, call.transforms) do
-        %{
-          target: :plugin,
-          plugin_channel: channel.name,
-          key: call.key && to_string(call.key.(request)),
-          metadata: meta,
-          payload: call.call.(request)
-        }
-      end
-
-    {requests, ordinal + length(requests)}
+  defp calls(%{call: call} = channel, value, meta) do
+    for request <- transform(value, call.transforms) do
+      %{
+        target: :plugin,
+        plugin_channel: channel.name,
+        key: call.key && to_string(call.key.(request)),
+        metadata: meta,
+        payload: call.call.(request)
+      }
+    end
   end
 
-  defp plugin(%{sink: nil}, _value, _key, _meta, ordinal, _act, _at), do: {[], ordinal}
+  defp plugin(%{sink: nil}, _value, _key, _meta), do: []
 
-  defp plugin(channel, value, key, meta, ordinal, act, at) do
-    output = %{
-      target: :plugin,
-      plugin_channel: channel.name,
-      key: key,
-      metadata: meta ++ identity_stamps(channel, key, ordinal, act, at),
-      payload: channel.sink.(value)
-    }
-
-    {[output], ordinal + 1}
-  end
-
-  # The output identity a keyed plugin frame carries when the class records no
-  # effects, written after user metadata so it cannot be spoofed.
-  defp identity_stamps(%{keyed?: false}, _key, _ordinal, _act, _at), do: []
-
-  defp identity_stamps(_channel, _key, _ordinal, _act, %{class: %{records_effects?: true}}),
-    do: []
-
-  defp identity_stamps(_channel, key, ordinal, act, %{class: class, cell: {relay, node, cell_key}}) do
+  defp plugin(channel, value, key, meta) do
     [
-      {"flz.cell", "#{relay}/#{elem(class.names, node)}/#{cell_key || ""}"},
-      {"flz.seq", "#{act.change_seq}.#{ordinal}"},
-      {"flz.key", key || ""}
+      %{
+        target: :plugin,
+        plugin_channel: channel.name,
+        key: key,
+        metadata: meta,
+        payload: channel.sink.(value)
+      }
     ]
   end
 
