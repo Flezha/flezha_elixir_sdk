@@ -85,6 +85,21 @@ defmodule Flezha.SDK.DispatchTest do
       do: c |> input("in", codec: :text) |> into(Stamp) |> map(&String.trim/1) |> into(Timed)
   end
 
+  # A per-input session whose producer's channel ends only in a call.
+  defmodule Calling do
+    use Flezha.SDK.Relay, factory_id: "dispatch_calling", run: {:steps, each: :per_input}
+
+    @impl true
+    def channels(c),
+      do:
+        c
+        |> input("in", codec: :text)
+        |> into(Stamp)
+        |> named("ask")
+        |> call("pricing", deadline_ms: 1_000)
+        |> into(Stamp)
+  end
+
   defmodule Shown do
     use Flezha.SDK.Tasklet, name: "shown"
 
@@ -132,6 +147,7 @@ defmodule Flezha.SDK.DispatchTest do
     {:ok, class} = Declaration.declare(core, Probe)
     :ok = Dispatch.register(class)
     :ok = Dispatch.declare(core, Staged)
+    :ok = Dispatch.declare(core, Calling)
     :ok = Dispatch.declare(core, Coded)
     :ok = Dispatch.declare(core, Forms)
     on_exit(fn -> Native.context_free(core) end)
@@ -268,6 +284,13 @@ defmodule Flezha.SDK.DispatchTest do
     # A value the consumer's clock cannot read fails where it is read, as in flow.
     act = activation(:work, %{factory: "dispatch_staged", items: [input("not a number")]})
     assert %{effects: [%{verdict: :retryable}]} = Dispatch.answer(act, env)
+  end
+
+  test "a steps terminal ending in a call hands the core no edge output", %{env: env} do
+    act = activation(:work, %{factory: "dispatch_calling", items: [input("3")]})
+
+    assert %{effects: [%{verdict: :ok, outputs: [%{target: :plugin, plugin_channel: "ask"}]}]} =
+             Dispatch.answer(act, env)
   end
 
   # The consumer applies its edge to what the core marks untransformed only,

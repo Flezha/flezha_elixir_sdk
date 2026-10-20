@@ -15,6 +15,8 @@ defmodule ElixirRunner.RelayCall do
       its calling tasklet.
     * `call_tool_session`: a durable `:per_input` session calling `pricing`
       from a turn and reading the outcome as its next turn.
+    * `call_orders_steps`: `call_orders` as a durable `:per_input` session, so
+      `order_ask`'s channel ends only in the call.
     * `orders`: the `relay_api` fixture, a described JSON entry `place`
       answering through `placed` and a text entry `audit` no output answers.
 
@@ -199,6 +201,16 @@ defmodule ElixirRunner.RelayCall do
     end
   end
 
+  defmodule OrdersSteps do
+    @moduledoc false
+    @behaviour Flezha.SDK.Relay
+    def factory_id, do: "call_orders_steps"
+    def run, do: {:steps, each: :per_input}
+    def durable, do: ElixirRunner.fixture_durable()
+    def max_duration_ms, do: 600_000
+    defdelegate channels(c), to: OrdersOp
+  end
+
   defmodule AgentSteps do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
@@ -307,5 +319,6 @@ defmodule ElixirRunner.RelayCall do
     end
   end
 
-  def all, do: [PricingOp, OrdersOp, AgentSteps, GatewayOp, ToolSessionSteps, ApiOrders]
+  def all,
+    do: [PricingOp, OrdersOp, AgentSteps, GatewayOp, ToolSessionSteps, OrdersSteps, ApiOrders]
 end

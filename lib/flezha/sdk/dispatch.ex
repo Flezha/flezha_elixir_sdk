@@ -379,15 +379,15 @@ defmodule Flezha.SDK.Dispatch do
     if idx = class.out_channel[node], do: elem(class.channels, idx)
   end
 
-  # In steps a value rides to its first consumer untransformed, and an
-  # inter-tasklet terminal's value goes to the core as the pass's handoff.
+  # In steps a value rides to its first consumer untransformed, and a terminal
+  # the core derived inter-tasklet hands it to the core as the pass's handoff.
   defp edges(true, channel, node, value, _key, _cell_key, _meta, class) do
     {consumer, transforms} =
       cond do
         channel.consumers != [] ->
           {hd(channel.consumers).tasklet, hd(channel.consumers).transforms}
 
-        channel.sink == nil and channel.call == nil ->
+        channel.kind == "inter_task" ->
           {node, nil}
 
         true ->

@@ -3,9 +3,9 @@ defmodule Flezha.SDK.Declaration do
   A relay module as the class declaration every veneer host hands `flz_core`:
   the chains `Flezha.SDK.Channels` recorded, the settings tree as the module
   writes it, and the tasklet facts `Flezha.SDK.Tasklet` answers. The core
-  judges it; its verdict, the consumer edges and every channel's final name,
-  comes back from `check_class`, and the closures each chain carries are
-  attached to those edges here, for `Flezha.SDK.Dispatch` to run.
+  judges it; its verdict, the consumer edges and every channel's final name
+  and kind, comes back from `check_class`, and the closures each chain carries
+  are attached to those edges here, for `Flezha.SDK.Dispatch` to run.
 
   What the Elixir surface implies without writing it is declared outright: a
   tasklet exporting `cells_for/1` or `compensate/3` declares that override, and
@@ -374,7 +374,7 @@ defmodule Flezha.SDK.Declaration do
             %{tasklet: e["tasklet"], transforms: chain.transforms, key: chain.key}
           end
 
-        %{ch | name: d["name"], consumers: consumers}
+        %{ch | name: d["name"], kind: d["kind"], consumers: consumers}
       end)
 
     %{class | channels: List.to_tuple(channels)}
