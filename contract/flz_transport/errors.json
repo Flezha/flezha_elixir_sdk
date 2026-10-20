@@ -755,6 +755,11 @@
       "message": "an unexpected failure: {reason}",
       "details": ["reason"]
     },
+    "kafka.exhausted": {
+      "class": "unavailable",
+      "message": "the output was not delivered to the Kafka broker: {reason}",
+      "details": ["reason"]
+    },
     "listener.detached": {
       "class": "conflict",
       "message": "the listener on relay '{relay}' was disabled by another caller",
@@ -3599,6 +3604,11 @@
       "class": "invalid",
       "message": "unknown {noun} '{value}'; use one of {allowed}",
       "details": ["noun", "value", "allowed"]
+    },
+    "websocket.unacknowledged": {
+      "class": "unavailable",
+      "message": "the websocket peer acknowledged no send of the output in {attempts} attempt(s)",
+      "details": ["attempts"]
     }
   },
   "internal": [
