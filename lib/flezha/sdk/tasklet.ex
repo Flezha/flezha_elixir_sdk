@@ -61,7 +61,8 @@ defmodule Flezha.SDK.Tasklet do
   which the `use` form refuses at compile time instead. Timers:
   `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
-  into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set.
+  into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set, and an
+  item whose registrations pass it fails, not retried, when the core settles it.
 
   Saga: `compensate/3` (the outputs the Cell released, the state, a ctx) is
   the undo a steps relay runs, in reverse completion order, when it
@@ -137,8 +138,6 @@ defmodule Flezha.SDK.Tasklet do
   # the controller's `:default_compact_after_bytes`.
   @default_compact_after_bytes 8 * 1024 * 1024
   @default_schema_version 1
-  # In lockstep with the reference's `DEFAULT_MAX_TIMERS_PER_CELL`.
-  @default_max_timers_per_cell 10_000
 
   # The scalar settings `use` takes, each named after the callback it defines.
   # An option not written defines nothing, so every default stays resolved by
@@ -626,18 +625,10 @@ defmodule Flezha.SDK.Tasklet do
   @spec on_timer?(module()) :: boolean()
   def on_timer?(module), do: exports?(module, :on_timer, 4)
 
-  @doc "Cap on a Cell's pending timers (10_000 unless declared)."
-  @spec max_timers_per_cell(module()) :: pos_integer()
-  def max_timers_per_cell(module) do
-    if exports?(module, :max_timers_per_cell, 0),
-      do: module.max_timers_per_cell(),
-      else: @default_max_timers_per_cell
-  end
-
-  @doc "What the tasklet declares about its timers, resolved once: the name a refusal reports, the cap, the clock."
-  @spec timer_policy(module()) :: Flezha.SDK.Timers.policy()
-  def timer_policy(module),
-    do: %{tasklet: module.name(), cap: max_timers_per_cell(module), clock: clock(module)}
+  @doc "Cap on a Cell's pending timers, or nil for the core's 10_000."
+  @spec max_timers_per_cell(module()) :: pos_integer() | nil
+  def max_timers_per_cell(module),
+    do: if(exports?(module, :max_timers_per_cell, 0), do: module.max_timers_per_cell())
 
   @doc "Per-Cell WAL size at which the controller solicits a snapshot (8 MiB unless overridden)."
   @spec compact_after_bytes(module()) :: pos_integer()

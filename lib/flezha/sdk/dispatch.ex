@@ -6,13 +6,13 @@ defmodule Flezha.SDK.Dispatch do
   state, a snapshot, a JSON view of a Cell, the keys and event time of a
   payload, a compensation.
 
-  A Cell's live state and its pending timer set are the host's, held in the
-  runner's Cell table keyed by relay, tasklet and Cell key; the core keeps
-  their log. State snapshots, change bodies and payloads between two tasklets
-  are Erlang terms (format id `7`), read back with `:safe`.
+  A Cell's live state is the host's, held in the runner's Cell table keyed by
+  relay, tasklet and Cell key; the core keeps its log and the Cell's timers.
+  State snapshots, change bodies and payloads between two tasklets are Erlang
+  terms (format id `7`), read back with `:safe`.
   """
 
-  alias Flezha.SDK.{Ctx, Declaration, Error, Native, Tasklet, Timers}
+  alias Flezha.SDK.{Ctx, Declaration, Error, Native, Tasklet}
 
   @typedoc "What a worker answers activations with: the core and the Cell table."
   @type env :: %{core: reference(), cells: :ets.tid()}
@@ -45,46 +45,38 @@ defmodule Flezha.SDK.Dispatch do
   end
 
   defp answer_kind(:work, act, at) do
-    {state, timers} = load(at)
-    timers = restored_timers(timers, act, at)
-
-    {effects, state, timers} =
+    {effects, state} =
       act.items
       |> Enum.with_index()
-      |> Enum.reduce_while({[], state, timers}, fn {item, index}, {effects, state, timers} ->
-        case run_item(item, index, act, at, state, timers) do
-          {:ok, effect, state, timers} -> {:cont, {[effect | effects], state, timers}}
-          {:error, effect} -> {:halt, {[effect | effects], state, timers}}
+      |> Enum.reduce_while({[], load(at)}, fn {item, index}, {effects, state} ->
+        case run_item(item, index, act, at, state) do
+          {:ok, effect, state} -> {:cont, {[effect | effects], state}}
+          {:error, effect} -> {:halt, {[effect | effects], state}}
         end
       end)
 
-    store(at, state, timers)
+    store(at, state)
     %{token: act.token, outcome: :work, effects: Enum.reverse(effects)}
   end
 
   defp answer_kind(:restore_fold, act, %{module: module, cell: {_, _, key}} = at) do
     with {:ok, state} <- restored_snapshot(Map.get(act, :snapshot), module, key),
          {:ok, state} <- fold_changes(act.changes, module, state) do
-      store(at, state, :restored)
+      store(at, state)
       %{token: act.token, outcome: :restored}
     else
       {:error, reason} -> failed(act.token, reason, true)
     end
   end
 
-  defp answer_kind(:snapshot_request, act, at) do
-    {state, _timers} = load(at)
-    %{token: act.token, outcome: :snapshot, state: encode_term(state)}
-  end
+  defp answer_kind(:snapshot_request, act, at),
+    do: %{token: act.token, outcome: :snapshot, state: encode_term(load(at))}
 
-  defp answer_kind(:live_state_read, act, at) do
-    {state, _timers} = load(at)
-    %{token: act.token, outcome: :state_json, json: state_json(state)}
-  end
+  defp answer_kind(:live_state_read, act, at),
+    do: %{token: act.token, outcome: :state_json, json: state_json(load(at))}
 
   defp answer_kind(:apply_state, act, %{module: module} = at) do
-    {_state, timers} = load(at)
-    store(at, Tasklet.state_from_json(module, Jason.decode!(act.state_json)), timers)
+    store(at, Tasklet.state_from_json(module, Jason.decode!(act.state_json)))
     %{token: act.token, outcome: :state_applied}
   end
 
@@ -93,13 +85,13 @@ defmodule Flezha.SDK.Dispatch do
 
   defp answer_kind(:compensate_run, act, %{module: module} = at) do
     if Tasklet.compensates?(module) do
-      {state, timers} = load(at)
+      state = load(at)
       outputs = Enum.map(act.outputs, &decode_term/1)
-      ctx = new_ctx(act, at, 0, %{now: System.os_time(:millisecond)}, timers: :unavailable)
+      ctx = new_ctx(act, at, 0, %{now: System.os_time(:millisecond)}, timers?: false)
 
       case settle(invoke(fn -> module.compensate(outputs, state, ctx) end), ctx, %{}, act, at) do
-        {:ok, effect, state, _timers} ->
-          store(at, state, timers)
+        {:ok, effect, state} ->
+          store(at, state)
           %{token: act.token, outcome: :work, effects: [effect]}
 
         {:error, effect} ->
@@ -112,24 +104,13 @@ defmodule Flezha.SDK.Dispatch do
 
   defp answer_kind(:leave, act, %{env: env, cell: {relay, _, _} = cell}) do
     if act.whole_relay,
-      do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_, :_}),
+      do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_}),
       else: :ets.delete(env.cells, cell)
 
     %{token: act.token, outcome: :state_applied}
   end
 
   defp answer_kind(kind, act, _at), do: failed(act.token, "unknown activation kind #{kind}", true)
-
-  # A restore hands the host its state and not its timers: the first work
-  # after one reads the pending set the core rebuilt.
-  defp restored_timers(:restored, act, at) do
-    case Native.answered(Native.pending_timers(at.env.core, act.token)) do
-      {:error, error} -> raise "the restored timers could not be read: #{error.message}"
-      pending -> Timers.of(pending)
-    end
-  end
-
-  defp restored_timers(timers, _act, _at), do: timers
 
   @doc "A whole activation answered as failed."
   @spec failed(non_neg_integer(), String.t(), boolean()) :: map()
@@ -138,13 +119,12 @@ defmodule Flezha.SDK.Dispatch do
 
   defp load(%{env: env, cell: {_, _, key} = cell, module: module}) do
     case :ets.lookup(env.cells, cell) do
-      [{_, state, timers}] -> {state, timers}
-      [] -> {module.init_state(key), Timers.new()}
+      [{_, state}] -> state
+      [] -> module.init_state(key)
     end
   end
 
-  defp store(%{env: env, cell: cell}, state, timers),
-    do: :ets.insert(env.cells, {cell, state, timers})
+  defp store(%{env: env, cell: cell}, state), do: :ets.insert(env.cells, {cell, state})
 
   defp state_json(state) do
     case Jason.encode(state) do
@@ -205,9 +185,9 @@ defmodule Flezha.SDK.Dispatch do
 
   # --- one work item --------------------------------------------------------------
 
-  defp run_item(%{kind: :input} = item, index, act, %{module: module} = at, state, timers) do
+  defp run_item(%{kind: :input} = item, index, act, %{module: module} = at, state) do
     channel = elem(at.class.channels, item.channel)
-    ctx = new_ctx(act, at, index, item, timers: timers, replay: item.replay)
+    ctx = new_ctx(act, at, index, item, replay: item.replay)
 
     result =
       invoke(fn ->
@@ -225,10 +205,9 @@ defmodule Flezha.SDK.Dispatch do
     settle(result, ctx, item, act, at)
   end
 
-  defp run_item(%{kind: :timer} = item, index, act, %{module: module} = at, state, timers) do
-    firing = {item.timer_kind, item.scheduled_at}
+  defp run_item(%{kind: :timer} = item, index, act, %{module: module} = at, state) do
     item = Map.put(item, :now, item.scheduled_at)
-    ctx = new_ctx(act, at, index, item, timers: timers, firing: firing)
+    ctx = new_ctx(act, at, index, item, [])
 
     # A tasklet with no handler parks the firing by name, without the retries
     # a raise would climb.
@@ -288,7 +267,6 @@ defmodule Flezha.SDK.Dispatch do
 
   defp settle({:ok, state}, ctx, item, act, at) do
     changes = ctx |> Ctx.take_changes() |> Enum.map(&encode_term/1)
-    {timers, ops} = Ctx.take_timers(ctx)
     emits = Ctx.take_emits(ctx)
 
     outputs = Enum.flat_map(emits, &outputs(&1, ctx, act, at))
@@ -297,7 +275,7 @@ defmodule Flezha.SDK.Dispatch do
       verdict: :ok,
       changes: changes,
       outputs: outputs,
-      timers: ops,
+      timers: Ctx.take_timers(ctx),
       consumed_offset: Map.get(item, :consumed_offset),
       event_time: Map.get(item, :now),
       checkpoint: Ctx.checkpointed?(ctx),
@@ -305,7 +283,7 @@ defmodule Flezha.SDK.Dispatch do
     }
 
     Ctx.discard(ctx)
-    {:ok, effect, state, timers}
+    {:ok, effect, state}
   rescue
     e ->
       Ctx.discard(ctx)

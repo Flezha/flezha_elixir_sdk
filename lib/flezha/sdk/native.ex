@@ -156,8 +156,6 @@ defmodule Flezha.SDK.Native do
 
   def spawn_result(_core, _handle, _timeout_ms), do: :erlang.nif_error(:not_loaded)
   def part(_core, _token, _item, _payload), do: :erlang.nif_error(:not_loaded)
-  @doc "The pending timers of the Cell `token` runs, as `{kind, at}` pairs."
-  def pending_timers(_core, _token), do: :erlang.nif_error(:not_loaded)
   def effect_begin(_core, _token, _item, _name), do: :erlang.nif_error(:not_loaded)
   def effect_end(_core, _token, _item, _payload), do: :erlang.nif_error(:not_loaded)
   def effect_release(_core, _token, _item), do: :erlang.nif_error(:not_loaded)

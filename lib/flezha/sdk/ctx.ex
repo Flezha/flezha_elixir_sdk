@@ -20,17 +20,19 @@ defmodule Flezha.SDK.Ctx do
   A key rides an emit only where the node's output is declared `keyed/1`, and a
   keyless emit there from a Cell with no key of its own is refused at the call.
 
-  `timer_after/2` and `timer_at_event_time/2` register over a copy of the
-  Cell's pending set, answering the absolute timestamp the two cancels take.
-  Inside a `compensate/3` hook the four timer calls answer
-  `runtime.timers_unavailable` and arm nothing.
+  `timer_after/2` and `timer_at_event_time/2` record a registration and answer
+  `{:ok, at}`, the absolute timestamp the two cancels take; a cancel answers
+  `:ok`. `flz_core` judges the item's timer ops when it settles: past the
+  tasklet's `max_timers_per_cell/0`, or an event-time timer under another
+  clock, the item fails, not retried. Inside a `compensate/3` hook the four
+  timer calls answer `runtime.timers_unavailable` and arm nothing.
 
   `spawn_steps/4`, `effect/4` and `part/2` reach `flz_core` from the live
   activation, and only from the worker running the invocation: the same call
   from another process is refused.
   """
 
-  alias Flezha.SDK.{Error, Native, Spawn, Tasklet, Timers}
+  alias Flezha.SDK.{Error, Native, Spawn}
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -39,9 +41,6 @@ defmodule Flezha.SDK.Ctx do
     :now_ms,
     :ref,
     :channel,
-    :timers,
-    :timer_policy,
-    :firing,
     :core,
     :token,
     :owner,
@@ -51,7 +50,8 @@ defmodule Flezha.SDK.Ctx do
     item: 0,
     seq: 0,
     replay?: false,
-    keyed_sink?: false
+    keyed_sink?: false,
+    timers?: true
   ]
 
   # FNV-1a-128, the constants `flz_core::relay::instance` fixes; the rendered
@@ -69,9 +69,8 @@ defmodule Flezha.SDK.Ctx do
 
   @doc """
   A fresh ctx for one invocation of `module`. `opts` carries the node's channel
-  name and whether its output is keyed (`keyed_sink?`), the Cell's pending
-  timers (`timers`, empty by default, `:unavailable` in a compensate hook), the
-  firing this invocation is (`firing`, `{kind, at}` or nil), and the live
+  name and whether its output is keyed (`keyed_sink?`), `timers?: false`
+  in a compensate hook, and the live
   activation the core calls are made from: `core`, `token`, `item`, `offset`,
   `replay`, the Cell's `identity` and the `seq` it was handed at.
   """
@@ -82,9 +81,6 @@ defmodule Flezha.SDK.Ctx do
       now_ms: now_ms,
       ref: make_ref(),
       channel: Keyword.get(opts, :channel),
-      timers: Keyword.get(opts, :timers, Timers.new()),
-      timer_policy: Keyword.get_lazy(opts, :timer_policy, fn -> Tasklet.timer_policy(module) end),
-      firing: Keyword.get(opts, :firing),
       core: Keyword.get(opts, :core),
       token: Keyword.get(opts, :token),
       owner: self(),
@@ -94,7 +90,8 @@ defmodule Flezha.SDK.Ctx do
       item: Keyword.get(opts, :item, 0),
       seq: Keyword.get(opts, :seq, 0),
       replay?: Keyword.get(opts, :replay, false),
-      keyed_sink?: Keyword.get(opts, :keyed_sink?, false)
+      keyed_sink?: Keyword.get(opts, :keyed_sink?, false),
+      timers?: Keyword.get(opts, :timers?, true)
     }
   end
 
@@ -116,7 +113,7 @@ defmodule Flezha.SDK.Ctx do
   """
   @spec apply(t(), term(), term()) :: term()
   def apply(%__MODULE__{module: module, ref: ref}, state, change) do
-    Process.put(changes_key(ref), [change | Process.get(changes_key(ref), [])])
+    push(changes_key(ref), change)
     module.apply_change(state, change)
   end
 
@@ -159,22 +156,26 @@ defmodule Flezha.SDK.Ctx do
 
   @doc "Register a processing-time timer `delay_ms` after `now/1`; `{:ok, at}`, the cancellation handle."
   @spec timer_after(t(), integer()) :: {:ok, non_neg_integer()} | {:error, Error.t()}
-  def timer_after(%__MODULE__{} = ctx, delay_ms),
-    do: with_session(ctx, &Timers.register_after(&1, delay_ms))
+  def timer_after(%__MODULE__{now_ms: now} = ctx, delay_ms),
+    do: timer(ctx, register_op(:processing_time, max(now + delay_ms, 0)))
 
-  @doc "Register an event-time timer at `at`; refused under a clock that is not `:event_time`."
+  @doc "Register an event-time timer at `at`; `{:ok, at}`."
   @spec timer_at_event_time(t(), non_neg_integer()) ::
           {:ok, non_neg_integer()} | {:error, Error.t()}
-  def timer_at_event_time(%__MODULE__{} = ctx, at),
-    do: with_session(ctx, &Timers.register(&1, :event_time, at))
+  def timer_at_event_time(%__MODULE__{} = ctx, at), do: timer(ctx, register_op(:event_time, at))
 
-  @doc "Cancel the processing-time timer `timer_after/2` answered; whether one was pending."
-  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: boolean() | {:error, Error.t()}
-  def cancel_processing_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :processing_time, at)
+  @doc "Cancel the processing-time timer `timer_after/2` answered; one not pending changes nothing."
+  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: :ok | {:error, Error.t()}
+  def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
+    do: cancelled(timer(ctx, cancel_op(:processing_time, at)))
 
-  @doc "Cancel the event-time timer `timer_at_event_time/2` answered; whether one was pending."
-  @spec cancel_event_time_timer(t(), non_neg_integer()) :: boolean() | {:error, Error.t()}
-  def cancel_event_time_timer(%__MODULE__{} = ctx, at), do: cancel(ctx, :event_time, at)
+  @doc "Cancel the event-time timer `timer_at_event_time/2` answered; one not pending changes nothing."
+  @spec cancel_event_time_timer(t(), non_neg_integer()) :: :ok | {:error, Error.t()}
+  def cancel_event_time_timer(%__MODULE__{} = ctx, at),
+    do: cancelled(timer(ctx, cancel_op(:event_time, at)))
+
+  defp register_op(kind, at), do: %{kind: kind, scheduled_at: at, register: true}
+  defp cancel_op(kind, at), do: %{kind: kind, scheduled_at: at, register: false}
 
   @doc "The owning Cell's key, or nil for a Single Cell."
   def cell_key(%__MODULE__{cell_key: k}), do: k
@@ -371,33 +372,14 @@ defmodule Flezha.SDK.Ctx do
   end
 
   @doc false
-  def take_emits(%__MODULE__{ref: ref}) do
-    emits = Process.get(key(ref), []) |> Enum.reverse()
-    Process.delete(key(ref))
-    emits
-  end
+  def take_emits(%__MODULE__{ref: ref}), do: take(key(ref))
 
   @doc false
-  def take_changes(%__MODULE__{ref: ref}) do
-    changes = Process.get(changes_key(ref), []) |> Enum.reverse()
-    Process.delete(changes_key(ref))
-    changes
-  end
+  def take_changes(%__MODULE__{ref: ref}), do: take(changes_key(ref))
 
   @doc false
-  # The Cell's pending set after this invocation and the ops to record. A
-  # firing records its own removal even when `on_timer/4` registered nothing.
-  def take_timers(%__MODULE__{timers: :unavailable}), do: {Timers.new(), []}
-
-  def take_timers(%__MODULE__{ref: ref, firing: nil} = ctx) do
-    case Process.delete(timers_key(ref)) do
-      nil -> {ctx.timers, []}
-      session -> Timers.commit(session)
-    end
-  end
-
-  def take_timers(%__MODULE__{ref: ref} = ctx),
-    do: Timers.commit(Process.delete(timers_key(ref)) || open(ctx))
+  # The ops to record, in call order; the core adds a firing's own removal.
+  def take_timers(%__MODULE__{ref: ref}), do: take(timers_key(ref))
 
   @doc false
   def discard(%__MODULE__{ref: ref}) do
@@ -409,40 +391,21 @@ defmodule Flezha.SDK.Ctx do
     Process.delete(completion_key(ref))
   end
 
-  defp with_session(%__MODULE__{timers: :unavailable}, _fun), do: {:error, timers_unavailable()}
+  defp timer(%__MODULE__{timers?: false}, _op),
+    do: {:error, Error.new("runtime.timers_unavailable")}
 
-  defp with_session(%__MODULE__{ref: ref} = ctx, fun) do
-    case fun.(session(ctx)) do
-      {:ok, at, session} ->
-        Process.put(timers_key(ref), session)
-        {:ok, at}
-
-      {:error, refusal, session} ->
-        Process.put(timers_key(ref), session)
-        {:error, refusal}
-    end
+  defp timer(%__MODULE__{ref: ref}, op) do
+    push(timers_key(ref), op)
+    {:ok, op.scheduled_at}
   end
 
-  defp cancel(%__MODULE__{timers: :unavailable}, _kind, _at), do: {:error, timers_unavailable()}
-
-  defp cancel(%__MODULE__{ref: ref} = ctx, kind, at) do
-    {pending?, session} = Timers.cancel(session(ctx), kind, at)
-    Process.put(timers_key(ref), session)
-    pending?
-  end
-
-  defp timers_unavailable, do: Error.new("runtime.timers_unavailable")
-
-  # The session open in this invocation, or one opened now.
-  defp session(%__MODULE__{ref: ref} = ctx), do: Process.get(timers_key(ref)) || open(ctx)
-
-  defp open(%__MODULE__{} = ctx),
-    do: Timers.session(ctx.timers, ctx.timer_policy, ctx.now_ms, ctx.firing)
+  defp cancelled({:ok, _at}), do: :ok
+  defp cancelled(refused), do: refused
 
   defp put_emit(%__MODULE__{ref: ref}, value, meta, key) do
     case reserved_key(meta) do
       nil ->
-        Process.put(key(ref), [{value, meta, key} | Process.get(key(ref), [])])
+        push(key(ref), {value, meta, key})
         :ok
 
       k ->
@@ -456,6 +419,10 @@ defmodule Flezha.SDK.Ctx do
       if String.starts_with?(ks, @reserved_prefix), do: ks
     end)
   end
+
+  # One invocation's list under `key`: pushed newest first, taken once in call order.
+  defp push(key, item), do: Process.put(key, [item | Process.get(key, [])])
+  defp take(key), do: Enum.reverse(Process.delete(key) || [])
 
   defp key(ref), do: {__MODULE__, ref}
   defp changes_key(ref), do: {__MODULE__, ref, :changes}

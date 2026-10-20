@@ -124,7 +124,8 @@
       "schema_evolution_v2"
     ],
     "cell_timers": [
-      "session_timeout"
+      "session_timeout",
+      "timer_cap"
     ],
     "effectively_once": [
       "tier_store",

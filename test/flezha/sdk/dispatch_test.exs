@@ -178,7 +178,6 @@ defmodule Flezha.SDK.DispatchTest do
     assert live(env) == %{"value" => 0}, "a failed item records nothing"
   end
 
-  # A Cell of its own: a restored Cell's next work reads its timers from a live core.
   test "a restore folds the snapshot and the changes, migrating what asks for it", %{env: env} do
     snapshot = %{bytes: :erlang.term_to_binary(%{v: 10}), from_version: 1}
     changes = [%{bytes: :erlang.term_to_binary({:add, 2})}]

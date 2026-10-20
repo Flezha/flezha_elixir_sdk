@@ -351,6 +351,7 @@ defmodule Flezha.SDK.Declaration do
       compensate_overridden: Tasklet.compensates?(module),
       clock: Atom.to_string(Tasklet.clock(module)),
       mailbox_capacity: Tasklet.mailbox_capacity(module),
+      max_timers_per_cell: Tasklet.max_timers_per_cell(module),
       change_is_nochange: not Tasklet.changeful?(module),
       schema_version: Tasklet.schema_version(module),
       min_readable_schema_version: Tasklet.min_readable_schema_version(module),

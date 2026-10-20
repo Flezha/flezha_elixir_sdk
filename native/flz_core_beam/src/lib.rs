@@ -24,7 +24,7 @@ use threads::Thread;
 mod atoms {
     rustler::atoms! {
         ok, error, kept, run, unrecorded, flz_activation, flz_starved, flz_shutting_down, flz_poll_failed,
-        flz_notice, event_time, processing_time
+        flz_notice
     }
 }
 
@@ -314,22 +314,6 @@ fn spawn_result(
     timeout_ms: u64,
 ) -> NifResult<Option<String>> {
     veneer::spawn_result(core.enter()?.ctx(), handle, timeout_ms).map_err(refused)
-}
-
-/// The pending timers of the Cell `token` runs, as `{kind, at}` pairs.
-#[rustler::nif]
-fn pending_timers(core: ResourceArc<Core>, token: u64) -> NifResult<Vec<(Atom, u64)>> {
-    let ops = veneer::pending_timers(core.enter()?.ctx(), token).map_err(refused)?;
-    Ok(ops
-        .into_iter()
-        .map(|op| {
-            let kind = match op.kind {
-                flz_core::schema::TimerKind::EventTime => atoms::event_time(),
-                flz_core::schema::TimerKind::ProcessingTime => atoms::processing_time(),
-            };
-            (kind, op.scheduled_at)
-        })
-        .collect())
 }
 
 #[rustler::nif]

@@ -10,7 +10,8 @@
 # edits its own state type: both declare the tasklet `evolving_cart`, so an
 # relay started under v1 and restarted under v2 restores from the very WAL
 # v1 wrote. `session_timeout` is the worked timer shape: durable, so the e2e's
-# re-seat half folds its pending timer back out of the change log.
+# re-seat half folds its pending timer back out of the change log, and
+# `timer_cap` the core's settle-time refusal of a Cell's timers.
 # `checkpoint_store` / `checkpoint_batched_store` are the tier's two
 # checkpoint postures over one tasklet; `tier_store` and `bench_checkpoint`
 # come from the bench factories the application registers beside these.
@@ -435,6 +436,53 @@ defmodule ElixirRunner.SessionTimeoutOp do
   end
 end
 
+# -- timer_cap ----------------------------------------------------------------
+
+# The core's refusal of a Cell's timers when the item settles (`cell_timers`):
+# past the cap of two pending timers, or an event-time timer under a tasklet
+# whose clock is not event time. `event` asks for the event-time timer, a
+# number `n` for a processing-time one `n` hours ahead; the change follows.
+defmodule ElixirRunner.TimerCapTask do
+  @moduledoc false
+  use Flezha.SDK.Tasklet, name: "timer_cap_tasklet", max_timers_per_cell: 2
+
+  @impl true
+  def init_state(_), do: %{touched: []}
+
+  defchange touched(s, input) do
+    %{s | touched: s.touched ++ [input]}
+  end
+
+  @impl true
+  def state_from_json(%{"touched" => touched}), do: %{touched: touched}
+
+  @impl true
+  def run("event", s, ctx) do
+    {:ok, _at} = timer_at_event_time(ctx, 1)
+    {:ok, touched(s, ctx, "event")}
+  end
+
+  def run(input, s, ctx) do
+    {:ok, _at} = timer_after(ctx, String.to_integer(input) * 3_600_000)
+    {:ok, touched(s, ctx, input)}
+  end
+end
+
+defmodule ElixirRunner.TimerCapOp do
+  @moduledoc false
+  @behaviour Flezha.SDK.Relay
+  def factory_id, do: "timer_cap"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+
+    c
+    |> input("input", codec: :text)
+    |> into(ElixirRunner.TimerCapTask)
+    |> output("kafka")
+  end
+end
+
 # -- checkpoint_store / checkpoint_batched_store ------------------------------
 
 # The same keyed upsert as `tier_store`, acknowledging only at an explicit
@@ -676,6 +724,7 @@ defmodule ElixirRunner.FactoriesState do
       ElixirRunner.SchemaEvolutionV1Op,
       ElixirRunner.SchemaEvolutionV2Op,
       ElixirRunner.SessionTimeoutOp,
+      ElixirRunner.TimerCapOp,
       ElixirRunner.TierChainOp,
       ElixirRunner.CheckpointStoreOp,
       ElixirRunner.CheckpointBatchedOp,
