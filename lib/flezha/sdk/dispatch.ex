@@ -200,7 +200,7 @@ defmodule Flezha.SDK.Dispatch do
     result =
       invoke(fn ->
         item.payload
-        |> values_in(channel, act.tasklet, at.class.steps?)
+        |> values_in(channel, act.tasklet, item.form)
         |> Enum.filter(&routes_to?(&1, channel, act.tasklet, module, at.cell))
         |> Enum.reduce_while({:ok, state}, fn value, {:ok, state} ->
           case module.run(value, state, ctx) do
@@ -323,20 +323,21 @@ defmodule Flezha.SDK.Dispatch do
 
   # --- payloads --------------------------------------------------------------------
 
-  # An entry payload is parsed and runs its edge's transforms here; so does
-  # every payload in steps, where the producer handed it on untransformed. In
-  # flow an inter-tasklet payload arrives transformed by its producer.
-  defp values_in(payload, %{kind: "entry"} = channel, node, _steps?) do
+  # The edge's transforms run only on a payload the core marks untransformed:
+  # a flow producer already ran them on its inter-tasklet output.
+  defp values_in(payload, channel, node, :untransformed),
+    do: transform(decode_in(payload, channel), edge_into(channel, node))
+
+  defp values_in(payload, channel, _node, :transformed), do: [decode_in(payload, channel)]
+
+  defp decode_in(payload, %{kind: "entry"} = channel) do
     case channel.parser.(payload) do
-      {:ok, value} -> transform(value, edge_into(channel, node))
+      {:ok, value} -> value
       {:error, reason} -> throw({:unreadable, inspect(reason)})
     end
   end
 
-  defp values_in(payload, channel, node, true),
-    do: transform(decode_term(payload), edge_into(channel, node))
-
-  defp values_in(payload, _channel, _node, false), do: [decode_term(payload)]
+  defp decode_in(payload, _channel), do: decode_term(payload)
 
   defp edge_into(channel, node) do
     case Enum.find(channel.consumers, &(&1.tasklet == node)) do
@@ -499,7 +500,8 @@ defmodule Flezha.SDK.Dispatch do
 
   defp prepare_one(payload, request, channel, edge, class) do
     module = edge && elem(class.nodes, edge.tasklet)
-    values = values_in(payload, channel, edge && edge.tasklet, class.steps?)
+    # A crossing is asked only of a payload no producer transformed.
+    values = values_in(payload, channel, edge && edge.tasklet, :untransformed)
 
     keys =
       if request.want_keys and edge do

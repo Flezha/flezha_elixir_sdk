@@ -68,8 +68,16 @@ defmodule Flezha.SDK.NativeTest do
 
     assert is_integer(token) and is_integer(act.change_seq)
 
-    assert [%{kind: :input, channel: 0, payload: "hello", replay: false, now: now} = item] =
-             act.items
+    assert [
+             %{
+               kind: :input,
+               channel: 0,
+               payload: "hello",
+               replay: false,
+               now: now,
+               form: :untransformed
+             } = item
+           ] = act.items
 
     assert is_integer(now) and is_list(item.metadata)
 

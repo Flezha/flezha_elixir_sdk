@@ -95,6 +95,21 @@ defmodule Flezha.SDK.DispatchTest do
     end
   end
 
+  # A flow edge with a map into a tasklet that shows what it was handed.
+  defmodule Forms do
+    use Flezha.SDK.Relay, factory_id: "dispatch_forms"
+
+    @impl true
+    def channels(c),
+      do:
+        c
+        |> input("in", codec: :text)
+        |> into(Stamp)
+        |> map(&String.trim/1)
+        |> into(Shown)
+        |> output("out")
+  end
+
   # One entry channel per codec into one tasklet, each keyed on its decoded value.
   defmodule Coded do
     use Flezha.SDK.Relay, factory_id: "dispatch_coded"
@@ -118,6 +133,7 @@ defmodule Flezha.SDK.DispatchTest do
     :ok = Dispatch.register(class)
     :ok = Dispatch.declare(core, Staged)
     :ok = Dispatch.declare(core, Coded)
+    :ok = Dispatch.declare(core, Forms)
     on_exit(fn -> Native.context_free(core) end)
     %{core: core}
   end
@@ -142,7 +158,15 @@ defmodule Flezha.SDK.DispatchTest do
   defp input(payload, extra \\ %{}),
     do:
       Map.merge(
-        %{kind: :input, channel: 0, payload: payload, metadata: [], replay: false, now: 1_000},
+        %{
+          kind: :input,
+          channel: 0,
+          payload: payload,
+          metadata: [],
+          replay: false,
+          now: 1_000,
+          form: :untransformed
+        },
         extra
       )
 
@@ -244,6 +268,23 @@ defmodule Flezha.SDK.DispatchTest do
     # A value the consumer's clock cannot read fails where it is read, as in flow.
     act = activation(:work, %{factory: "dispatch_staged", items: [input("not a number")]})
     assert %{effects: [%{verdict: :retryable}]} = Dispatch.answer(act, env)
+  end
+
+  # The consumer applies its edge to what the core marks untransformed only,
+  # whatever the relay's run: an entry payload and a steps release arrive so, a
+  # stream producer's output arrives transformed.
+  test "the input form comes from the core", %{env: env} do
+    value = :erlang.term_to_binary(" 42 ")
+
+    items = [
+      input(value, %{channel: 1}),
+      input(value, %{channel: 1, form: :transformed})
+    ]
+
+    act = activation(:work, %{factory: "dispatch_forms", tasklet: 1, cell_key: nil, items: items})
+    assert %{effects: [first, second]} = Dispatch.answer(act, env)
+    assert [%{payload: ~s("42")}] = first.outputs
+    assert [%{payload: ~s(" 42 ")}] = second.outputs
   end
 
   defp coded(name) do
