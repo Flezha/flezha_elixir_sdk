@@ -10,6 +10,8 @@
 #   bench_keyed_nopersist — the same upsert with the class's persistence off
 #   tier_store            — the same upsert under the effectively-once tier
 #   bench_checkpoint      — the tier acknowledging on a declared input cadence
+#   timer_churn           — per input a 1 ms processing-time timer, cancelling the
+#                           previous input's one; a firing emits `fired:<at>`
 # The controller's in-process `--transport native` bench and its in-node tests
 # reach the same modules through a path dependency on this app.
 
@@ -367,6 +369,47 @@ defmodule Flezha.Bench.BenchCheckpoint do
   end
 end
 
+defmodule Flezha.Bench.TimerChurnTask do
+  @moduledoc false
+  use Flezha.SDK.Tasklet, name: "timer_churn_tasklet"
+
+  @impl true
+  def init_state(_), do: %{last: 0}
+
+  defchange armed(s, at) do
+    %{s | last: at}
+  end
+
+  @impl true
+  def state_from_json(%{"last" => last}), do: %{last: last}
+
+  @impl true
+  def run(input, s, ctx) do
+    {:ok, at} = timer_after(ctx, 1)
+    if s.last != 0 and s.last != at, do: :ok = cancel_processing_time_timer(ctx, s.last)
+    s = armed(s, ctx, at)
+    emit(ctx, input)
+    {:ok, s}
+  end
+
+  @impl true
+  def on_timer(fired_at, _kind, s, ctx) do
+    emit(ctx, "fired:#{fired_at}")
+    {:ok, s}
+  end
+end
+
+defmodule Flezha.Bench.TimerChurn do
+  @moduledoc false
+  @behaviour Flezha.SDK.Relay
+  def factory_id, do: "timer_churn"
+
+  def channels(c) do
+    import Flezha.SDK.Channels
+    c |> input("input", codec: :text) |> into(Flezha.Bench.TimerChurnTask) |> output("echo")
+  end
+end
+
 defmodule ElixirRunner.BenchFactories do
   @moduledoc "Registry of the Elixir bench factory relays (see this file's header)."
 
@@ -381,7 +424,8 @@ defmodule ElixirRunner.BenchFactories do
       Flezha.Bench.KeyedNoPersist,
       Flezha.Bench.TierStore,
       Flezha.Bench.RemoteTierStore,
-      Flezha.Bench.BenchCheckpoint
+      Flezha.Bench.BenchCheckpoint,
+      Flezha.Bench.TimerChurn
     ]
   end
 end

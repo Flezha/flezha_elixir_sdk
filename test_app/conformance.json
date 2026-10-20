@@ -126,7 +126,8 @@
     ],
     "cell_timers": [
       "session_timeout",
-      "timer_cap"
+      "timer_cap",
+      "timer_churn"
     ],
     "effectively_once": [
       "tier_store",
