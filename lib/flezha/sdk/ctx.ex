@@ -95,17 +95,6 @@ defmodule Flezha.SDK.Ctx do
     }
   end
 
-  @doc false
-  # `[len relay][relay][len tasklet][tasklet][u16 len key][key]`, big-endian,
-  # the Cell identity every SDK derives `stable_id/1` from.
-  @spec cell_identity(String.t(), String.t(), String.t() | nil) :: binary()
-  def cell_identity(relay, tasklet, key) do
-    key = key || ""
-
-    <<byte_size(relay)::8, relay::binary, byte_size(tasklet)::8, tasklet::binary,
-      byte_size(key)::16-big, key::binary>>
-  end
-
   @doc """
   Fold `change` into `state` with the tasklet's `apply_change/2` and record
   it, so the Cell ships it after the invocation succeeds. The returned state
@@ -332,8 +321,13 @@ defmodule Flezha.SDK.Ctx do
   def stable_id(%__MODULE__{ref: ref} = ctx) do
     ordinal = Process.get(stable_id_key(ref), 0)
     Process.put(stable_id_key(ref), ordinal + 1)
-    derive_stable_id(ctx.identity, ctx.seq, ordinal)
+    derive_stable_id(identity_bytes(ctx.identity), ctx.seq, ordinal)
   end
+
+  # The dispatcher hands the ETS row the core's bytes are kept in; a ctx
+  # built by hand carries the bytes.
+  defp identity_bytes({cells, row}), do: :ets.lookup_element(cells, row, 2)
+  defp identity_bytes(identity), do: identity
 
   @doc false
   @spec derive_stable_id(binary(), non_neg_integer(), non_neg_integer()) :: String.t()

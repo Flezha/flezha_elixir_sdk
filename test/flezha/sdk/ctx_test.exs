@@ -2,13 +2,19 @@ defmodule Flezha.SDK.CtxTest do
   @moduledoc """
   The ctx's four timer calls: what each answers, and the ops an item hands
   the core, which judges them when it settles. Then their refusal where
-  timers are unavailable.
+  timers are unavailable, and the stable id's cross-language vector.
   """
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.Ctx
 
   defp op(kind, at, register), do: %{kind: kind, scheduled_at: at, register: register}
+
+  test "stable_id matches the cross-language vector" do
+    assert Ctx.derive_stable_id("instance/op/key", 42, 0) == "bbf81fd4955afd1724203700a240e822"
+    assert Ctx.derive_stable_id("instance/op/key", 42, 1) == "bbf81fd4965afd1724203700a240e95d"
+    assert Ctx.derive_stable_id("", 0, 0) == "15915375576d2f389a938dc3a9940c9d"
+  end
 
   test "a registration answers its absolute timestamp, anchored on now, and each call is one op" do
     ctx = Ctx.new(nil, nil, 1_000)

@@ -37,6 +37,7 @@ defmodule Flezha.SDK.Dispatch do
     class = :persistent_term.get({__MODULE__, act.factory})
     module = elem(class.nodes, act.tasklet)
     cell = {act.relay, act.tasklet, Map.get(act, :cell_key)}
+    keep_identity(env.cells, cell, act)
     answer_kind(act.kind, act, %{env: env, class: class, module: module, cell: cell})
   rescue
     e -> failed(token, Exception.message(e), false)
@@ -102,10 +103,10 @@ defmodule Flezha.SDK.Dispatch do
     end
   end
 
-  defp answer_kind(:leave, act, %{env: env, cell: {relay, _, _} = cell}) do
+  defp answer_kind(:leave, act, %{env: env, cell: {relay, node, key} = cell}) do
     if act.whole_relay,
       do: :ets.match_delete(env.cells, {{relay, :_, :_}, :_}),
-      else: :ets.delete(env.cells, cell)
+      else: Enum.each([cell, {relay, node, {:identity, key}}], &:ets.delete(env.cells, &1))
 
     %{token: act.token, outcome: :state_applied}
   end
@@ -125,6 +126,13 @@ defmodule Flezha.SDK.Dispatch do
   end
 
   defp store(%{env: env, cell: cell}, state), do: :ets.insert(env.cells, {cell, state})
+
+  # The core hands a Cell's identity bytes once, until the Cell leaves; their
+  # row is keyed under the relay, so a relay's leave drops it with the state.
+  defp keep_identity(cells, {relay, node, key}, %{cell_identity: identity}),
+    do: :ets.insert(cells, {{relay, node, {:identity, key}}, identity})
+
+  defp keep_identity(_cells, _cell, _act), do: true
 
   defp state_json(state) do
     case Jason.encode(state) do
@@ -248,7 +256,7 @@ defmodule Flezha.SDK.Dispatch do
         item: index,
         offset: Map.get(item, :consumed_offset),
         seq: act.change_seq,
-        identity: Ctx.cell_identity(relay, elem(class.names, node), key)
+        identity: {at.env.cells, {relay, node, {:identity, key}}}
       ] ++ opts
     )
   end

@@ -40,7 +40,6 @@ defmodule Flezha.SDK.Declaration do
           steps?: boolean(),
           channels: tuple(),
           nodes: tuple(),
-          names: tuple(),
           out_channel: %{non_neg_integer() => non_neg_integer()}
         }
 
@@ -182,7 +181,6 @@ defmodule Flezha.SDK.Declaration do
       steps?: steps?,
       channels: Enum.map(channels, &Map.delete(&1, :decl)),
       nodes: node_list |> Enum.map(& &1.module) |> List.to_tuple(),
-      names: tasklets |> Enum.map(& &1.name) |> List.to_tuple(),
       out_channel:
         Map.new(producing, fn ref ->
           {index_of[ref], Enum.find_index(sources, &(&1 == {:node, ref}))}
