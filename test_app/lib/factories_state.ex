@@ -47,7 +47,7 @@ defmodule ElixirRunner.StoreInputOp do
   def factory_id, do: "store_input"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -92,7 +92,7 @@ defmodule ElixirRunner.StatefulCounterOp do
   def factory_id, do: "stateful_counter"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -136,7 +136,7 @@ defmodule ElixirRunner.PersistenceOffCounterOp do
   def durable, do: false
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -234,7 +234,7 @@ defmodule ElixirRunner.CoalescingCounterOp do
   def factory_id, do: "coalescing_counter"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -275,7 +275,7 @@ defmodule ElixirRunner.ResumeProbeOp do
   def factory_id, do: "resume_probe"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -348,7 +348,7 @@ defmodule ElixirRunner.SchemaEvolutionV1Op do
   def factory_id, do: "schema_evolution_v1"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -363,7 +363,7 @@ defmodule ElixirRunner.SchemaEvolutionV2Op do
   def factory_id, do: "schema_evolution_v2"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -407,7 +407,7 @@ defmodule ElixirRunner.SessionTimeoutTask do
   end
 
   @impl true
-  def on_timer(fired_at, _kind, s, ctx) do
+  def on_timer(%{scheduled_at: fired_at}, s, ctx) do
     s = closed(s, ctx, fired_at)
     emit(ctx, "closed@#{fired_at}")
     {:ok, s}
@@ -427,7 +427,7 @@ defmodule ElixirRunner.SessionTimeoutOp do
   def factory_id, do: "session_timeout"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -474,7 +474,7 @@ defmodule ElixirRunner.TimerCapOp do
   def factory_id, do: "timer_cap"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -584,7 +584,7 @@ defmodule ElixirRunner.TierChainOp do
   def run, do: {:flow, exactly: :effectively_once}
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -605,7 +605,7 @@ defmodule ElixirRunner.CheckpointStoreOp do
   def run, do: {:flow, exactly: {:effectively_once, ack: :checkpoint}}
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -627,7 +627,7 @@ defmodule ElixirRunner.CheckpointBatchedOp do
          {:effectively_once, ack: {:checkpoint, outputs: :at_checkpoint, max_delay_ms: 1_500}}}
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -700,7 +700,7 @@ defmodule ElixirRunner.CandleOp do
   def run, do: {:flow, exactly: {:effectively_once, correction_ms: 600_000}}
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)

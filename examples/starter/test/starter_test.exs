@@ -12,7 +12,7 @@ defmodule Starter.RelayTest do
 
   test "counts each page on its own" do
     {:ok, run} = Local.start(Starter.Relay)
-    on_exit(fn -> Local.stop(run) end)
+    on_exit(fn -> Local.close(run) end)
 
     test = self()
     :ok = Local.on_output(run, "counts", &send(test, {:count, Jason.decode!(&1.payload)}))

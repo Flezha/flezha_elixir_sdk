@@ -11,8 +11,7 @@ defmodule Flezha.SDK do
   raise) and propagate through a pipe. `child_spec/1` wraps the same sequence for
   a host application's supervision tree.
 
-  The connection settings are read through `Flezha.SDK.Knob`: the OS
-  environment first, then `config :flezha_sdk, ...`. A controller that enforces
+  The connection settings are read from the OS environment first, then `config :flezha_sdk, ...`. A controller that enforces
   authorization asks every runner for a credential: pass it as
   `namespace_secret:`, or set `FLEZHA_NAMESPACE_SECRET`.
   """
@@ -191,7 +190,7 @@ defmodule Flezha.SDK do
   @spec call(result() | pid() | atom(), String.t(), String.t(), term()) ::
           {:ok, term()} | {:error, Error.t()}
   def call(runner, relay_id, channel, value) do
-    payload = value |> Flezha.SDK.Channels.default_serialize() |> Base.encode64()
+    payload = value |> Flezha.SDK.ChannelBuilder.default_serialize() |> Base.encode64()
     args = [relay_id, channel, payload, %{"payload" => "base64"}]
 
     case Flezha.SDK.Control.call(runner, "Relay.call_channel", args) do

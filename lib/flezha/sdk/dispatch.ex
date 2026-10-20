@@ -1,18 +1,18 @@
 defmodule Flezha.SDK.Dispatch do
-  @moduledoc """
-  One activation in, one result out, and every failure a result. `flz_core`
-  hands the activation; this module runs the tasklet code it names and answers
-  what the core folds: an effect record per work item, a restored or migrated
-  state, a snapshot, a JSON view of a Cell, the keys and event time of a
-  payload, a compensation.
+  @moduledoc false
 
-  A Cell's live state is the host's, held in the runner's Cell table keyed by
-  relay, tasklet and Cell key; the core keeps its log and the Cell's timers.
-  State snapshots, change bodies and payloads between two tasklets are Erlang
-  terms (format id `7`), read back with `:safe`.
-  """
+  # One activation in, one result out, and every failure a result. `flz_core`
+  # hands the activation; this module runs the tasklet code it names and answers
+  # what the core folds: an effect record per work item, a restored or migrated
+  # state, a snapshot, a JSON view of a Cell, the keys and event time of a
+  # payload, a compensation.
+  #
+  # A Cell's live state is the host's, held in the runner's Cell table keyed by
+  # relay, tasklet and Cell key; the core keeps its log and the Cell's timers.
+  # State snapshots, change bodies and payloads between two tasklets are Erlang
+  # terms (format id `7`), read back with `:safe`.
 
-  alias Flezha.SDK.{Ctx, Declaration, Error, Native, Tasklet}
+  alias Flezha.SDK.{Ctx, Declaration, Error, Native, Tasklet, TimerFiring}
 
   @typedoc "What a worker answers activations with: the core and the Cell table."
   @type env :: %{core: reference(), cells: :ets.tid()}
@@ -215,19 +215,24 @@ defmodule Flezha.SDK.Dispatch do
   defp run_item(%{kind: :timer} = item, index, act, %{module: module} = at, state) do
     item = Map.put(item, :now, item.scheduled_at)
     ctx = new_ctx(act, at, index, item, [])
+    firing = %TimerFiring{kind: item.timer_kind, scheduled_at: item.scheduled_at}
 
-    # A tasklet with no handler parks the firing by name, without the retries
-    # a raise would climb.
     result =
       if Tasklet.on_timer?(module),
-        do: invoke(fn -> module.on_timer(item.scheduled_at, item.timer_kind, state, ctx) end),
-        else:
-          {:error,
-           {:non_retryable,
-            "tasklet `#{module.name()}` registered a timer but does not export on_timer/4"}}
+        do: invoke(fn -> module.on_timer(firing, state, ctx) end),
+        else: unhandled_firing(module)
 
     settle(result, ctx, item, act, at)
   end
+
+  # A tasklet with no handler parks the firing by name, without the retries
+  # a raise would climb.
+  @doc false
+  def unhandled_firing(module),
+    do:
+      {:error,
+       {:non_retryable,
+        "tasklet `#{module.name()}` registered a timer but does not export on_timer/3"}}
 
   defp new_ctx(
          act,
@@ -260,7 +265,9 @@ defmodule Flezha.SDK.Dispatch do
     )
   end
 
-  defp invoke(fun) do
+  # Also how `Flezha.SDK.TaskletTestHarness` reads an invocation's answer.
+  @doc false
+  def invoke(fun) do
     case fun.() do
       {:ok, _state} = ok -> ok
       {:error, _reason} = error -> error

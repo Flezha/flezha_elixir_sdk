@@ -1,23 +1,23 @@
 defmodule Flezha.SDK.Knob do
-  @moduledoc """
-  Every knob this SDK reads, declared once.
+  @moduledoc false
 
-  A row is a name, the variable that sets it, the type its text parses as and
-  the value it takes when nothing sets it. A runner reads a name from its
-  variable first, then from this application's env
-  (`config :flezha_sdk, socket_files_path: "/run/flezha"`), then the row's
-  default; a row with no variable is set through the application env alone. A
-  value that does not parse — a pool size of `"0"`, a flag spelled `"maybe"` —
-  reads as the default, which is what every other SDK's reader answers too.
-  The contract set's `knob_parse_cases.txt` is that rule written down, and this
-  package's suite feeds it to `parse/2`.
-
-  The connection rows are read here and handed to `flz_core` when a runner
-  starts, because the BEAM keeps its own copy of the environment. The names,
-  variables, types and defaults are the ones Flezha's configuration table
-  declares for the Elixir SDK, and the core's suite holds these to it, as it
-  holds every other runtime's reader.
-  """
+  # Every knob this SDK reads, declared once.
+  #
+  # A row is a name, the variable that sets it, the type its text parses as and
+  # the value it takes when nothing sets it. A runner reads a name from its
+  # variable first, then from this application's env
+  # (`config :flezha_sdk, socket_files_path: "/run/flezha"`), then the row's
+  # default; a row with no variable is set through the application env alone. A
+  # value that does not parse — a pool size of `"0"`, a flag spelled `"maybe"` —
+  # reads as the default, which is what every other SDK's reader answers too.
+  # The contract set's `knob_parse_cases.txt` is that rule written down, and this
+  # package's suite feeds it to `parse/2`.
+  #
+  # The connection rows are read here and handed to `flz_core` when a runner
+  # starts, because the BEAM keeps its own copy of the environment. The names,
+  # variables, types and defaults are the ones Flezha's configuration table
+  # declares for the Elixir SDK, and the core's suite holds these to it, as it
+  # holds every other runtime's reader.
 
   @typedoc "A knob's name."
   @type name :: atom()

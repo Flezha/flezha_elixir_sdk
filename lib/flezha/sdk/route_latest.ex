@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.RouteLatest do
   @moduledoc """
-  The single-cell tasklet `Flezha.SDK.Channels.route_latest/4` expands to:
+  The single-cell tasklet `Flezha.SDK.ChannelBuilder.route_latest/4` expands to:
   every key seen on the traffic stream receives each distinct document once, on
   that key's own next traffic item, as a `{key, document}` pair.
 

@@ -34,7 +34,7 @@ defmodule Flezha.Bench.DoNothing do
   def factory_id, do: "do_nothing"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     c |> input("input", codec: :text) |> into(Flezha.Bench.EchoTask) |> output("echo")
   end
 end
@@ -119,7 +119,7 @@ defmodule Flezha.Bench.CellStress do
   def factory_id, do: "cell_stress"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -173,7 +173,7 @@ defmodule Flezha.Bench.DynamicCell do
   def factory_id, do: "dynamic_cell"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -191,7 +191,7 @@ defmodule Flezha.Bench.BenchEcho do
   def factory_id, do: "bench_echo"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -244,7 +244,7 @@ defmodule Flezha.Bench.BenchKeyed do
   def factory_id, do: "bench_keyed"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -279,7 +279,7 @@ defmodule Flezha.Bench.TierStore do
   # a durable-input-log relay that shed at its mailbox would hold the
   # min-watermark on the shed offset for ever.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -347,7 +347,7 @@ defmodule Flezha.Bench.BenchCheckpoint do
   end
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -386,14 +386,14 @@ defmodule Flezha.Bench.TimerChurnTask do
   @impl true
   def run(input, s, ctx) do
     {:ok, at} = timer_after(ctx, 1)
-    if s.last != 0 and s.last != at, do: :ok = cancel_processing_time_timer(ctx, s.last)
+    if s.last != 0 and s.last != at, do: :ok = cancel_timer(ctx, :processing_time, s.last)
     s = armed(s, ctx, at)
     emit(ctx, input)
     {:ok, s}
   end
 
   @impl true
-  def on_timer(fired_at, _kind, s, ctx) do
+  def on_timer(%{scheduled_at: fired_at}, s, ctx) do
     emit(ctx, "fired:#{fired_at}")
     {:ok, s}
   end
@@ -405,7 +405,7 @@ defmodule Flezha.Bench.TimerChurn do
   def factory_id, do: "timer_churn"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     c |> input("input", codec: :text) |> into(Flezha.Bench.TimerChurnTask) |> output("echo")
   end
 end

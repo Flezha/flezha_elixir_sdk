@@ -12,7 +12,7 @@ defmodule Flezha.SDK.NativeTest do
   # result's retry logs a warning, asserted by its test.
   @moduletag :capture_log
 
-  alias Flezha.SDK.{Channels, Declaration, Native}
+  alias Flezha.SDK.{ChannelBuilder, Declaration, Native}
   alias Flezha.SDK.Test.Notices
 
   defmodule Echo do
@@ -26,7 +26,11 @@ defmodule Flezha.SDK.NativeTest do
     def factory_id, do: "native_echo"
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Echo) |> Channels.output("out")
+      do:
+        c
+        |> ChannelBuilder.input("in")
+        |> ChannelBuilder.into(Echo)
+        |> ChannelBuilder.output("out")
   end
 
   setup do

@@ -1,18 +1,18 @@
 defmodule Flezha.SDK.Declaration do
-  @moduledoc """
-  A relay module as the class declaration every veneer host hands `flz_core`:
-  the chains `Flezha.SDK.Channels` recorded, the settings tree as the module
-  writes it, and the tasklet facts `Flezha.SDK.Tasklet` answers. The core
-  judges it; its verdict, the consumer edges and every channel's final name
-  and kind, comes back from `check_class`, and the closures each chain carries
-  are attached to those edges here, for `Flezha.SDK.Dispatch` to run.
+  @moduledoc false
 
-  What the Elixir surface implies without writing it is declared outright: a
-  tasklet exporting `cells_for/1` or `compensate/3` declares that override, and
-  the clock is the one `Flezha.SDK.Tasklet.clock/1` answers.
-  """
+  # A relay module as the class declaration every veneer host hands `flz_core`:
+  # the chains `Flezha.SDK.ChannelBuilder` recorded, the settings tree as the module
+  # writes it, and the tasklet facts `Flezha.SDK.Tasklet` answers. The core
+  # judges it; its verdict, the consumer edges and every channel's final name
+  # and kind, comes back from `check_class`, and the closures each chain carries
+  # are attached to those edges here, for `Flezha.SDK.Dispatch` to run.
+  #
+  # What the Elixir surface implies without writing it is declared outright: a
+  # tasklet exporting `cells_for/1` or `compensate/3` declares that override, and
+  # the clock is the one `Flezha.SDK.Tasklet.clock/1` answers.
 
-  alias Flezha.SDK.{Channels, Error, Native, Tasklet}
+  alias Flezha.SDK.{ChannelBuilder, Error, Native, Tasklet}
 
   @sdk_lang 3
   @change_format_id 7
@@ -77,11 +77,11 @@ defmodule Flezha.SDK.Declaration do
   @doc "The class `module` declares, before the core has judged it."
   @spec build(module()) :: {:ok, t()} | {:error, Error.t()}
   def build(module) do
-    c = Channels.new()
+    c = ChannelBuilder.new()
 
     case declare_on(module, c) do
       :ok ->
-        acc = Channels.take(c)
+        acc = ChannelBuilder.take(c)
 
         case acc.issues ++ tasklet_issues(acc) do
           [] -> {:ok, from_record(module, acc)}
@@ -89,7 +89,7 @@ defmodule Flezha.SDK.Declaration do
         end
 
       {:deferred, reason} ->
-        _ = Channels.take(c)
+        _ = ChannelBuilder.take(c)
         {:error, refusal([{:DeferredBuilderSurface, inspect(module), reason}])}
     end
   end
@@ -98,7 +98,7 @@ defmodule Flezha.SDK.Declaration do
   # core sees one clock, so these are judged here.
   defp tasklet_issues(acc) do
     for {_ref, %{module: m} = node} <- Enum.sort_by(acc.nodes, fn {_, n} -> n.seq end),
-        name = Channels.node_tasklet_name(node),
+        name = ChannelBuilder.node_tasklet_name(node),
         issue <- tasklet_issues(m, name),
         uniq: true,
         do: issue
@@ -231,7 +231,7 @@ defmodule Flezha.SDK.Declaration do
 
         {:node, ref} ->
           node = acc.nodes[ref]
-          {"inter_task", index_of[ref], Channels.node_channel_name(node), node}
+          {"inter_task", index_of[ref], ChannelBuilder.node_channel_name(node), node}
       end
 
     read = Enum.map(chains, &read_chain(&1, index_of))
@@ -280,7 +280,7 @@ defmodule Flezha.SDK.Declaration do
   defp codec(_inter, _node, nil), do: nil
 
   defp codec(_inter, _node, sink),
-    do: if(sink == (&Channels.default_serialize/1), do: "json", else: "custom")
+    do: if(sink == (&ChannelBuilder.default_serialize/1), do: "json", else: "custom")
 
   defp read_chain(%{links: links}, index_of) do
     init = %{
@@ -341,7 +341,7 @@ defmodule Flezha.SDK.Declaration do
 
   defp tasklet(%{module: module} = node) do
     drop_nil(%{
-      name: Channels.node_tasklet_name(node),
+      name: ChannelBuilder.node_tasklet_name(node),
       cell_keys: Tasklet.cell_keys(module),
       idle_ttl_ms: Tasklet.idle_ttl_ms(module),
       max_cells: Tasklet.max_cells(module),

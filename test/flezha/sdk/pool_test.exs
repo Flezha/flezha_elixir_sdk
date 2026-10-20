@@ -9,7 +9,7 @@ defmodule Flezha.SDK.PoolTest do
 
   @moduletag :capture_log
 
-  alias Flezha.SDK.{Channels, Dispatch, Native, Pool}
+  alias Flezha.SDK.{ChannelBuilder, Dispatch, Native, Pool}
 
   defmodule Gate do
     @moduledoc false
@@ -39,10 +39,10 @@ defmodule Flezha.SDK.PoolTest do
     def channels(c),
       do:
         c
-        |> Channels.input("in", codec: :text)
-        |> Channels.key_by(& &1)
-        |> Channels.into(Gate)
-        |> Channels.output("out")
+        |> ChannelBuilder.input("in", codec: :text)
+        |> ChannelBuilder.key_by(& &1)
+        |> ChannelBuilder.into(Gate)
+        |> ChannelBuilder.output("out")
   end
 
   setup do

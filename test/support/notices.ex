@@ -44,7 +44,7 @@ defmodule Flezha.SDK.Test.Notices do
   def start_local(module) do
     forward()
     {:ok, run} = Local.start(module)
-    on_exit(fn -> Local.stop(run) end)
+    on_exit(fn -> Local.close(run) end)
     banner()
     run
   end

@@ -67,7 +67,7 @@ defmodule Flezha.SDK.Relay do
   argument and stays a `def` the author writes. An unknown option is a
   `CompileError` naming it; the tree itself is judged at registration.
 
-  `Flezha.SDK.Channels` is imported, so a whole pipe, a merge included, is
+  `Flezha.SDK.ChannelBuilder` is imported, so a whole pipe, a merge included, is
   written with no module prefix.
 
   ## The §5 short form
@@ -85,7 +85,7 @@ defmodule Flezha.SDK.Relay do
   It generates the tasklet module `Upcase.Tasklet`, whose `name/0` is the
   factory id and which delegates to this module's tasklet callbacks, and a
   `channels/1` wiring the entry channel (`input:`, `"input"` when absent, read
-  by `codec:` as `Flezha.SDK.Channels.input/3` reads it) into it and, with
+  by `codec:` as `Flezha.SDK.ChannelBuilder.input/3` reads it) into it and, with
   `output:`, it to that plugin channel. With no `output:` nothing
   leaves the tasklet but its state. `run/3` is written as in a tasklet, with
   the ctx functions and a `state do ... end` block available; the options
@@ -106,7 +106,7 @@ defmodule Flezha.SDK.Relay do
   only the chain of the channel it arrived on, and a tasklet becomes runnable
   once every producer feeding it in that chain has committed.
   """
-  @callback channels(Flezha.SDK.Channels.t()) :: any()
+  @callback channels(Flezha.SDK.ChannelBuilder.t()) :: any()
 
   @doc "Optional human description."
   @callback description() :: String.t()

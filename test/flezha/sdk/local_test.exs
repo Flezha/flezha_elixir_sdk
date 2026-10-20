@@ -14,7 +14,7 @@ defmodule Flezha.SDK.LocalTest do
   import ExUnit.CaptureLog, only: [capture_log: 1]
   import Flezha.SDK.Test.Notices, only: [start_local: 1]
 
-  alias Flezha.SDK.{Channels, Local, Spawn}
+  alias Flezha.SDK.{ChannelBuilder, Local, Spawn}
   alias Flezha.SDK.Test.Notices
 
   # --- a changeful tasklet, and one that asks for a spawn ---
@@ -45,9 +45,9 @@ defmodule Flezha.SDK.LocalTest do
     def channels(c),
       do:
         c
-        |> Channels.input_with("in", &{:ok, String.to_integer(&1)})
-        |> Channels.into(CounterTask)
-        |> Channels.output("c")
+        |> ChannelBuilder.input_with("in", &{:ok, String.to_integer(&1)})
+        |> ChannelBuilder.into(CounterTask)
+        |> ChannelBuilder.output("c")
   end
 
   defmodule Spawner do
@@ -91,9 +91,9 @@ defmodule Flezha.SDK.LocalTest do
     def channels(c),
       do:
         c
-        |> Channels.input("in", codec: :text)
-        |> Channels.into(Effector)
-        |> Channels.output("out")
+        |> ChannelBuilder.input("in", codec: :text)
+        |> ChannelBuilder.into(Effector)
+        |> ChannelBuilder.output("out")
   end
 
   defmodule SpawnerOp do
@@ -104,9 +104,9 @@ defmodule Flezha.SDK.LocalTest do
     def channels(c),
       do:
         c
-        |> Channels.input("in", codec: :text)
-        |> Channels.into(Spawner)
-        |> Channels.output("out")
+        |> ChannelBuilder.input("in", codec: :text)
+        |> ChannelBuilder.into(Spawner)
+        |> ChannelBuilder.output("out")
   end
 
   # --- the moduledoc's worked example ---
@@ -142,21 +142,21 @@ defmodule Flezha.SDK.LocalTest do
 
   defmodule WordCount do
     @behaviour Flezha.SDK.Relay
-    alias Flezha.SDK.Channels
+    alias Flezha.SDK.ChannelBuilder
 
     def factory_id, do: "word_count"
 
     def channels(c) do
       c
-      |> Channels.input("lines", codec: :text)
-      |> Channels.filter(&(not String.starts_with?(&1, "#")))
-      |> Channels.flat_map(&String.split/1)
-      |> Channels.into(Normalise)
-      |> Channels.key_by(& &1)
-      |> Channels.into(Tally)
-      |> Channels.named("counts")
-      |> Channels.keyed()
-      |> Channels.output()
+      |> ChannelBuilder.input("lines", codec: :text)
+      |> ChannelBuilder.filter(&(not String.starts_with?(&1, "#")))
+      |> ChannelBuilder.flat_map(&String.split/1)
+      |> ChannelBuilder.into(Normalise)
+      |> ChannelBuilder.key_by(& &1)
+      |> ChannelBuilder.into(Tally)
+      |> ChannelBuilder.named("counts")
+      |> ChannelBuilder.keyed()
+      |> ChannelBuilder.output()
     end
   end
 
@@ -169,11 +169,11 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c) do
       c
-      |> Channels.input("in", codec: :text)
-      |> Channels.into(Normalise)
-      |> Channels.named("out")
-      |> Channels.keyed()
-      |> Channels.output()
+      |> ChannelBuilder.input("in", codec: :text)
+      |> ChannelBuilder.into(Normalise)
+      |> ChannelBuilder.named("out")
+      |> ChannelBuilder.keyed()
+      |> ChannelBuilder.output()
     end
   end
 
@@ -181,7 +181,9 @@ defmodule Flezha.SDK.LocalTest do
     @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "local_job"
-    def channels(c), do: c |> Channels.input("in", codec: :text) |> Channels.into(Normalise)
+
+    def channels(c),
+      do: c |> ChannelBuilder.input("in", codec: :text) |> ChannelBuilder.into(Normalise)
   end
 
   # Asks to end its relay on `end`. Reports every invocation, so a retry
@@ -206,7 +208,10 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c),
       do:
-        c |> Channels.input("in", codec: :text) |> Channels.into(Closer) |> Channels.output("out")
+        c
+        |> ChannelBuilder.input("in", codec: :text)
+        |> ChannelBuilder.into(Closer)
+        |> ChannelBuilder.output("out")
   end
 
   # A tasklet that does not return until the test releases it, so what makes
@@ -233,10 +238,10 @@ defmodule Flezha.SDK.LocalTest do
 
     def channels(c) do
       c
-      |> Channels.input("in", codec: :text)
-      |> Channels.into(Held)
-      |> Channels.named("out")
-      |> Channels.output()
+      |> ChannelBuilder.input("in", codec: :text)
+      |> ChannelBuilder.into(Held)
+      |> ChannelBuilder.named("out")
+      |> ChannelBuilder.output()
     end
   end
 
@@ -281,7 +286,9 @@ defmodule Flezha.SDK.LocalTest do
   defmodule StamperOp do
     @behaviour Flezha.SDK.Relay
     def factory_id, do: "local_stamper"
-    def channels(c), do: c |> Channels.input("in", codec: :text) |> Channels.into(Stamper)
+
+    def channels(c),
+      do: c |> ChannelBuilder.input("in", codec: :text) |> ChannelBuilder.into(Stamper)
   end
 
   # --- helpers ---
@@ -312,7 +319,7 @@ defmodule Flezha.SDK.LocalTest do
     first = start_local(WordCount)
     :ok = Local.feed(first, "lines", "a")
     :ok = Local.run_until_idle(first, 5_000)
-    Local.stop(first)
+    Local.close(first)
     second = start_local(WordCount)
 
     System.delete_env("FLEZHA_LOG_LEVEL")
@@ -528,7 +535,7 @@ defmodule Flezha.SDK.LocalTest do
     first = start_local(WordCount)
     assert {:error, %Flezha.SDK.Error{code: "runtime.core_in_use"}} = Local.start(CounterOp)
 
-    :ok = Local.stop(first)
+    :ok = Local.close(first)
     assert is_pid(start_local(CounterOp))
   end
 

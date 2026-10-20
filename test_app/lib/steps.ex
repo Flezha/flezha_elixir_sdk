@@ -377,7 +377,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "echo_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -410,7 +410,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "typed_once_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("order")
@@ -427,7 +427,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "commit_block_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -456,7 +456,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "effect_flow"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -472,7 +472,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "effect_block_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -488,7 +488,7 @@ defmodule ElixirRunner.Steps do
     def durable, do: :remote
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -506,7 +506,7 @@ defmodule ElixirRunner.Steps do
     def durable, do: false
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -526,7 +526,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "tier_commit_block_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -544,7 +544,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "saga_block_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -561,7 +561,7 @@ defmodule ElixirRunner.Steps do
   # tasklet that declares no keys; each Cell commits one idempotent change.
   # The third tasklet blocks until the release env, or fails.
   def keyed_commits(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)
@@ -583,7 +583,7 @@ defmodule ElixirRunner.Steps do
       do:
         c
         |> ElixirRunner.Steps.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Steps.BlockB)
+        |> Flezha.SDK.ChannelBuilder.into(ElixirRunner.Steps.BlockB)
   end
 
   defmodule KeyedSagaSteps do
@@ -597,7 +597,7 @@ defmodule ElixirRunner.Steps do
       do:
         c
         |> ElixirRunner.Steps.keyed_commits()
-        |> Flezha.SDK.Channels.into(ElixirRunner.Steps.KeyedFail)
+        |> Flezha.SDK.ChannelBuilder.into(ElixirRunner.Steps.KeyedFail)
   end
 
   # A steps output's identity: `commit_a` commits durable state AND emits
@@ -624,7 +624,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "outbox_block_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -643,7 +643,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "undo_outbox_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -677,7 +677,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "failed_stage_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -697,7 +697,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "branch_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       mid =
         c
@@ -730,7 +730,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "diamond_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       fan =
         c
@@ -761,7 +761,7 @@ defmodule ElixirRunner.Steps do
     def factory_id, do: "retry_steps"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -802,7 +802,7 @@ defmodule ElixirRunner.Steps do
     end
 
     @impl true
-    def on_timer(fired_at, _kind, state, ctx) do
+    def on_timer(%{scheduled_at: fired_at}, state, ctx) do
       Gate.hold_at("timer")
       emit(ctx, "fired:#{fired_at}")
       {:ok, state}
@@ -830,7 +830,7 @@ defmodule ElixirRunner.Steps do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -861,7 +861,7 @@ defmodule ElixirRunner.Steps do
     end
 
     @impl true
-    def on_timer(fired_at, _kind, state, ctx) do
+    def on_timer(%{scheduled_at: fired_at}, state, ctx) do
       emit(ctx, "fired:#{fired_at}")
       {:ok, state}
     end
@@ -876,7 +876,7 @@ defmodule ElixirRunner.Steps do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -910,7 +910,7 @@ defmodule ElixirRunner.Steps do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)

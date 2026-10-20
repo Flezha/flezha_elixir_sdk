@@ -32,7 +32,7 @@ defmodule ElixirRunner.CompareFilterOp do
   def factory_id, do: "compare_filter"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -81,7 +81,7 @@ defmodule ElixirRunner.StaticCellOp do
   def factory_id, do: "static_cell"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -122,7 +122,7 @@ defmodule ElixirRunner.SugarStaticCellOp do
   # The Rust `relay!` pipeline leaves the hop unnamed and lets the output
   # name the producing channel.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -164,7 +164,7 @@ defmodule ElixirRunner.MixedOp do
   def factory_id, do: "mixed_relay"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -321,7 +321,7 @@ defmodule ElixirRunner.HybridChannelOp do
   # not isolate a serializer raise: the sentinel takes the Relay down
   # instead of being logged by the producer.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -357,7 +357,7 @@ defmodule ElixirRunner.MergedInputOp do
   # Each source's mapping tags the value with the channel it came from, and the
   # merge keys on the symbol the mapping read.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     ticks = input(c, "ticks", codec: :text)
     quotes = input(c, "quotes", codec: :text)
@@ -396,7 +396,7 @@ defmodule ElixirRunner.TransformChainOp do
   # Every value transform on one edge: `drop` is filtered out, a comma list fans
   # out into one value per element, each is upper-cased and keyed on its prefix.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("trades", codec: :text)
@@ -437,7 +437,7 @@ defmodule ElixirRunner.PoisonProbeOp do
   def factory_id, do: "poison_probe"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -493,7 +493,7 @@ defmodule ElixirRunner.WedgeProbeOp do
   def factory_id, do: "wedge_probe"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("input", codec: :text)
@@ -546,7 +546,7 @@ defmodule ElixirRunner.BoundedMailboxDropNothingOp do
   def factory_id, do: "bounded_mailbox_drop_nothing"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("drop_nothing_input", codec: :text)
@@ -562,7 +562,7 @@ defmodule ElixirRunner.BoundedMailboxDropNewestOp do
   def factory_id, do: "bounded_mailbox_drop_newest"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("drop_newest_input", codec: :text)
@@ -578,7 +578,7 @@ defmodule ElixirRunner.BoundedMailboxDropOldestOp do
   def factory_id, do: "bounded_mailbox_drop_oldest"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("drop_oldest_input", codec: :text)
@@ -625,7 +625,7 @@ defmodule ElixirRunner.PartitionPassOp do
   # receiving relay's entry channel — the downstream fixture's `input`.
   # The entry here is `in` so the two names cannot collide inside this class.
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)
@@ -671,7 +671,7 @@ defmodule ElixirRunner.SpawnRequesterOp do
   def factory_id, do: "spawn_requester"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)
@@ -707,7 +707,7 @@ defmodule ElixirRunner.SpawnHoldRequesterOp do
   def run, do: {:flow, exactly: :effectively_once}
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)
@@ -742,7 +742,7 @@ defmodule ElixirRunner.SpawnOnceRequesterOp do
   def factory_id, do: "spawn_once_requester"
 
   def channels(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)

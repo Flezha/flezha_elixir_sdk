@@ -1,19 +1,19 @@
 defmodule Flezha.SDK.Call do
-  @moduledoc """
-  One call into one of the runner's own processes.
+  @moduledoc false
 
-  A runner runs inside a host application, so a wedged runner or local run
-  must refuse its caller rather than exit it. Every such call goes through
-  `Flezha.SDK.SafeCall`, through this module, with a bound one of the declared
-  rows names and the caller's refusal declared as data.
-
-  **A refusal is not a cancellation.** The request stays in the target's mailbox
-  and the work still runs, so a bound that fires turns "slow" into "reported
-  failed, then done anyway". That is the right trade for a process that is
-  wedged and the wrong one for a healthy one that is merely taking its time, so
-  a call whose duration grows with the data waits a row derived from the
-  Controller surface that asked, never the flat control bound.
-  """
+  # One call into one of the runner's own processes.
+  #
+  # A runner runs inside a host application, so a wedged runner or local run
+  # must refuse its caller rather than exit it. Every such call goes through
+  # `Flezha.SDK.SafeCall`, through this module, with a bound one of the declared
+  # rows names and the caller's refusal declared as data.
+  #
+  # **A refusal is not a cancellation.** The request stays in the target's mailbox
+  # and the work still runs, so a bound that fires turns "slow" into "reported
+  # failed, then done anyway". That is the right trade for a process that is
+  # wedged and the wrong one for a healthy one that is merely taking its time, so
+  # a call whose duration grows with the data waits a row derived from the
+  # Controller surface that asked, never the flat control bound.
 
   alias Flezha.SDK.SafeCall
   alias Flezha.SDK.Knob

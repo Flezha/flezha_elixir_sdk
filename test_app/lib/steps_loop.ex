@@ -122,7 +122,7 @@ defmodule ElixirRunner.StepsLoop do
     end
 
     @impl true
-    def on_timer(fired_at, _kind, state, ctx) do
+    def on_timer(%{scheduled_at: fired_at}, state, ctx) do
       emit(ctx, "wake:#{fired_at}")
       {:ok, state}
     end
@@ -155,7 +155,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -194,7 +194,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -236,7 +236,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("trades", codec: :text)
@@ -259,7 +259,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -362,7 +362,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -383,7 +383,7 @@ defmodule ElixirRunner.StepsLoop do
     def max_duration_ms, do: 24 * 3600 * 1000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -399,7 +399,7 @@ defmodule ElixirRunner.StepsLoop do
   the reference, which spells them from the step's own name.
   """
   def chain(c, steps) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     [first | rest] = steps
 
@@ -536,7 +536,7 @@ defmodule ElixirRunner.StepsLoop do
 
   @doc false
   def failing_turn_graph(c) do
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
 
     c
     |> input("in", codec: :text)

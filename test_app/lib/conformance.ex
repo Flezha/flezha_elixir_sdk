@@ -132,7 +132,7 @@ defmodule ElixirRunner.Conformance do
   @moduledoc """
   The Elixir arm of the refusal table: every row of
   `test/fixtures/reference_topologies.txt` driven through
-  `Flezha.SDK.Channels` and judged by `Flezha.SDK.register_factory/2` on one
+  `Flezha.SDK.ChannelBuilder` and judged by `Flezha.SDK.register_factory/2` on one
   class, whose settings tree is the row's `class.run(...)` and
   `class.durable(...)`.
 
@@ -154,7 +154,7 @@ defmodule ElixirRunner.Conformance do
   """
 
   alias ElixirRunner.Conformance.Row
-  alias Flezha.SDK.Channels
+  alias Flezha.SDK.ChannelBuilder
 
   @runtime "elixir"
   @fixture "test/fixtures/reference_topologies.txt"
@@ -393,7 +393,7 @@ defmodule ElixirRunner.Conformance do
   defp step("entry(" <> _ = step, acc) do
     name = argument(step)
     schema = Enum.find_value(context().steps, &schema_of(&1, name))
-    input = Channels.input(acc.token, name, schema: schema)
+    input = ChannelBuilder.input(acc.token, name, schema: schema)
     %{acc | handles: Map.put(acc.handles, name, input)}
   end
 
@@ -404,10 +404,10 @@ defmodule ElixirRunner.Conformance do
 
     out =
       sources
-      |> Enum.reduce(Channels.merge(acc.token), fn source, merge ->
-        Channels.from(merge, Map.fetch!(acc.handles, source), & &1)
+      |> Enum.reduce(ChannelBuilder.merge(acc.token), fn source, merge ->
+        ChannelBuilder.from(merge, Map.fetch!(acc.handles, source), & &1)
       end)
-      |> Channels.into(tasklet(role))
+      |> ChannelBuilder.into(tasklet(role))
 
     %{acc | handles: Map.put(acc.handles, role, out)}
   end
@@ -415,7 +415,10 @@ defmodule ElixirRunner.Conformance do
   # `branch(<x>, <n>)`: the arms wire nothing, since the row states only how many.
   defp step("branch(" <> _ = step, acc) do
     [source, arms] = step |> argument() |> String.split(",") |> Enum.map(&String.trim/1)
-    _ = Channels.branch(Map.fetch!(acc.handles, source), List.duplicate(& &1, integer(arms)))
+
+    _ =
+      ChannelBuilder.branch(Map.fetch!(acc.handles, source), List.duplicate(& &1, integer(arms)))
+
     acc
   end
 
@@ -457,38 +460,40 @@ defmodule ElixirRunner.Conformance do
     response =
       case verb do
         "call_factory" ->
-          Channels.call(stream, factory: argument, deadline_ms: 500)
+          ChannelBuilder.call(stream, factory: argument, deadline_ms: 500)
 
         "call_factory_nocreate" ->
-          Channels.call(stream, factory: argument, deadline_ms: 500, create: false)
+          ChannelBuilder.call(stream, factory: argument, deadline_ms: 500, create: false)
 
         "call_deadline" ->
-          Channels.call(stream, "pricing", deadline_ms: integer(argument))
+          ChannelBuilder.call(stream, "pricing", deadline_ms: integer(argument))
 
         call when call in ["call", "call_unread"] ->
-          Channels.call(stream, argument, deadline_ms: 500)
+          ChannelBuilder.call(stream, argument, deadline_ms: 500)
       end
 
-    if verb != "call_unread", do: Channels.into(response, tasklet(role))
+    if verb != "call_unread", do: ChannelBuilder.into(response, tasklet(role))
     stream
   end
 
   # `into` answers the consumer's own output channel, addressed by its role.
   defp into(stream, role, acc) do
-    out = Channels.into(stream, tasklet(role))
+    out = ChannelBuilder.into(stream, tasklet(role))
     {out, %{acc | handles: Map.put(acc.handles, role, out)}}
   end
 
-  defp stream_link("map", _, stream), do: Channels.map(stream, & &1)
-  defp stream_link("filter", _, stream), do: Channels.filter(stream, fn _value -> true end)
-  defp stream_link("flat_map", _, stream), do: Channels.flat_map(stream, &[&1])
-  defp stream_link("key", _, stream), do: Channels.key_by(stream, & &1)
-  defp stream_link("keyed", _, stream), do: Channels.keyed(stream)
-  defp stream_link("named", name, stream), do: Channels.named(stream, name)
-  defp stream_link("output", "", stream), do: Channels.output(stream)
-  defp stream_link("output", name, stream), do: Channels.output(stream, name)
-  defp stream_link("retry_max", n, stream), do: Channels.retry_max(stream, integer(n))
-  defp stream_link("on_full", policy, stream), do: Channels.on_full(stream, overflow(policy))
+  defp stream_link("map", _, stream), do: ChannelBuilder.map(stream, & &1)
+  defp stream_link("filter", _, stream), do: ChannelBuilder.filter(stream, fn _value -> true end)
+  defp stream_link("flat_map", _, stream), do: ChannelBuilder.flat_map(stream, &[&1])
+  defp stream_link("key", _, stream), do: ChannelBuilder.key_by(stream, & &1)
+  defp stream_link("keyed", _, stream), do: ChannelBuilder.keyed(stream)
+  defp stream_link("named", name, stream), do: ChannelBuilder.named(stream, name)
+  defp stream_link("output", "", stream), do: ChannelBuilder.output(stream)
+  defp stream_link("output", name, stream), do: ChannelBuilder.output(stream, name)
+  defp stream_link("retry_max", n, stream), do: ChannelBuilder.retry_max(stream, integer(n))
+
+  defp stream_link("on_full", policy, stream),
+    do: ChannelBuilder.on_full(stream, overflow(policy))
 
   defp stream_link(other, _, _stream),
     do: raise("the fixture spells a link this interpreter does not map: #{other}")

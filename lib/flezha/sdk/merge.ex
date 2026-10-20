@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Merge do
   @moduledoc """
-  A merged subscription under construction, built by `Flezha.SDK.Channels.merge/1`:
+  A merged subscription under construction, built by `Flezha.SDK.ChannelBuilder.merge/1`:
   one tasklet fed by two or more source streams, each with the mapping that
   lifts its value into the merged input.
 
@@ -11,7 +11,7 @@ defmodule Flezha.SDK.Merge do
       |> key_by(&symbol_of/1)
       |> into(Detector)
 
-  Every step is `Flezha.SDK.Channels`', dispatching on the handle it receives,
+  Every step is `Flezha.SDK.ChannelBuilder`', dispatching on the handle it receives,
   so one import writes a whole pipe. This module is the handle they carry
   between them: the sources recorded so far, each already mapped, and the key
   the merged node is declared on. Every source the author wrote reaches the

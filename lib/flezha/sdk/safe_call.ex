@@ -1,35 +1,35 @@
 defmodule Flezha.SDK.SafeCall do
-  @moduledoc """
-  One bounded `GenServer.call` wrapper for calls into a process that may
-  be wedged, mid-restart, or already gone.
+  @moduledoc false
 
-  `bounded/3` returns `{:ok, reply}` on success and `{:error, reason}`
-  on timeout / `:noproc` / any other exit, after logging once and
-  emitting `[:flezha, :convergence, :safe_call]` telemetry. Callers that
-  only care about side effects ignore the result; callers that need the
-  reply pattern-match it.
-
-  `bounded/4` is the same call with the refusal declared as DATA instead of
-  written as a `catch` clause at the site. It answers the reply VERBATIM on
-  success and the caller's declared value on a refusal, which is exactly the
-  shape a hand-written `try/catch` around a `GenServer.call` has — so a site
-  folds into it without its own callers changing. A reason the declaration
-  does not name is re-raised, so a site that caught two of three exits keeps
-  propagating the third.
-
-      SafeCall.bounded(pid, :stats, 1_000, on_error: {:error, :not_running})
-      SafeCall.bounded(unit, req, ms, on_error: %{timeout: {:error, :timeout}})
-      SafeCall.bounded(pid, req, ms, on_error: %{other: &{:error, {:exit, &1}}})
-
-  A map whose keys are all reasons — `:timeout`, `:noproc`, `:other` — is the
-  reason table, and each of its values is either the result or a 1-arity
-  function of the RAW exit reason, for the sites whose answer quotes it. Any
-  other term, a map included, is the single answer for every refusal.
-
-  `classify/1` and `orderly?/1` are the judgement of an exit reason every
-  bounded call makes, for a site that holds a reason of its own: a monitor's
-  `:DOWN`, a `terminate/2`, a caught exit.
-  """
+  # One bounded `GenServer.call` wrapper for calls into a process that may
+  # be wedged, mid-restart, or already gone.
+  #
+  # `bounded/3` returns `{:ok, reply}` on success and `{:error, reason}`
+  # on timeout / `:noproc` / any other exit, after logging once and
+  # emitting `[:flezha, :convergence, :safe_call]` telemetry. Callers that
+  # only care about side effects ignore the result; callers that need the
+  # reply pattern-match it.
+  #
+  # `bounded/4` is the same call with the refusal declared as DATA instead of
+  # written as a `catch` clause at the site. It answers the reply VERBATIM on
+  # success and the caller's declared value on a refusal, which is exactly the
+  # shape a hand-written `try/catch` around a `GenServer.call` has — so a site
+  # folds into it without its own callers changing. A reason the declaration
+  # does not name is re-raised, so a site that caught two of three exits keeps
+  # propagating the third.
+  #
+  #     SafeCall.bounded(pid, :stats, 1_000, on_error: {:error, :not_running})
+  #     SafeCall.bounded(unit, req, ms, on_error: %{timeout: {:error, :timeout}})
+  #     SafeCall.bounded(pid, req, ms, on_error: %{other: &{:error, {:exit, &1}}})
+  #
+  # A map whose keys are all reasons — `:timeout`, `:noproc`, `:other` — is the
+  # reason table, and each of its values is either the result or a 1-arity
+  # function of the RAW exit reason, for the sites whose answer quotes it. Any
+  # other term, a map included, is the single answer for every refusal.
+  #
+  # `classify/1` and `orderly?/1` are the judgement of an exit reason every
+  # bounded call makes, for a site that holds a reason of its own: a monitor's
+  # `:DOWN`, a `terminate/2`, a caught exit.
 
   require Logger
 

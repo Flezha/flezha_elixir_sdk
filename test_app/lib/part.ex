@@ -63,7 +63,7 @@ defmodule ElixirRunner.Part do
     def factory_id, do: "part_echo"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -82,7 +82,7 @@ defmodule ElixirRunner.Part do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)

@@ -6,7 +6,7 @@ defmodule Flezha.SDK.DispatchTest do
   """
   use ExUnit.Case, async: false
 
-  alias Flezha.SDK.{Channels, Declaration, Dispatch, Native}
+  alias Flezha.SDK.{ChannelBuilder, Declaration, Dispatch, Native}
 
   defmodule Counter do
     use Flezha.SDK.Tasklet, name: "counter", schema_version: 2, min_readable_schema_version: 1
@@ -46,14 +46,14 @@ defmodule Flezha.SDK.DispatchTest do
 
     def channels(c) do
       c
-      |> Channels.input_with("in", fn
+      |> ChannelBuilder.input_with("in", fn
         "bad" -> {:error, :unreadable_by_design}
         bytes -> {:ok, bytes}
       end)
-      |> Channels.key_by(&(&1 |> String.split(":") |> hd()))
-      |> Channels.into(Counter)
-      |> Channels.keyed()
-      |> Channels.output("out")
+      |> ChannelBuilder.key_by(&(&1 |> String.split(":") |> hd()))
+      |> ChannelBuilder.into(Counter)
+      |> ChannelBuilder.keyed()
+      |> ChannelBuilder.output("out")
     end
   end
 
@@ -106,6 +106,12 @@ defmodule Flezha.SDK.DispatchTest do
     @impl true
     def run(input, state, ctx) do
       emit(ctx, inspect(input))
+      {:ok, state}
+    end
+
+    @impl true
+    def on_timer(firing, state, ctx) do
+      emit(ctx, inspect(firing))
       {:ok, state}
     end
   end
@@ -375,13 +381,23 @@ defmodule Flezha.SDK.DispatchTest do
     assert shown(env, "bytes", <<0xFF>>, "FF") == "<<255>>"
   end
 
-  test "a firing on a tasklet without on_timer/4 parks by name, not retried", %{env: env} do
+  test "a firing reaches on_timer/3 as one TimerFiring of its kind and time", %{env: env} do
+    timer = %{kind: :timer, timer_kind: :event_time, scheduled_at: 2_000, replay: false}
+
+    act =
+      activation(:work, %{factory: "dispatch_forms", tasklet: 1, cell_key: nil, items: [timer]})
+
+    assert %{effects: [%{verdict: :ok, outputs: [%{payload: shown}]}]} = Dispatch.answer(act, env)
+    assert shown == inspect(%Flezha.SDK.TimerFiring{kind: :event_time, scheduled_at: 2_000})
+  end
+
+  test "a firing on a tasklet without on_timer/3 parks by name, not retried", %{env: env} do
     timer = %{kind: :timer, timer_kind: :processing_time, scheduled_at: 2_000, replay: false}
 
     assert %{effects: [%{verdict: :non_retryable, message: message}]} =
              Dispatch.answer(activation(:work, %{items: [timer]}), env)
 
-    assert message =~ "counter" and message =~ "on_timer/4"
+    assert message =~ "counter" and message =~ "on_timer/3"
   end
 
   test "a compensation runs the hook over the outputs it undoes", %{env: env} do

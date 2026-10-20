@@ -17,7 +17,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   import Flezha.SDK.Test.Notices, only: [start_local: 1]
   import Flezha.SDK.Test.Refused
 
-  alias Flezha.SDK.{Channels, Ctx, Declaration, Local, Tasklet}
+  alias Flezha.SDK.{ChannelBuilder, Ctx, Declaration, Local, Tasklet}
 
   # --- what `use` defines, and what it does not ---------------------------
 
@@ -74,7 +74,7 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   end
 
   # A nested tasklet inherits the relay module's imports, so `use` has to
-  # take `Channels.input/2` back before the tasklet's own `input/0` is read.
+  # take `ChannelBuilder.input/2` back before the tasklet's own `input/0` is read.
   defmodule NestingRelay do
     @moduledoc false
     use Flezha.SDK.Relay, factory_id: "nesting_relay"
@@ -134,9 +134,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     @impl true
     def channels(c) do
       c
-      |> Channels.input("in", codec: :text)
-      |> Channels.into(HandWritten)
-      |> Channels.output("out")
+      |> ChannelBuilder.input("in", codec: :text)
+      |> ChannelBuilder.into(HandWritten)
+      |> ChannelBuilder.output("out")
     end
   end
 
@@ -293,16 +293,16 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
 
     @impl true
     def channels(c) do
-      ticks = Channels.input(c, "ticks")
-      quotes = Channels.input(c, "quotes")
+      ticks = ChannelBuilder.input(c, "ticks")
+      quotes = ChannelBuilder.input(c, "quotes")
 
       c
-      |> Channels.merge()
-      |> Channels.from(ticks, &{:tick, &1})
-      |> Channels.from(quotes, &{:quote, &1})
-      |> Channels.key_by(fn _ -> "k" end)
-      |> Channels.into(Stateless)
-      |> Channels.output("merged")
+      |> ChannelBuilder.merge()
+      |> ChannelBuilder.from(ticks, &{:tick, &1})
+      |> ChannelBuilder.from(quotes, &{:quote, &1})
+      |> ChannelBuilder.key_by(fn _ -> "k" end)
+      |> ChannelBuilder.into(Stateless)
+      |> ChannelBuilder.output("merged")
     end
   end
 
@@ -320,9 +320,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
   # record is what states their order — the same read `conformance.ex` makes.
 
   defp entry_names(module) do
-    c = Channels.new()
+    c = ChannelBuilder.new()
     _ = module.channels(c)
-    c |> Channels.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
+    c |> ChannelBuilder.take() |> Map.fetch!(:entry_order) |> Enum.uniq()
   end
 
   defp sink_names(derived), do: for(%{"sink" => sink} <- derived["channels"], sink, do: sink)
@@ -657,14 +657,14 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     @behaviour Flezha.SDK.Relay
     def run, do: :steps
     def factory_id, do: "hand_written_steps"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
+    def channels(c), do: c |> ChannelBuilder.input("in") |> ChannelBuilder.into(HandWritten)
   end
 
   # A body and no behaviour: nothing says it is a relay.
   defmodule NotARelay do
     @moduledoc false
     def factory_id, do: "not_a_relay"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(HandWritten)
+    def channels(c), do: c |> ChannelBuilder.input("in") |> ChannelBuilder.into(HandWritten)
   end
 
   test "how a module runs is read from its settings" do

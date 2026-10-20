@@ -59,7 +59,7 @@ defmodule Flezha.SDK.Tasklet do
   otherwise. A logical clock on a changeless tasklet is refused at
   registration as `topology.unservable_clock`, and both clocks at once as `topology.two_clocks`,
   which the `use` form refuses at compile time instead. Timers:
-  `on_timer/4` (the scheduled timestamp, the kind, the state, a ctx) answers
+  `on_timer/3` (a `Flezha.SDK.TimerFiring`, the state, a ctx) answers
   what `run/3` answers and is what a timer registered through the ctx fires
   into; `max_timers_per_cell/0` (10_000) bounds a Cell's pending set, and an
   item whose registrations pass it fails, not retried, when the core settles it.
@@ -80,8 +80,7 @@ defmodule Flezha.SDK.Tasklet do
   `use` module does; the `use` form refuses a hand-written `apply_change/2`.
   """
 
-  alias Flezha.SDK.Ctx
-  alias Flezha.SDK.Knob
+  alias Flezha.SDK.{Ctx, Knob, TimerFiring}
 
   @type state :: term()
   @type run_result ::
@@ -106,12 +105,7 @@ defmodule Flezha.SDK.Tasklet do
               {:ok, term()} | {:error, term()}
   @callback logical_clock() :: boolean()
   @callback event_time(input :: term()) :: non_neg_integer()
-  @callback on_timer(
-              fired_at :: non_neg_integer(),
-              kind :: :event_time | :processing_time,
-              state(),
-              Ctx.t()
-            ) :: run_result()
+  @callback on_timer(TimerFiring.t(), state(), Ctx.t()) :: run_result()
   @callback max_timers_per_cell() :: pos_integer()
   @callback compensate(outputs :: [term()], state(), Ctx.t()) :: run_result()
 
@@ -130,7 +124,7 @@ defmodule Flezha.SDK.Tasklet do
                       migrate_change: 2,
                       logical_clock: 0,
                       event_time: 1,
-                      on_timer: 4,
+                      on_timer: 3,
                       max_timers_per_cell: 0
 
   @default_max_cells 100_000
@@ -167,7 +161,8 @@ defmodule Flezha.SDK.Tasklet do
   @retired_callbacks [
     {:cell_idle_ttl_ms, 0, "`idle_ttl_seconds/0`, in whole seconds"},
     {:clock, 0, "`logical_clock/0` answering true, or `event_time/1` for event time"},
-    {:event_time_of, 1, "`event_time/1`"}
+    {:event_time_of, 1, "`event_time/1`"},
+    {:on_timer, 4, "`on_timer/3`, taking a `%Flezha.SDK.TimerFiring{}`"}
   ]
 
   # The §5 short form's options, taken by the relay macro beside the
@@ -187,9 +182,9 @@ defmodule Flezha.SDK.Tasklet do
     now: 1,
     timer_after: 2,
     timer_at_event_time: 2,
-    cancel_processing_time_timer: 2,
-    cancel_event_time_timer: 2,
+    cancel_timer: 3,
     cell_key: 1,
+    replay: 1,
     spawn_steps: 3,
     spawn_steps: 4,
     effect: 3,
@@ -211,7 +206,7 @@ defmodule Flezha.SDK.Tasklet do
   above, under its own name, and **only the options written define anything**:
   a module that does not write `mailbox_capacity` exports none, so
   `FLEZHA_MAILBOX_CAPACITY` still decides its mailbox. Callbacks that take
-  arguments — `run/3`, `cells_for/1`, `event_time/1`, `on_timer/4`,
+  arguments — `run/3`, `cells_for/1`, `event_time/1`, `on_timer/3`,
   `compensate/3`, `migrate_state/2`, `migrate_change/2` — stay `def`s the
   author writes. An unknown option is a `CompileError` naming it.
   `idle_ttl_seconds` takes a positive integer and `logical_clock` a boolean,
@@ -231,7 +226,7 @@ defmodule Flezha.SDK.Tasklet do
   ## Nesting
 
   A tasklet nested inside a relay module inherits that module's imports
-  lexically, so `use` writes `import Flezha.SDK.Channels, only: []` to take
+  lexically, so `use` writes `import Flezha.SDK.ChannelBuilder, only: []` to take
   `input/2` and `output/2` back — a nested tasklet defining its own `input/0`
   would otherwise clash. A nested tasklet must be written **before** the
   `channels/1` that names it, which is how Elixir aliases resolve.
@@ -266,7 +261,7 @@ defmodule Flezha.SDK.Tasklet do
       # A nested tasklet inherits its relay module's imports; the builder
       # is not part of a tasklet's surface and `input/2` would clash with a
       # tasklet's own `input/0`.
-      import Flezha.SDK.Channels, only: []
+      import Flezha.SDK.ChannelBuilder, only: []
 
       @impl true
       def name, do: unquote(Keyword.fetch!(opts, :name))
@@ -401,7 +396,7 @@ defmodule Flezha.SDK.Tasklet do
     quote do
       @behaviour unquote(behaviour)
       use Flezha.SDK.State
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
       import Flezha.SDK.Ctx, only: unquote(ctx_imports)
 
       @impl unquote(behaviour)
@@ -478,17 +473,22 @@ defmodule Flezha.SDK.Tasklet do
         end
       end
 
+    codec = Keyword.take(options, [:codec])
+
     wired =
       quote do
         c
-        |> Flezha.SDK.Channels.input(unquote(entry), unquote(Keyword.take(options, [:codec])))
-        |> Flezha.SDK.Channels.into(unquote(tasklet))
+        |> Flezha.SDK.ChannelBuilder.input(unquote(entry), unquote(codec))
+        |> Flezha.SDK.ChannelBuilder.into(unquote(tasklet))
       end
 
     topology =
       case Keyword.fetch(options, :output) do
-        {:ok, output} -> quote(do: Flezha.SDK.Channels.output(unquote(wired), unquote(output)))
-        :error -> wired
+        {:ok, output} ->
+          quote(do: Flezha.SDK.ChannelBuilder.output(unquote(wired), unquote(output)))
+
+        :error ->
+          wired
       end
 
     quote do
@@ -619,9 +619,9 @@ defmodule Flezha.SDK.Tasklet do
         do: {"#{fun}/#{arity}", instead}
   end
 
-  @doc "Whether the tasklet handles a firing — it exports `on_timer/4`."
+  @doc "Whether the tasklet handles a firing — it exports `on_timer/3`."
   @spec on_timer?(module()) :: boolean()
-  def on_timer?(module), do: exports?(module, :on_timer, 4)
+  def on_timer?(module), do: exports?(module, :on_timer, 3)
 
   @doc "Cap on a Cell's pending timers, or nil for the core's 10_000."
   @spec max_timers_per_cell(module()) :: pos_integer() | nil

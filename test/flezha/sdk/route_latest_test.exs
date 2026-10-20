@@ -9,7 +9,7 @@ defmodule Flezha.SDK.RouteLatestTest do
   # A local run logs the core's local-mode banner, asserted where it starts.
   @moduletag :capture_log
 
-  alias Flezha.SDK.{Channels, Declaration, Local}
+  alias Flezha.SDK.{ChannelBuilder, Declaration, Local}
   alias Flezha.SDK.Test.Notices
 
   defmodule RouterOp do
@@ -17,12 +17,12 @@ defmodule Flezha.SDK.RouteLatestTest do
     def factory_id, do: "router_op"
 
     def channels(c) do
-      documents = Channels.input(c, "thresholds", codec: :text)
-      trades = Channels.input(c, "trades", codec: :text)
+      documents = ChannelBuilder.input(c, "thresholds", codec: :text)
+      trades = ChannelBuilder.input(c, "trades", codec: :text)
 
       c
-      |> Channels.route_latest(documents, trades, &(&1 |> String.split(":") |> hd()))
-      |> Channels.output_with("routed", fn {key, document} -> "#{key}=#{document}" end)
+      |> ChannelBuilder.route_latest(documents, trades, &(&1 |> String.split(":") |> hd()))
+      |> ChannelBuilder.output_with("routed", fn {key, document} -> "#{key}=#{document}" end)
     end
   end
 
@@ -31,12 +31,12 @@ defmodule Flezha.SDK.RouteLatestTest do
     def factory_id, do: "named_router_op"
 
     def channels(c) do
-      documents = Channels.input(c, "thresholds")
-      trades = Channels.input(c, "trades")
+      documents = ChannelBuilder.input(c, "thresholds")
+      trades = ChannelBuilder.input(c, "trades")
 
       c
-      |> Channels.route_latest_named(documents, trades, & &1, "thresholds_router")
-      |> Channels.output()
+      |> ChannelBuilder.route_latest_named(documents, trades, & &1, "thresholds_router")
+      |> ChannelBuilder.output()
     end
   end
 

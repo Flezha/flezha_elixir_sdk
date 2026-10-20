@@ -89,7 +89,7 @@ defmodule ElixirRunner.Call do
     def factory_id, do: "call_echo"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
       c |> input("in", codec: :text) |> into(ElixirRunner.Call.Echo) |> output()
     end
   end
@@ -100,7 +100,7 @@ defmodule ElixirRunner.Call do
     def factory_id, do: "call_downstream"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       c
       |> input("in", codec: :text)
@@ -117,7 +117,7 @@ defmodule ElixirRunner.Call do
     def factory_id, do: "call_split"
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
 
       admitted = c |> input("in", codec: :text) |> into(ElixirRunner.Call.Admit)
 
@@ -142,7 +142,7 @@ defmodule ElixirRunner.Call do
     def max_duration_ms, do: 600_000
 
     def channels(c) do
-      import Flezha.SDK.Channels
+      import Flezha.SDK.ChannelBuilder
       c |> input("in", codec: :text) |> into(ElixirRunner.Call.Turn) |> output()
     end
   end

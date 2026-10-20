@@ -21,10 +21,10 @@ defmodule Flezha.SDK.Ctx do
   keyless emit there from a Cell with no key of its own is refused at the call.
 
   `timer_after/2` and `timer_at_event_time/2` record a registration and answer
-  `{:ok, at}`, the absolute timestamp the two cancels take; a cancel answers
-  `:ok`. `flz_core` judges the item's timer ops when it settles: past the
+  `{:ok, at}`, the absolute timestamp `cancel_timer/3` takes beside the kind;
+  a cancel answers `:ok`. `flz_core` judges the item's timer ops when it settles: past the
   tasklet's `max_timers_per_cell/0`, or an event-time timer under another
-  clock, the item fails, not retried. Inside a `compensate/3` hook the four
+  clock, the item fails, not retried. Inside a `compensate/3` hook the three
   timer calls answer `runtime.timers_unavailable` and arm nothing.
 
   `spawn_steps/4`, `effect/4` and `part/2` reach `flz_core` from the live
@@ -32,7 +32,7 @@ defmodule Flezha.SDK.Ctx do
   from another process is refused.
   """
 
-  alias Flezha.SDK.{Error, Native, Spawn}
+  alias Flezha.SDK.{Error, Native, Spawn, TimerFiring}
 
   @enforce_keys [:module, :cell_key, :now_ms, :ref]
   defstruct [
@@ -67,13 +67,12 @@ defmodule Flezha.SDK.Ctx do
   # A refusal the caller can only fix in its code: `run/3` returns it as it is.
   @non_retryable_effect ~w(effect.bad_name effect.nested effect.outside_invocation effect.too_large)
 
-  @doc """
-  A fresh ctx for one invocation of `module`. `opts` carries the node's channel
-  name and whether its output is keyed (`keyed_sink?`), `timers?: false`
-  in a compensate hook, and the live
-  activation the core calls are made from: `core`, `token`, `item`, `offset`,
-  `replay`, the Cell's `identity` and the `seq` it was handed at.
-  """
+  # A fresh ctx for one invocation of `module`. `opts` carries the node's channel
+  # name and whether its output is keyed (`keyed_sink?`), `timers?: false`
+  # in a compensate hook, and the live
+  # activation the core calls are made from: `core`, `token`, `item`, `offset`,
+  # `replay`, the Cell's `identity` and the `seq` it was handed at.
+  @doc false
   def new(module, cell_key, now_ms, opts \\ []) do
     %__MODULE__{
       module: module,
@@ -157,21 +156,26 @@ defmodule Flezha.SDK.Ctx do
           {:ok, non_neg_integer()} | {:error, Error.t()}
   def timer_at_event_time(%__MODULE__{} = ctx, at), do: timer(ctx, register_op(:event_time, at))
 
-  @doc "Cancel the processing-time timer `timer_after/2` answered; one not pending changes nothing."
-  @spec cancel_processing_time_timer(t(), non_neg_integer()) :: :ok | {:error, Error.t()}
-  def cancel_processing_time_timer(%__MODULE__{} = ctx, at),
-    do: cancelled(timer(ctx, cancel_op(:processing_time, at)))
-
-  @doc "Cancel the event-time timer `timer_at_event_time/2` answered; one not pending changes nothing."
-  @spec cancel_event_time_timer(t(), non_neg_integer()) :: :ok | {:error, Error.t()}
-  def cancel_event_time_timer(%__MODULE__{} = ctx, at),
-    do: cancelled(timer(ctx, cancel_op(:event_time, at)))
+  @doc """
+  Cancel the `kind` timer (`:processing_time` or `:event_time`) its registration
+  answered `at` for; one not pending changes nothing.
+  """
+  @spec cancel_timer(t(), TimerFiring.kind(), non_neg_integer()) :: :ok | {:error, Error.t()}
+  def cancel_timer(%__MODULE__{} = ctx, kind, at) when kind in [:processing_time, :event_time] do
+    case timer(ctx, %{kind: kind, scheduled_at: at, register: false}) do
+      {:ok, _at} -> :ok
+      refused -> refused
+    end
+  end
 
   defp register_op(kind, at), do: %{kind: kind, scheduled_at: at, register: true}
-  defp cancel_op(kind, at), do: %{kind: kind, scheduled_at: at, register: false}
 
   @doc "The owning Cell's key, or nil for a Single Cell."
   def cell_key(%__MODULE__{cell_key: k}), do: k
+
+  @doc "Whether this invocation replays an input the Cell already ran."
+  @spec replay(t()) :: boolean()
+  def replay(%__MODULE__{replay?: replay?}), do: replay?
 
   @doc """
   Request spawn-or-deliver of a steps instance of `factory_id` in this
@@ -396,9 +400,6 @@ defmodule Flezha.SDK.Ctx do
     push(timers_key(ref), op)
     {:ok, op.scheduled_at}
   end
-
-  defp cancelled({:ok, _at}), do: :ok
-  defp cancelled(refused), do: refused
 
   defp put_emit(%__MODULE__{ref: ref}, value, meta, key) do
     case reserved_key(meta) do

@@ -108,7 +108,8 @@ defmodule Flezha.SDK.TaskletClockTest do
           {"defp clock, do: :event_time", "`logical_clock/0`"},
           {"def event_time_of(_input), do: 0", "`event_time/1`"},
           {"defp event_time_of(_input), do: 0", "`event_time/1`"},
-          {"def cell_idle_ttl_ms, do: 20", "`idle_ttl_seconds/0`"}
+          {"def cell_idle_ttl_ms, do: 20", "`idle_ttl_seconds/0`"},
+          {"def on_timer(_at, _kind, s, _c), do: {:ok, s}", "`on_timer/3`"}
         ],
         macro <- [~s|Tasklet, name: "p"|, ~s|Relay, factory_id: "p"|] do
       error =
@@ -145,6 +146,7 @@ defmodule Flezha.SDK.TaskletClockTest do
     def clock, do: :logical
     def event_time_of(_input), do: 0
     def cell_idle_ttl_ms, do: 20
+    def on_timer(_at, _kind, state, _ctx), do: {:ok, state}
     def run(_input, state, _ctx), do: {:ok, state}
   end
 
@@ -180,7 +182,8 @@ defmodule Flezha.SDK.TaskletClockTest do
              [
                {"cell_idle_ttl_ms/0", "`idle_ttl_seconds/0`, in whole seconds"},
                {"clock/0", "`logical_clock/0` answering true, or `event_time/1` for event time"},
-               {"event_time_of/1", "`event_time/1`"}
+               {"event_time_of/1", "`event_time/1`"},
+               {"on_timer/4", "`on_timer/3`, taking a `%Flezha.SDK.TimerFiring{}`"}
              ]
   end
 end

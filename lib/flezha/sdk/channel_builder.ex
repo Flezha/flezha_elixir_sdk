@@ -1,4 +1,4 @@
-defmodule Flezha.SDK.Channels do
+defmodule Flezha.SDK.ChannelBuilder do
   @moduledoc """
   The graph-builder token handed to `channels/1`. Openers (`input`/`input_with`),
   edge transforms (`map`/`filter`/`flat_map`/`key_by`), consumers
@@ -13,7 +13,7 @@ defmodule Flezha.SDK.Channels do
   to the chain its handle carries — a transform, a key, a plugin output, an edge
   into a tasklet, a merge source closing on one — and the record is kept in
   the process dictionary for the duration of `channels/1` (the twin of the Rust
-  builder's `pending`). `Flezha.SDK.Declaration` hands the finished record to
+  builder's `pending`). The declaration step hands the finished record to
   `flz_core`, which judges it as it judges every SDK's.
 
   The refusals that stay here are the ones the surface itself makes: `keyed`,

@@ -178,7 +178,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule PricingOp do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     def factory_id, do: "call_pricing"
     def channels(c), do: c |> input("in", codec: :text) |> into(PricingQuote) |> output("quotes")
   end
@@ -186,7 +186,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule OrdersOp do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     alias ElixirRunner.RelayCall
     def factory_id, do: "call_orders"
 
@@ -214,7 +214,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule AgentSteps do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     def factory_id, do: "call_agent"
     def run, do: {:steps, each: :per_input, on_failure: :keep_progress}
     def durable, do: ElixirRunner.fixture_durable()
@@ -225,7 +225,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule GatewayOp do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     alias ElixirRunner.RelayCall
     def factory_id, do: "call_gateway"
     def run, do: {:flow, exactly: :effectively_once}
@@ -259,7 +259,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule ToolSessionSteps do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     alias ElixirRunner.RelayCall
     def factory_id, do: "call_tool_session"
     def run, do: {:steps, each: :per_input}
@@ -300,7 +300,7 @@ defmodule ElixirRunner.RelayCall do
   defmodule ApiOrders do
     @moduledoc false
     @behaviour Flezha.SDK.Relay
-    import Flezha.SDK.Channels
+    import Flezha.SDK.ChannelBuilder
     def factory_id, do: "orders"
 
     @order %{

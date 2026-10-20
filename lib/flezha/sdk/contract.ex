@@ -1,20 +1,20 @@
 defmodule Flezha.SDK.Contract do
-  @moduledoc """
-  The directory the contract set this package reads is resolved in: the error
-  catalogue it compiles, and the fixtures its suite is held to.
+  @moduledoc false
 
-  `$FLEZHA_CONTRACT_DIR` when it is set, else the core tree the package sits in
-  as a submodule, else `contract/` in the package, where a release's fixture
-  archive is unpacked. The core tree comes first so a stale copy left in the
-  package never shadows its live files. The first that resolves is the answer,
-  and none resolving is a refusal naming all three rather than a skipped read.
-  A directory named by the variable is taken as given; the other two resolve
-  when they hold the member asked for, or for the directory as a whole the
-  set's own list, `test/fixtures/contract.txt`.
-
-  `contract/` tracks the member the package compiles from, the error
-  catalogue, so a clone or the Hex package compiles with no release unpacked.
-  """
+  # The directory the contract set this package reads is resolved in: the error
+  # catalogue it compiles, and the fixtures its suite is held to.
+  #
+  # `$FLEZHA_CONTRACT_DIR` when it is set, else the core tree the package sits in
+  # as a submodule, else `contract/` in the package, where a release's fixture
+  # archive is unpacked. The core tree comes first so a stale copy left in the
+  # package never shadows its live files. The first that resolves is the answer,
+  # and none resolving is a refusal naming all three rather than a skipped read.
+  # A directory named by the variable is taken as given; the other two resolve
+  # when they hold the member asked for, or for the directory as a whole the
+  # set's own list, `test/fixtures/contract.txt`.
+  #
+  # `contract/` tracks the member the package compiles from, the error
+  # catalogue, so a clone or the Hex package compiles with no release unpacked.
 
   @package Path.expand("../../..", __DIR__)
 

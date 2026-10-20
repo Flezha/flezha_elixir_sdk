@@ -6,7 +6,7 @@ defmodule Flezha.SDK.DeclarationTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Contract, Declaration, Error}
+  alias Flezha.SDK.{ChannelBuilder, Contract, Declaration, Error}
 
   defmodule Entry do
     use Flezha.SDK.Tasklet, name: "entry"
@@ -30,10 +30,10 @@ defmodule Flezha.SDK.DeclarationTest do
     def channels(c),
       do:
         c
-        |> Channels.input("in")
-        |> Channels.into(Entry)
-        |> Channels.named("hop")
-        |> Channels.into(Next)
+        |> ChannelBuilder.input("in")
+        |> ChannelBuilder.into(Entry)
+        |> ChannelBuilder.named("hop")
+        |> ChannelBuilder.into(Next)
   end
 
   defmodule Twice do
@@ -41,9 +41,14 @@ defmodule Flezha.SDK.DeclarationTest do
     def factory_id, do: "twice"
 
     def channels(c) do
-      first = c |> Channels.input("a") |> Channels.into_named(Entry, "first")
-      c |> Channels.input("b") |> Channels.into_named(Entry, "second") |> Channels.output("out")
-      first |> Channels.output("first_out")
+      first = c |> ChannelBuilder.input("a") |> ChannelBuilder.into_named(Entry, "first")
+
+      c
+      |> ChannelBuilder.input("b")
+      |> ChannelBuilder.into_named(Entry, "second")
+      |> ChannelBuilder.output("out")
+
+      first |> ChannelBuilder.output("first_out")
     end
   end
 
@@ -79,7 +84,11 @@ defmodule Flezha.SDK.DeclarationTest do
     def run, do: {:steps, each: :per_input}
 
     def channels(c),
-      do: c |> Channels.input("in") |> Channels.into(Keyset) |> Channels.into(Compensating)
+      do:
+        c
+        |> ChannelBuilder.input("in")
+        |> ChannelBuilder.into(Keyset)
+        |> ChannelBuilder.into(Compensating)
   end
 
   defmodule RouterNoKeys do
@@ -95,21 +104,21 @@ defmodule Flezha.SDK.DeclarationTest do
     def factory_id, do: "surface_refused"
 
     def channels(c) do
-      c |> Channels.input("in") |> Channels.keyed()
-      c |> Channels.input("other") |> Channels.named("hop")
+      c |> ChannelBuilder.input("in") |> ChannelBuilder.keyed()
+      c |> ChannelBuilder.input("other") |> ChannelBuilder.named("hop")
     end
   end
 
   defmodule Unrouted do
     @behaviour Flezha.SDK.Relay
     def factory_id, do: "unrouted"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(Keyset)
+    def channels(c), do: c |> ChannelBuilder.input("in") |> ChannelBuilder.into(Keyset)
   end
 
   defmodule RouterOnly do
     @behaviour Flezha.SDK.Relay
     def factory_id, do: "router_only"
-    def channels(c), do: c |> Channels.input("in") |> Channels.into(RouterNoKeys)
+    def channels(c), do: c |> ChannelBuilder.input("in") |> ChannelBuilder.into(RouterNoKeys)
   end
 
   defp class(module) do

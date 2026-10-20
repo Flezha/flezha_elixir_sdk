@@ -1,21 +1,21 @@
 defmodule Flezha.SDK.Native do
-  @moduledoc """
-  The native library: `flz_core`, the runtime every Flezha SDK runs on, bound
-  through `flz_core_ffi`'s veneer. Activations reach a worker as
-  `{:flz_activation, thread, activation}` from a thread the library owns;
-  nothing that waits for one runs on a BEAM scheduler.
+  @moduledoc false
 
-  The library is precompiled for the supported triples, downloaded when the
-  package compiles and checked against the checksum file the package carries.
-  A host that file names no artefact for, or a build with `FLEZHA_SDK_BUILD_NIF=1`,
-  compiles it from source instead, which needs a Rust toolchain.
-
-  A node that never runs a runner, a controller with no runner in its own VM,
-  sets `config :flezha_sdk, socket_nif: false`: nothing is downloaded or
-  compiled, and every function here raises `:nif_not_loaded`.
-
-  A refusal is `{:error, document}`, the core's JSON error document.
-  """
+  # The native library: `flz_core`, the runtime every Flezha SDK runs on, bound
+  # through `flz_core_ffi`'s veneer. Activations reach a worker as
+  # `{:flz_activation, thread, activation}` from a thread the library owns;
+  # nothing that waits for one runs on a BEAM scheduler.
+  #
+  # The library is precompiled for the supported triples, downloaded when the
+  # package compiles and checked against the checksum file the package carries.
+  # A host that file names no artefact for, or a build with `FLEZHA_SDK_BUILD_NIF=1`,
+  # compiles it from source instead, which needs a Rust toolchain.
+  #
+  # A node that never runs a runner, a controller with no runner in its own VM,
+  # sets `config :flezha_sdk, socket_nif: false`: nothing is downloaded or
+  # compiled, and every function here raises `:nif_not_loaded`.
+  #
+  # A refusal is `{:error, document}`, the core's JSON error document.
 
   require Logger
 

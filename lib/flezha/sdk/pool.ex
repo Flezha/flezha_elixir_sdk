@@ -1,18 +1,18 @@
 defmodule Flezha.SDK.Pool do
-  @moduledoc """
-  The workers that answer one core's activations. Each worker is a process
-  paired with a thread the native library owns: the thread waits in the
-  core's poll and hands the activation over as a message, the worker runs the
-  tasklet code and completes it, and only then does the thread poll again. No
-  wait for an activation holds a BEAM scheduler.
+  @moduledoc false
 
-  The core's pool governor sizes it, over the schedulers online as this
-  runtime's base: it asks for the base workers, for one more each time the
-  core reports starvation (every worker held by a tasklet that waits), and for
-  a replacement when the pool is short, and a grown worker's thread stops it
-  when idle. An activation a crashed worker held is failed back to the core's
-  retry ladder.
-  """
+  # The workers that answer one core's activations. Each worker is a process
+  # paired with a thread the native library owns: the thread waits in the
+  # core's poll and hands the activation over as a message, the worker runs the
+  # tasklet code and completes it, and only then does the thread poll again. No
+  # wait for an activation holds a BEAM scheduler.
+  #
+  # The core's pool governor sizes it, over the schedulers online as this
+  # runtime's base: it asks for the base workers, for one more each time the
+  # core reports starvation (every worker held by a tasklet that waits), and for
+  # a replacement when the pool is short, and a grown worker's thread stops it
+  # when idle. An activation a crashed worker held is failed back to the core's
+  # retry ladder.
 
   use GenServer
   require Logger

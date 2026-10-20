@@ -1,6 +1,6 @@
 defmodule Flezha.SDK.Response do
   @moduledoc """
-  One outcome of a `Flezha.SDK.Channels.call/3`, as its Response channel
+  One outcome of a `Flezha.SDK.ChannelBuilder.call/3`, as its Response channel
   delivers it: the `request` the call end wrote (its bytes), the `result`
   (`{:ok, answer}` with the answer read by the call's `decode:`, or
   `{:error, %Flezha.SDK.Error{}}`, a missed deadline being `call.timeout`),

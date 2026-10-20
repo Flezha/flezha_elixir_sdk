@@ -66,7 +66,7 @@ the wrong parent is refused when the class is registered, as
 
 ## The native library
 
-The runtime is a native library, `Flezha.SDK.Native`, built over `flz_core`. It
+The runtime is a native library, `flz_core_beam`, built over `flz_core`. It
 is precompiled for Linux (x86_64, aarch64), macOS (x86_64, arm64) and Windows
 (x86_64), downloaded when the package compiles and checked against the checksum
 file the package carries. On any other host, or with `FLEZHA_SDK_BUILD_NIF=1`,
@@ -80,9 +80,10 @@ compiles no library.
 - **Local mode**: `Flezha.SDK.Local.start/2` runs a relay's declared graph in
   your own process, with no controller. See
   [Local mode](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/running_and_testing.md#local-mode).
-- **Testing**: the SDK ships no tasklet test harness yet. See
-  [Check a tasklet on its own](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/running_and_testing.md#check-a-tasklet-on-its-own)
-  for the SDKs that do.
+- **Testing**: `Flezha.SDK.TaskletTestHarness` runs one tasklet on one Cell,
+  with no controller: `feed/3`, `fire_timer/3`, `advance_event_time/2`, and
+  `replay_equals/1`, the check that the recorded changes rebuild the state. See
+  [Check a tasklet on its own](https://github.com/flezha/flezha/blob/main/docs/public/topics/core/running_and_testing.md#check-a-tasklet-on-its-own).
 - **The relay API**: a relay's entry channels, answering a caller, `call/3` to
   another relay, and `Flezha.SDK.send/5` and `Flezha.SDK.call/4` from
   application code. See
@@ -91,7 +92,9 @@ compiles no library.
 ## Configuration
 
 Every knob is read from its environment variable first, then from this
-application's env, then its default: `Flezha.SDK.Knob` lists them.
+application's env, then its default:
+[Runner environment](https://github.com/flezha/flezha/blob/main/docs/public/configuration/runner_environment.md)
+lists them.
 
 ## Developing this package
 

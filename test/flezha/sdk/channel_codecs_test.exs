@@ -7,7 +7,7 @@ defmodule Flezha.SDK.ChannelCodecsTest do
   """
   use ExUnit.Case, async: true
 
-  alias Flezha.SDK.{Channels, Contract}
+  alias Flezha.SDK.{ChannelBuilder, Contract}
 
   defp cases do
     for line <-
@@ -26,10 +26,10 @@ defmodule Flezha.SDK.ChannelCodecsTest do
   defp bytes(text), do: text
 
   defp parser(entry) do
-    c = Channels.new()
+    c = ChannelBuilder.new()
     opts = if entry == "none", do: [], else: [codec: String.to_atom(entry)]
-    _ = Channels.input(c, "in", opts)
-    Channels.take(c).entries["in"].parser
+    _ = ChannelBuilder.input(c, "in", opts)
+    ChannelBuilder.take(c).entries["in"].parser
   end
 
   test "every shared case with no sink codec sends the bytes the fixture records" do
@@ -39,7 +39,7 @@ defmodule Flezha.SDK.ChannelCodecsTest do
     for {line, entry, payload, expected} <- rows do
       sent =
         case parser(entry).(payload) do
-          {:ok, value} -> Channels.default_serialize(value)
+          {:ok, value} -> ChannelBuilder.default_serialize(value)
           {:error, _} -> "decode_error"
         end
 

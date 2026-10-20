@@ -85,9 +85,16 @@ defmodule Flezha.SDK.CtxTest do
   test "a cancel answers :ok and hands its op, pending or not" do
     ctx = Ctx.new(nil, nil, 1_000)
 
-    assert Ctx.cancel_processing_time_timer(ctx, 5) == :ok
-    assert Ctx.cancel_event_time_timer(ctx, 7) == :ok
+    assert Ctx.cancel_timer(ctx, :processing_time, 5) == :ok
+    assert Ctx.cancel_timer(ctx, :event_time, 7) == :ok
     assert Ctx.take_timers(ctx) == [op(:processing_time, 5, false), op(:event_time, 7, false)]
+  end
+
+  test "a cancel of a kind no timer has is a FunctionClauseError" do
+    ctx = Ctx.new(nil, nil, 1_000)
+
+    assert_raise FunctionClauseError, fn -> Ctx.cancel_timer(ctx, :wall, 5) end
+    assert Ctx.take_timers(ctx) == []
   end
 
   # The core adds a firing's own removal; `now` is the scheduled time.
@@ -105,8 +112,8 @@ defmodule Flezha.SDK.CtxTest do
     unavailable = {:error, Flezha.SDK.Error.new("runtime.timers_unavailable")}
     assert Ctx.timer_after(ctx, 1_000) == unavailable
     assert Ctx.timer_at_event_time(ctx, 5) == unavailable
-    assert Ctx.cancel_processing_time_timer(ctx, 2_000) == unavailable
-    assert Ctx.cancel_event_time_timer(ctx, 5) == unavailable
+    assert Ctx.cancel_timer(ctx, :processing_time, 2_000) == unavailable
+    assert Ctx.cancel_timer(ctx, :event_time, 5) == unavailable
     assert Ctx.take_timers(ctx) == []
   end
 end

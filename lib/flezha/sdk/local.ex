@@ -21,12 +21,12 @@ defmodule Flezha.SDK.Local do
       :ok = Flezha.SDK.Local.feed(run, "lines", "The quick brown fox")
       :ok = Flezha.SDK.Local.feed(run, "lines", "the lazy dog")
       :ok = Flezha.SDK.Local.run_until_idle(run, 5_000)
-      :ok = Flezha.SDK.Local.stop(run)
+      :ok = Flezha.SDK.Local.close(run)
   """
 
   use GenServer
 
-  alias Flezha.SDK.{Call, Channels, Error, Native, Pool}
+  alias Flezha.SDK.{Call, ChannelBuilder, Error, Native, Pool}
 
   # How often a run with an output callback looks for released values.
   @drain_every_ms 20
@@ -77,7 +77,9 @@ defmodule Flezha.SDK.Local do
   @spec feed(pid(), String.t(), term()) :: :ok | {:error, Error.t()}
   def feed(run, channel, payload) do
     with {:ok, core} <- Call.control(run, :core, {:error, silent()}) do
-      core |> Native.local_feed(channel, Channels.default_serialize(payload)) |> Native.answered()
+      core
+      |> Native.local_feed(channel, ChannelBuilder.default_serialize(payload))
+      |> Native.answered()
     end
   end
 
@@ -95,11 +97,11 @@ defmodule Flezha.SDK.Local do
   end
 
   @doc """
-  Stop the run, delivering what it already released. A run whose starter has
+  Close the run, delivering what it already released. A run whose starter has
   already gone is stopped by that exit; asking again is answered, never raised.
   """
-  @spec stop(pid()) :: :ok
-  def stop(run) do
+  @spec close(pid()) :: :ok
+  def close(run) do
     GenServer.stop(run, :normal)
   catch
     :exit, _gone -> :ok
