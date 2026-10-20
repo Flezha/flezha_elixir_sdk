@@ -10,14 +10,14 @@ defmodule Agentdesk.Watch do
   @impl true
   def run(request, state, ctx) do
     # keyed by the user: an output of an effectively-once relay needs a key
-    emit_keyed(
+    emit(
       ctx,
-      Request.user(request),
       if Request.listens?(request) do
         %{stream: Request.user(request)}
       else
         %{status: 404, body: "no such route"}
-      end
+      end,
+      key: Request.user(request)
     )
 
     {:ok, state}

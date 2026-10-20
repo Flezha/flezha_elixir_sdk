@@ -11,9 +11,8 @@ defmodule Agentdesk.Admit do
   def run(verdict, state, ctx) do
     user = verdict.message.user
 
-    emit_keyed(
+    emit(
       ctx,
-      user,
       if Budget.admitted?(verdict) do
         %{status: 202, body: "sent to #{user}"}
       else
@@ -21,7 +20,8 @@ defmodule Agentdesk.Admit do
           status: 429,
           body: "#{user} has used #{verdict.spent} of today's #{Budget.daily_tokens()} tokens"
         }
-      end
+      end,
+      key: user
     )
 
     {:ok, state}

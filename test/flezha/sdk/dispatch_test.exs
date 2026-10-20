@@ -23,7 +23,7 @@ defmodule Flezha.SDK.DispatchTest do
       [key, n] = String.split(input, ":")
       state = add(state, ctx, String.to_integer(n))
       emit(ctx, "#{key}=#{state.value}")
-      emit_with_meta(ctx, "again", %{"note" => "second"})
+      emit(ctx, "again", metadata: %{"note" => "second"})
       {:ok, state}
     end
 

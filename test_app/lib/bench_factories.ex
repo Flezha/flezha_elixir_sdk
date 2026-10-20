@@ -231,7 +231,7 @@ defmodule Flezha.Bench.TierStoreTask do
 
   def upsert(key, value, values, ctx) do
     values = set(values, ctx, key, value)
-    emit_keyed(ctx, key, "#{key}=#{value}")
+    emit(ctx, "#{key}=#{value}", key: key)
     {:ok, values}
   end
 end

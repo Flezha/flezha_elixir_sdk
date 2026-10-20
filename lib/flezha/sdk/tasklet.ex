@@ -182,9 +182,7 @@ defmodule Flezha.SDK.Tasklet do
   # tasklet body. `defchange`'s recorders call it by its full name.
   @ctx_imports [
     emit: 2,
-    emit_with_meta: 3,
-    emit_keyed: 3,
-    emit_keyed_with_meta: 4,
+    emit: 3,
     part: 2,
     now: 1,
     timer_after: 2,

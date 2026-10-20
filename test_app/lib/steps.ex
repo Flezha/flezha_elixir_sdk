@@ -611,7 +611,7 @@ defmodule ElixirRunner.Steps do
     @impl true
     def run(input, state, ctx) do
       state = insert(state, ctx, "commit_a")
-      :ok = emit_keyed_with_meta(ctx, "k", input, %{"trace" => "t1"})
+      :ok = emit(ctx, input, key: "k", metadata: %{"trace" => "t1"})
       {:ok, state}
     end
   end

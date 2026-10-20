@@ -1,12 +1,62 @@
 defmodule Flezha.SDK.CtxTest do
   @moduledoc """
-  The ctx's four timer calls: what each answers, and the ops an item hands
-  the core, which judges them when it settles. Then their refusal where
-  timers are unavailable, and the stable id's cross-language vector.
+  The ctx's emit and its options with their refusals; the four timer calls:
+  what each answers, and the ops an item hands the core, which judges them
+  when it settles. Then their refusal where timers are unavailable, and the
+  stable id's cross-language vector.
   """
   use ExUnit.Case, async: true
 
   alias Flezha.SDK.Ctx
+
+  defp keyed(cell_key), do: Ctx.new(nil, cell_key, 0, keyed_sink?: true, channel: "out")
+
+  test "emit/3 hands the value with its key and metadata, emit/2 with neither" do
+    ctx = keyed("cell")
+
+    assert Ctx.emit(ctx, "a", key: "k", metadata: %{"trace" => "t1"}) == :ok
+    assert Ctx.emit(ctx, "b", metadata: %{"trace" => "t2"}) == :ok
+    assert Ctx.emit(ctx, "c") == :ok
+    assert Ctx.emit(ctx, "d", []) == :ok
+
+    assert Ctx.take_emits(ctx) == [
+             {"a", %{"trace" => "t1"}, "k"},
+             {"b", %{"trace" => "t2"}, nil},
+             {"c", %{}, nil},
+             {"d", %{}, nil}
+           ]
+  end
+
+  test "a key on an output not declared keyed is refused and nothing is emitted" do
+    ctx = Ctx.new(nil, "cell", 0, channel: "out")
+
+    assert {:error, %{code: "runtime.key_not_allowed_on_non_keyed_channel"}} =
+             Ctx.emit(ctx, "v", key: "k")
+
+    assert Ctx.take_emits(ctx) == []
+  end
+
+  test "a keyless emit from a Single Cell on a keyed output is refused, with or without options" do
+    ctx = keyed(nil)
+
+    for result <- [Ctx.emit(ctx, "v"), Ctx.emit(ctx, "v", metadata: %{"m" => "1"})] do
+      assert {:error, %{code: "runtime.key_required_on_keyed_channel"}} = result
+    end
+
+    assert Ctx.emit(ctx, "v", key: "k") == :ok
+    assert Ctx.take_emits(ctx) == [{"v", %{}, "k"}]
+  end
+
+  test "reserved metadata and an unknown option are refused" do
+    ctx = keyed("cell")
+
+    assert {:error, %{code: "runtime.reserved_metadata_key"}} =
+             Ctx.emit(ctx, "v", metadata: %{"flz.seq" => "1"})
+
+    assert_raise ArgumentError, fn -> Ctx.emit(ctx, "v", channel: "other") end
+    assert_raise ArgumentError, fn -> Ctx.emit(ctx, "v", key: :not_a_string) end
+    assert Ctx.take_emits(ctx) == []
+  end
 
   defp op(kind, at, register), do: %{kind: kind, scheduled_at: at, register: register}
 

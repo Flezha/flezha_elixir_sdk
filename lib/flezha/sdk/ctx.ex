@@ -6,18 +6,18 @@ defmodule Flezha.SDK.Ctx do
   `Kernel.apply/3`, and a `use` tasklet never calls it: its `defchange`
   recorders do.
 
-  `emit/2`, `emit_with_meta/3`, `emit_keyed/3` and `emit_keyed_with_meta/4`
-  accumulate outputs for this invocation; `apply/3` folds a change into the
-  state through the tasklet's `apply_change/2` and records it for the Cell's
-  record stream, the only recorded mutation path; `now/1` is the declared
-  clock's value, evaluated once by the core for this input, and the scheduled
-  timestamp inside a firing; `cell_key/1` is the owning Cell's key (or nil for
+  `emit/2` and `emit/3` (with `key:` and `metadata:`) accumulate outputs for
+  this invocation; `apply/3` folds a change into the state through the
+  tasklet's `apply_change/2` and records it for the Cell's record stream, the
+  only recorded mutation path; `now/1` is the declared clock's value,
+  evaluated once by the core for this input, and the scheduled timestamp
+  inside a firing; `cell_key/1` is the owning Cell's key (or nil for
   a Single Cell). Emits, changes, timer operations and the completion are held
   in the invoking worker's dictionary under a per-invocation ref and are taken
   only when `run/3` returns `{:ok, _}`: a failing invocation discards them all.
   Reserved `flz.`-prefixed metadata keys are refused.
 
-  A key rides an emit only where the node's output is declared `keyed/1`, and a
+  A `key:` rides an emit only where the node's output is declared `keyed/1`, and a
   keyless emit there from a Cell with no key of its own is refused at the call.
 
   `timer_after/2` and `timer_at_event_time/2` record a registration and answer
@@ -106,39 +106,43 @@ defmodule Flezha.SDK.Ctx do
     module.apply_change(state, change)
   end
 
-  @doc "Emit a value on the tasklet's outgoing channels."
+  @typedoc "An `emit/3` option."
+  @type emit_option :: {:key, String.t()} | {:metadata, map()}
+
+  @doc "Emit a value on the tasklet's outgoing channel."
   @spec emit(t(), term()) :: :ok | {:error, Error.t()}
-  def emit(%__MODULE__{} = ctx, value), do: emit_with_meta(ctx, value, %{})
+  def emit(%__MODULE__{keyed_sink?: true, cell_key: nil, channel: channel}, _value),
+    do: {:error, Error.new("runtime.key_required_on_keyed_channel", channel: channel)}
 
-  @doc "Emit a value with metadata. Reserved `flz.`-prefixed keys are refused."
-  @spec emit_with_meta(t(), term(), map()) :: :ok | {:error, Error.t()}
-  def emit_with_meta(
-        %__MODULE__{keyed_sink?: true, cell_key: nil, channel: channel},
-        _value,
-        _meta
-      ),
-      do: {:error, Error.new("runtime.key_required_on_keyed_channel", channel: channel)}
+  def emit(%__MODULE__{} = ctx, value), do: put_emit(ctx, value, %{}, nil)
 
-  def emit_with_meta(%__MODULE__{} = ctx, value, meta) when is_map(meta),
-    do: put_emit(ctx, value, meta, nil)
+  @doc """
+  Emit a value with options: `key:`, the output's natural key, only on an
+  output declared `keyed/1`; `metadata:`, a map whose reserved `flz.`-prefixed
+  keys are refused. Any other option raises `ArgumentError`.
+  """
+  @spec emit(t(), term(), [emit_option()]) :: :ok | {:error, Error.t()}
+  def emit(%__MODULE__{} = ctx, value, opts) when is_list(opts),
+    do: emit_opts(opts, ctx, value, nil, %{})
 
-  @doc "Emit under the output's natural key — the output must be declared `keyed/1`."
-  @spec emit_keyed(t(), String.t(), term()) :: :ok | {:error, Error.t()}
-  def emit_keyed(%__MODULE__{} = ctx, key, value), do: emit_keyed_with_meta(ctx, key, value, %{})
+  # Walks the options without building a map; the checks run on `[]`.
+  defp emit_opts([{:key, key} | rest], ctx, value, _key, meta) when is_binary(key),
+    do: emit_opts(rest, ctx, value, key, meta)
 
-  @doc "`emit_keyed/3` with metadata."
-  @spec emit_keyed_with_meta(t(), String.t(), term(), map()) :: :ok | {:error, Error.t()}
-  def emit_keyed_with_meta(
-        %__MODULE__{keyed_sink?: false, channel: channel},
-        _key,
-        _value,
-        _meta
-      ),
-      do: {:error, Error.new("runtime.key_not_allowed_on_non_keyed_channel", channel: channel)}
+  defp emit_opts([{:metadata, meta} | rest], ctx, value, key, _meta) when is_map(meta),
+    do: emit_opts(rest, ctx, value, key, meta)
 
-  def emit_keyed_with_meta(%__MODULE__{} = ctx, key, value, meta)
-      when is_binary(key) and is_map(meta),
-      do: put_emit(ctx, value, meta, key)
+  defp emit_opts([], %__MODULE__{keyed_sink?: false, channel: channel}, _value, key, _meta)
+       when key != nil,
+       do: {:error, Error.new("runtime.key_not_allowed_on_non_keyed_channel", channel: channel)}
+
+  defp emit_opts([], %__MODULE__{keyed_sink?: true, cell_key: nil} = ctx, value, nil, _meta),
+    do: emit(ctx, value)
+
+  defp emit_opts([], ctx, value, key, meta), do: put_emit(ctx, value, meta, key)
+
+  defp emit_opts([option | _], _ctx, _value, _key, _meta),
+    do: raise(ArgumentError, "invalid emit option: #{inspect(option)}")
 
   @doc "The declared clock's value for this input; the scheduled timestamp inside a firing."
   def now(%__MODULE__{now_ms: ms}), do: ms
@@ -406,6 +410,8 @@ defmodule Flezha.SDK.Ctx do
         {:error, Error.new("runtime.reserved_metadata_key", key: k)}
     end
   end
+
+  defp reserved_key(meta) when map_size(meta) == 0, do: nil
 
   defp reserved_key(meta) do
     Enum.find_value(meta, fn {k, _v} ->

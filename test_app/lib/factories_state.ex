@@ -572,7 +572,7 @@ defmodule ElixirRunner.TierTallyTask do
 
   defp tally(key, count, ctx) do
     count = tallied(count, ctx)
-    emit_keyed(ctx, key, "#{key}=#{count}")
+    emit(ctx, "#{key}=#{count}", key: key)
     {:ok, count}
   end
 end
@@ -688,7 +688,7 @@ defmodule ElixirRunner.CandleTask do
     # One row per candle bucket, so a corrected replay overwrites by key rather
     # than appending a second row.
     bucket = div(at, 1_000)
-    emit_keyed(ctx, "candle/#{bucket}", "#{bucket}=#{input}")
+    emit(ctx, "#{bucket}=#{input}", key: "candle/#{bucket}")
     {:ok, s}
   end
 end
