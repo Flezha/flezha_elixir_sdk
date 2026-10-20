@@ -6,17 +6,18 @@ defmodule Flezha.SDK.Pool do
   tasklet code and completes it, and only then does the thread poll again. No
   wait for an activation holds a BEAM scheduler.
 
-  The pool starts at `FLEZHA_WORKER_POOL_SIZE` workers (the schedulers online
-  when unset) and adds one each time the core reports starvation, every
-  worker held by a tasklet that waits, up to `FLEZHA_WORKER_POOL_MAX` (ten
-  times the base when unset). A worker that crashes is replaced, and an
-  activation it held is failed back to the core's retry ladder.
+  The core's pool governor sizes it, over the schedulers online as this
+  runtime's base: it asks for the base workers, for one more each time the
+  core reports starvation (every worker held by a tasklet that waits), and for
+  a replacement when the pool is short, and a grown worker's thread stops it
+  when idle. An activation a crashed worker held is failed back to the core's
+  retry ladder.
   """
 
   use GenServer
   require Logger
 
-  alias Flezha.SDK.{Dispatch, Error, Knob, Native}
+  alias Flezha.SDK.{Dispatch, Error, Native}
 
   @doc """
   A new core context with `modules` declared, begun by `begin` (a connect or a
@@ -64,7 +65,10 @@ defmodule Flezha.SDK.Pool do
     end)
   end
 
-  @doc "Start a pool over `core`; `cells` is the Cell table its workers share."
+  @doc """
+  Start a pool over `core`; `cells` is the Cell table its workers share, and
+  `:retire_ms` a test's short retire time for a grown worker.
+  """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc """
@@ -83,29 +87,21 @@ defmodule Flezha.SDK.Pool do
     undrained
   end
 
-  @doc "The base size and the ceiling this node reads."
-  @spec sizes() :: {pos_integer(), pos_integer()}
-  def sizes do
-    base = Knob.get(:worker_pool_size) || System.schedulers_online()
-    {base, max(Knob.get(:worker_pool_max) || base * 10, base)}
-  end
-
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
     core = Keyword.fetch!(opts, :core)
     env = %{core: core, cells: Keyword.fetch!(opts, :cells)}
-    {base, ceiling} = sizes()
-    s = %{core: core, env: env, base: base, ceiling: ceiling, workers: %{}, at_ceiling?: false}
-    s = Enum.reduce(1..base, s, fn _, s -> add_worker(s) end)
-    {:ok, Map.put(s, :watch, Native.starvation_watch(core, self()))}
+    retire_ms = Keyword.get(opts, :retire_ms, 0)
+    governor = Native.pool_open(core, System.schedulers_online(), retire_ms, self())
+    {:ok, %{core: core, env: env, governor: governor, workers: %{}}}
   end
 
   @impl true
   # The threads first, so none hands out another activation; then each worker
   # finishes the one it holds; then whatever a gone worker held is failed back.
   def handle_call({:drain, wait_ms, how}, _from, s) do
-    Native.stop_thread(s.watch)
+    Native.pool_stop(s.governor)
     deadline = System.monotonic_time(:millisecond) + wait_ms
     running = if how == :settle, do: await_exits(s.workers, deadline), else: s.workers
 
@@ -125,36 +121,24 @@ defmodule Flezha.SDK.Pool do
   end
 
   @impl true
-  def handle_info(:flz_starved, %{workers: workers, ceiling: ceiling} = s)
-      when map_size(workers) < ceiling,
-      do: {:noreply, %{add_worker(s) | at_ceiling?: false}}
-
-  def handle_info(:flz_starved, %{at_ceiling?: false} = s) do
-    Logger.warning(
-      "[Flezha.SDK] every one of #{s.ceiling} workers is held and the core reports starvation; " <>
-        "raise FLEZHA_WORKER_POOL_MAX to let the pool grow"
-    )
-
-    {:noreply, %{s | at_ceiling?: true}}
-  end
-
-  def handle_info(:flz_starved, s), do: {:noreply, s}
+  def handle_info({:flz_grow, grown}, s), do: {:noreply, add_worker(s, grown)}
 
   def handle_info({:EXIT, pid, reason}, s) do
     case Map.pop(s.workers, pid) do
       {nil, _} ->
         {:stop, reason, s}
 
+      # The thread's stop gives its seat back; the governor asks for a
+      # replacement when the pool is short.
       {thread, workers} ->
         Native.release_thread(s.core, thread)
-        s = %{s | workers: workers}
-        {:noreply, if(reason in [:normal, :shutdown], do: s, else: add_worker(s))}
+        {:noreply, %{s | workers: workers}}
     end
   end
 
   @impl true
   def terminate(_reason, %{workers: workers} = s) when map_size(workers) > 0 do
-    Native.stop_thread(s.watch)
+    Native.pool_stop(s.governor)
 
     for {pid, thread} <- workers do
       Process.exit(pid, :kill)
@@ -176,9 +160,9 @@ defmodule Flezha.SDK.Pool do
     end
   end
 
-  defp add_worker(s) do
+  defp add_worker(s, grown) do
     worker = spawn_link(fn -> work(s.env) end)
-    thread = Native.poller(s.core, worker)
+    thread = Native.poller(s.core, s.governor, worker, grown)
     %{s | workers: Map.put(s.workers, worker, thread)}
   end
 

@@ -15,7 +15,7 @@ defmodule Flezha.SDK.NativeSurfaceTest do
   @other_names %{
     start: "flz_core_start_with",
     poller: "flz_core_poll",
-    starvation_watch: "flz_core_wait_starvation",
+    pool_stop: nil,
     release_thread: "flz_core_complete",
     stop_thread: nil,
     set_notice_sink: nil
@@ -25,11 +25,13 @@ defmodule Flezha.SDK.NativeSurfaceTest do
   # since every refusal comes back as `{:error, document}`, and the runner
   # needs no clock, no abandon, no stdin watch of the core, and neither notice
   # entry: the NIF sends the notices to the sink itself. Knobs are read by
-  # `Flezha.SDK.Knob`, which the controller parses with too.
+  # `Flezha.SDK.Knob`, which the controller parses with too. The pool's
+  # supervisor and its pollers drive the governor on the NIF's own threads.
   @unreached ~w(flz_core_abandon flz_core_buf_free flz_core_error_document
                 flz_core_init_error flz_core_knob flz_core_last_error
-                flz_core_monotonic_nanos flz_core_set_log_callback flz_core_start
-                flz_core_take_notices flz_core_watch_stdin_eof)
+                flz_core_monotonic_nanos flz_core_pool_left flz_core_pool_supervise
+                flz_core_set_log_callback flz_core_start flz_core_take_notices
+                flz_core_watch_stdin_eof)
 
   test "the stubs reach exactly the entry points the fixture lists" do
     listed =

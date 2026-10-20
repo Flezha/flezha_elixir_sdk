@@ -1,22 +1,47 @@
 //! The threads this library owns, so that no wait for an activation holds a
-//! BEAM scheduler: a poller per worker, and the starvation watch.
+//! BEAM scheduler: a poller per worker, and the pool governor's supervisor.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use flz_core::schema::{ActivationOutcome, ActivationResult, WorkError};
+use flz_core::poll_pool::{self, Governor};
+use flz_core::schema::{Activation, ActivationOutcome, ActivationResult, WorkError};
 use flz_core_ffi::veneer::notice::Notice;
-use flz_core_ffi::veneer::{self, shape, Polled};
-use flz_core_ffi::{FLZ_POLL_TIMEOUT, FLZ_STARVATION_OBSERVED};
+use flz_core_ffi::veneer::{self, shape, Polled, Refusal};
 use rustler::env::OwnedEnv;
 use rustler::{Atom, Encoder, LocalPid, Resource, ResourceArc};
 
 use crate::terms::Sink;
 use crate::{atoms, Core};
 
-/// How long one native wait lasts before the thread looks at its stop flag.
-const WAIT_MS: u64 = 250;
+/// The pool governor of one pool process.
+pub struct Pool(pub Arc<Governor>);
+
+#[rustler::resource_impl]
+impl Resource for Pool {}
+
+/// A governor over `default_base` whose supervisor asks `owner` for each
+/// worker as `{:flz_grow, grown}`, the base ones first. An owner gone stops it.
+/// A nonzero `retire_ms` is a test's short retire time.
+pub fn pool(default_base: usize, retire_ms: u64, owner: LocalPid) -> ResourceArc<Pool> {
+    let mut governor = Governor::from_env(default_base);
+    if retire_ms > 0 {
+        let retire = Duration::from_millis(retire_ms);
+        governor = Governor::new(governor.base, governor.ceiling, retire);
+    }
+    let stops = Arc::clone(&governor);
+    governor.start(flz_core::poll_core::global(), move |grown: bool| {
+        let mut env = OwnedEnv::new();
+        env.send_and_clear(&owner, |e| (atoms::flz_grow(), grown).encode(e))
+            .map_err(|_| {
+                stops.stop();
+                std::io::Error::other("the pool process is gone")
+            })
+    });
+    ResourceArc::new(Pool(governor))
+}
 
 /// A native thread, as the BEAM holds it.
 pub struct Thread {
@@ -80,12 +105,21 @@ pub fn failure(token: u64, message: &str) -> ActivationResult {
     }
 }
 
-pub fn poller(core: ResourceArc<Core>, worker: LocalPid) -> ResourceArc<Thread> {
+/// A poller in a seat `pool` reserved; it gives the seat back however it ends.
+pub fn poller(
+    core: ResourceArc<Core>,
+    pool: ResourceArc<Pool>,
+    worker: LocalPid,
+    grown: bool,
+) -> ResourceArc<Thread> {
     let (thread, waiting) = Thread::new();
     let own = thread.clone();
     std::thread::Builder::new()
         .name("flz-poller".to_string())
-        .spawn(move || poll_for(core, own, waiting, worker))
+        .spawn(move || {
+            poll_for(core, own, waiting, worker, &pool.0, grown);
+            pool.0.left();
+        })
         .expect("a poller thread starts");
     thread
 }
@@ -95,24 +129,19 @@ fn poll_for(
     thread: ResourceArc<Thread>,
     waiting: Receiver<()>,
     worker: LocalPid,
+    pool: &Governor,
+    grown: bool,
 ) {
     let mut env = OwnedEnv::new();
+    let mut idle = Duration::ZERO;
+    let wait_ms = poll_pool::POLL_TIMEOUT.as_millis() as u64;
     while !thread.stopped() {
         let Ok(inside) = core.enter() else { return };
         let ctx = inside.ctx();
-        let act = match veneer::poll(ctx, WAIT_MS) {
+        let act = match veneer::poll(ctx, wait_ms) {
             Ok(Polled::Activation(act)) => act,
-            Ok(Polled::Timeout) => continue,
-            Ok(Polled::ShuttingDown) => {
-                let _ = env.send_and_clear(&worker, |e| atoms::flz_shutting_down().encode(e));
-                return;
-            }
-            Err(refusal) => {
-                let document = veneer::document(refusal.into_message());
-                let _ =
-                    env.send_and_clear(&worker, |e| (atoms::flz_poll_failed(), document).encode(e));
-                return;
-            }
+            Ok(Polled::Timeout) if !pool.idle_turn(grown, &mut idle) => continue,
+            last => return tell_last(&mut env, &worker, last),
         };
         let token = act.token;
         let mapped = env.run(|e| shape::activation(&Sink(e), act).map(|term| env.save(term)));
@@ -139,34 +168,21 @@ fn poll_for(
         if waiting.recv().is_err() {
             return;
         }
+        idle = Duration::ZERO;
     }
 }
 
-pub fn starvation_watch(core: ResourceArc<Core>, owner: LocalPid) -> ResourceArc<Thread> {
-    let (thread, _waiting) = Thread::new();
-    let own = thread.clone();
-    std::thread::Builder::new()
-        .name("flz-starvation".to_string())
-        .spawn(move || {
-            let mut env = OwnedEnv::new();
-            while !own.stopped() {
-                let Ok(inside) = core.enter() else { return };
-                match veneer::wait_starvation(inside.ctx(), WAIT_MS) {
-                    Ok(FLZ_STARVATION_OBSERVED) => {
-                        if env
-                            .send_and_clear(&owner, |e| atoms::flz_starved().encode(e))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Ok(FLZ_POLL_TIMEOUT) => {}
-                    _ => return,
-                }
-            }
-        })
-        .expect("the starvation watch starts");
-    thread
+/// A poller's last word to its worker: `:stop` for a grown one gone idle, the
+/// core shutting down, or the refusal that ended its poll.
+fn tell_last(env: &mut OwnedEnv, worker: &LocalPid, last: Result<Polled<Activation>, Refusal>) {
+    let _ = env.send_and_clear(worker, |e| match last {
+        Ok(Polled::ShuttingDown) => atoms::flz_shutting_down().encode(e),
+        Err(refusal) => {
+            let document = veneer::document(refusal.into_message());
+            (atoms::flz_poll_failed(), document).encode(e)
+        }
+        _ => atoms::stop().encode(e),
+    });
 }
 
 /// One core notice to `sink`; `false` when it is gone.

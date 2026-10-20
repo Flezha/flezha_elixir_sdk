@@ -67,7 +67,7 @@ defmodule Flezha.SDK.KnobTest do
     end
 
     test "a row with no default reads nil until something sets it" do
-      assert Knob.get(:worker_pool_max) == nil
+      assert Knob.get(:namespace_secret) == nil
     end
   end
 

@@ -44,11 +44,7 @@ defmodule Flezha.SDK.Knob do
     {:sdk_spawn_reply_ms, nil, :ms, 30_000},
     # Unset, the socket directory is the first rung of the ladder every runtime
     # walks, which `flz_transport` resolves.
-    {:socket_files_path, "FLEZHA_SOCKET_FILES_PATH", :path, nil},
-    # The workers the pool starts with (the schedulers online when unset), and
-    # the most it grows to on the core's starvation signal (ten times the base).
-    {:worker_pool_size, "FLEZHA_WORKER_POOL_SIZE", :positive_int, nil},
-    {:worker_pool_max, "FLEZHA_WORKER_POOL_MAX", :positive_int, nil}
+    {:socket_files_path, "FLEZHA_SOCKET_FILES_PATH", :path, nil}
   ]
 
   @by_name Map.new(@rows, fn {name, env, type, default} ->

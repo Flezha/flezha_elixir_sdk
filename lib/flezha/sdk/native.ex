@@ -56,7 +56,7 @@ defmodule Flezha.SDK.Native do
 
   @typedoc "A core context."
   @type core :: reference()
-  @typedoc "A thread the library owns: a poller or the starvation watch."
+  @typedoc "A poller thread the library owns."
   @type thread :: reference()
   @type refused :: {:error, String.t()}
 
@@ -138,10 +138,20 @@ defmodule Flezha.SDK.Native do
 
   # --- dispatch ---
 
-  @doc "A thread polling for `worker`, which receives `{:flz_activation, activation}`."
-  def poller(_core, _worker), do: :erlang.nif_error(:not_loaded)
-  @doc "A thread sending `owner` `:flz_starved` whenever the core observes starvation."
-  def starvation_watch(_core, _owner), do: :erlang.nif_error(:not_loaded)
+  @doc """
+  The core's pool governor over `default_base`; it asks `owner` for each
+  worker as `{:flz_grow, grown}`. A `retire_ms` of 0 keeps the governor's
+  retire time; a test shortens it.
+  """
+  def pool_open(_core, _default_base, _retire_ms, _owner), do: :erlang.nif_error(:not_loaded)
+  @doc "Stop the governor: it asks for no worker again."
+  def pool_stop(_pool), do: :erlang.nif_error(:not_loaded)
+
+  @doc """
+  A thread polling for `worker` in a seat of `pool`; the worker receives
+  `{:flz_activation, thread, activation}`, and `:stop` when a `grown` one idles out.
+  """
+  def poller(_core, _pool, _worker, _grown), do: :erlang.nif_error(:not_loaded)
   @doc "Stop a thread once it is back from its wait; its worker's activation stays the worker's."
   def stop_thread(_thread), do: :erlang.nif_error(:not_loaded)
   @doc "Stop a thread whose worker is gone, failing the activation that worker never answered."

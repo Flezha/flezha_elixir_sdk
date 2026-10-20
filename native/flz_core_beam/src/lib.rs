@@ -19,12 +19,12 @@ use flz_core_ffi::FlzContext;
 use rustler::types::binary::Binary;
 use rustler::{Atom, Encoder, Env, Error, LocalPid, NifResult, Resource, ResourceArc, Term};
 use terms::{bin, Fail, Sink, Source};
-use threads::Thread;
+use threads::{Pool, Thread};
 
 mod atoms {
     rustler::atoms! {
-        ok, error, kept, run, unrecorded, flz_activation, flz_starved, flz_shutting_down, flz_poll_failed,
-        flz_notice
+        ok, error, kept, run, unrecorded, stop, flz_activation, flz_grow, flz_shutting_down,
+        flz_poll_failed, flz_notice
     }
 }
 
@@ -211,20 +211,38 @@ fn relays(core: ResourceArc<Core>) -> NifResult<Vec<String>> {
 
 // --- dispatch -------------------------------------------------------------------
 
-/// A thread that polls for `worker` and sends it `{:flz_activation, thread,
-/// act}`; it polls again only after the worker's `complete` names it.
+/// The pool governor over `default_base`, whose supervisor asks `owner` for
+/// each worker as `{:flz_grow, grown}`; `retire_ms` 0 keeps its own retire time.
 #[rustler::nif]
-fn poller(core: ResourceArc<Core>, worker: LocalPid) -> NifResult<ResourceArc<Thread>> {
+fn pool_open(
+    core: ResourceArc<Core>,
+    default_base: usize,
+    retire_ms: u64,
+    owner: LocalPid,
+) -> NifResult<ResourceArc<Pool>> {
     core.enter()?;
-    Ok(threads::poller(core, worker))
+    Ok(threads::pool(default_base, retire_ms, owner))
 }
 
-/// A thread that sends `owner` `:flz_starved` each time the core observes
-/// starvation.
+/// Stop the governor's supervisor: it asks for no worker again.
 #[rustler::nif]
-fn starvation_watch(core: ResourceArc<Core>, owner: LocalPid) -> NifResult<ResourceArc<Thread>> {
+fn pool_stop(pool: ResourceArc<Pool>) -> Atom {
+    pool.0.stop();
+    atoms::ok()
+}
+
+/// A thread that polls for `worker` in a seat of `pool` and sends it
+/// `{:flz_activation, thread, act}`; it polls again only after the worker's
+/// `complete` names it. A `grown` one sends `:stop` and ends when idle.
+#[rustler::nif]
+fn poller(
+    core: ResourceArc<Core>,
+    pool: ResourceArc<Pool>,
+    worker: LocalPid,
+    grown: bool,
+) -> NifResult<ResourceArc<Thread>> {
     core.enter()?;
-    Ok(threads::starvation_watch(core, owner))
+    Ok(threads::poller(core, pool, worker, grown))
 }
 
 /// Stop a thread once it is back from the wait it is in; an activation its
