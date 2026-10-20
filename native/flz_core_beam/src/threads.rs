@@ -117,8 +117,8 @@ pub fn poller(
     std::thread::Builder::new()
         .name("flz-poller".to_string())
         .spawn(move || {
+            let _seat = pool.0.seat();
             poll_for(core, own, waiting, worker, &pool.0, grown);
-            pool.0.left();
         })
         .expect("a poller thread starts");
     thread
@@ -157,9 +157,9 @@ fn poll_for(
             (atoms::flz_activation(), thread.clone(), saved.load(e)).encode(e)
         });
         if sent.is_err() {
+            // The worker never saw it: handed back as if never polled.
             if let Some(token) = thread.take_token() {
-                let _ =
-                    veneer::complete(ctx, &failure(token, "the worker it was handed to is gone"));
+                let _ = veneer::abandon(ctx, token);
             }
             return;
         }
