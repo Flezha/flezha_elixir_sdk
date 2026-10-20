@@ -3602,7 +3602,7 @@
     }
   },
   "internal": [
-    "already_exist", "already_exists", "already_loaded", "already_present", "already_started", "awake", "bad_cell_id", "bad_header_size",
+    "already_exist", "already_exists", "already_loaded", "already_present", "already_registered", "already_started", "awake", "bad_cell_id", "bad_header_size",
     "bad_marker_body", "bad_option", "bad_payload", "bad_timer_op", "bad_varint", "call_not_relearned", "chmod", "claim_held", "client_not_running", "column_missing", "corrupt_index",
     "crc_mismatch", "delivery_crashed", "delivery_failed", "dispatch_timeout", "dlq_entry_missing",
     "durability_tier_disabled", "durability_tier_not_running", "einval", "enoent", "exception",
@@ -3618,7 +3618,7 @@
     "missing_items", "no_ca_store", "no_channel", "no_connection",
     "no_endpoint_configured", "no_entry", "no_group_members", "no_partition_in_response",
     "no_pending_swap", "no_producer", "no_runner_id", "no_stream", "no_subscription_source", "no_such_factory", "no_target_nodes",
-    "no_topic_in_response", "not_a_regular_file", "not_a_target", "not_an_ed25519_private_key",
+    "no_topic_in_response", "not_a_regular_file", "not_a_target", "not_adopted", "not_an_ed25519_private_key",
     "not_an_object", "not_grouped_hashing",
     "not_in_manifest", "not_pem", "not_reusable", "not_running", "not_seq_addressed", "not_snapshotted",
     "not_whole_payload", "nothing_to_correct", "overwatch_down", "part_ahead_of_progress", "partial", "pem_decode_failed",
