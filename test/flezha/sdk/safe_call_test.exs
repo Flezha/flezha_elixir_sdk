@@ -62,6 +62,32 @@ defmodule Flezha.SDK.SafeCallTest do
       assert log =~ ":timeout"
     end
 
+    test "a target that stops while it is called takes the :orderly row" do
+      stopping =
+        spawn(fn ->
+          receive do: ({:"$gen_call", _from, _request} -> exit(:shutdown))
+        end)
+
+      quiet = [on_error: :error, log: %{orderly: false}]
+
+      assert capture_log(fn ->
+               assert SafeCall.bounded(stopping, :request, 1_000, quiet) == :error
+             end) == ""
+
+      crashing =
+        spawn(fn ->
+          receive do: ({:"$gen_call", _from, _request} -> exit(:boom))
+        end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert SafeCall.bounded(crashing, :request, 1_000, quiet) == :error
+        end)
+
+      assert log =~ "bounded call failed"
+      assert log =~ ":boom"
+    end
+
     test "a reason without a row of its own takes the :other row" do
       mute = spawn_link(fn -> Process.sleep(:infinity) end)
 

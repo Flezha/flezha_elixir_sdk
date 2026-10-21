@@ -22,7 +22,8 @@ defmodule Flezha.SDK.SafeCall do
   #     SafeCall.bounded(unit, req, ms, on_error: %{timeout: {:error, :timeout}})
   #     SafeCall.bounded(pid, req, ms, on_error: %{other: &{:error, {:exit, &1}}})
   #
-  # A map whose keys are all reasons — `:timeout`, `:noproc`, `:other` — is the
+  # A map whose keys are all reasons — `:timeout`, `:noproc`, `:orderly` (the
+  # target stopped while it was called, see `orderly?/1`), `:other` — is the
   # reason table, and each of its values is either the result or a 1-arity
   # function of the RAW exit reason, for the sites whose answer quotes it. Any
   # other term, a map included, is the single answer for every refusal.
@@ -87,12 +88,12 @@ defmodule Flezha.SDK.SafeCall do
           # the wedge from the caller side. A `:noproc` target is already gone.
           probe = if classified == :timeout, do: probe_target(server), else: %{}
           report(server, classified, probe)
-          log(level(level, classified), server, request, reason, probe)
+          log(level(level, classified, reason), server, request, reason, probe)
           {:refused, result}
       end
   end
 
-  @reasons [:timeout, :noproc, :other]
+  @reasons [:timeout, :noproc, :orderly, :other]
 
   # A map whose keys are reasons declares one answer each and re-raises the
   # rest; every other term — a map that is plainly a value included — is the
@@ -108,24 +109,27 @@ defmodule Flezha.SDK.SafeCall do
   defp declare(value, _classified, reason), do: {:ok, apply_declared(value, reason)}
 
   defp by_reason(table, classified, reason) do
-    case row(table, classified) do
+    case row(table, classified, reason) do
       {:ok, value} -> {:ok, apply_declared(value, reason)}
       :error -> :undeclared
     end
   end
 
-  defp level(levels, classified) when is_map(levels) do
-    case row(levels, classified) do
+  defp level(levels, classified, reason) when is_map(levels) do
+    case row(levels, classified, reason) do
       {:ok, level} -> level
       :error -> :warning
     end
   end
 
-  defp level(level, _classified), do: level
+  defp level(level, _classified, _reason), do: level
 
-  # The reason's own row, else `:other`, else none.
-  defp row(table, classified) do
-    with :error <- Map.fetch(table, classified), do: Map.fetch(table, :other)
+  # The reason's own row, else `:orderly` for an orderly exit, else `:other`,
+  # else none.
+  defp row(table, classified, reason) do
+    with :error <- Map.fetch(table, classified),
+         :error <- if(orderly?(reason), do: Map.fetch(table, :orderly), else: :error),
+         do: Map.fetch(table, :other)
   end
 
   defp apply_declared(value, reason) when is_function(value, 1), do: value.(reason)
