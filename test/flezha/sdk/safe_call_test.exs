@@ -1,9 +1,12 @@
 defmodule Flezha.SDK.SafeCallTest do
   @moduledoc """
   The exit-reason judgement a bounded call makes, as `classify/1` and
-  `orderly?/1` answer it to a site holding a reason of its own.
+  `orderly?/1` answer it to a site holding a reason of its own, and the
+  level a bounded call logs each refusal at.
   """
   use ExUnit.Case, async: true
+
+  import ExUnit.CaptureLog
 
   alias Flezha.SDK.SafeCall
 
@@ -33,6 +36,41 @@ defmodule Flezha.SDK.SafeCallTest do
       refute SafeCall.orderly?(:killed)
       refute SafeCall.orderly?(:noproc)
       refute SafeCall.orderly?({%RuntimeError{message: "boom"}, []})
+    end
+  end
+
+  describe "bounded/4 with a :log reason table" do
+    test "a row of false silences that reason only, a missing row warns" do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, _, _, _}
+      quiet = [on_error: :error, log: %{noproc: false}]
+
+      assert capture_log(fn ->
+               assert SafeCall.bounded(dead, :request, 50, quiet) == :error
+             end) == ""
+
+      mute = spawn_link(fn -> Process.sleep(:infinity) end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert SafeCall.bounded(mute, :request, 50, quiet) == :error
+        end)
+
+      assert log =~ "[warning]"
+      assert log =~ "bounded call failed"
+      assert log =~ ":timeout"
+    end
+
+    test "a reason without a row of its own takes the :other row" do
+      mute = spawn_link(fn -> Process.sleep(:infinity) end)
+
+      assert capture_log(fn ->
+               assert SafeCall.bounded(mute, :request, 50,
+                        on_error: :error,
+                        log: %{noproc: :warning, other: false}
+                      ) == :error
+             end) == ""
     end
   end
 

@@ -27,6 +27,11 @@ defmodule Flezha.SDK.SafeCall do
   # function of the RAW exit reason, for the sites whose answer quotes it. Any
   # other term, a map included, is the single answer for every refusal.
   #
+  # `:log` is read the same way: one level for every refusal, or a reason table
+  # of levels where a missing row, `:other` included, logs at `:warning`.
+  #
+  #     SafeCall.bounded(pid, req, ms, on_error: :error, log: %{noproc: false})
+  #
   # `classify/1` and `orderly?/1` are the judgement of an exit reason every
   # bounded call makes, for a site that holds a reason of its own: a monitor's
   # `:DOWN`, a `terminate/2`, a caught exit.
@@ -47,7 +52,9 @@ defmodule Flezha.SDK.SafeCall do
   A bounded call whose refusal is declared. See the moduledoc; `opts` takes
   `:on_error` (required) and `:log`, the level a refusal is logged at
   (default `:warning`; `false` silences the line for a site where a refusal
-  is routine, the telemetry event still fires).
+  is routine, the telemetry event still fires). `:log` may also be a reason
+  table such as `%{noproc: false}`, read like `:on_error`'s, a missing row
+  logging at `:warning`.
   """
   @spec bounded(target(), term(), timeout(), keyword()) :: term()
   def bounded(server, request, timeout, opts)
@@ -80,7 +87,7 @@ defmodule Flezha.SDK.SafeCall do
           # the wedge from the caller side. A `:noproc` target is already gone.
           probe = if classified == :timeout, do: probe_target(server), else: %{}
           report(server, classified, probe)
-          log(level, server, request, reason, probe)
+          log(level(level, classified), server, request, reason, probe)
           {:refused, result}
       end
   end
@@ -100,14 +107,25 @@ defmodule Flezha.SDK.SafeCall do
 
   defp declare(value, _classified, reason), do: {:ok, apply_declared(value, reason)}
 
-  # The reason's own row, else `:other`, else nothing was declared for it.
   defp by_reason(table, classified, reason) do
-    with :error <- Map.fetch(table, classified),
-         :error <- Map.fetch(table, :other) do
-      :undeclared
-    else
+    case row(table, classified) do
       {:ok, value} -> {:ok, apply_declared(value, reason)}
+      :error -> :undeclared
     end
+  end
+
+  defp level(levels, classified) when is_map(levels) do
+    case row(levels, classified) do
+      {:ok, level} -> level
+      :error -> :warning
+    end
+  end
+
+  defp level(level, _classified), do: level
+
+  # The reason's own row, else `:other`, else none.
+  defp row(table, classified) do
+    with :error <- Map.fetch(table, classified), do: Map.fetch(table, :other)
   end
 
   defp apply_declared(value, reason) when is_function(value, 1), do: value.(reason)
