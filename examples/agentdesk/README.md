@@ -115,7 +115,7 @@ client with a Rust toolchain, so it takes a few minutes. From the repository roo
 the controller's image:
 
 ```sh
-docker build -f docker/prod/Dockerfile.controller -t flezha/flezha:0.1.0 .
+docker build -f deploy/docker/prod/Dockerfile.controller -t flezha/flezha:0.1.0 .
 ```
 
 ## Where to go next

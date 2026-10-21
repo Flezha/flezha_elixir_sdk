@@ -26,14 +26,14 @@ defmodule Flezha.SDK.Knob do
 
   # {name, variable, type, default}
   @rows [
-    {:ca_cert_path, "FLEZHA_CA_CERT_PATH", :path, "app_data/certs/ca.pem"},
+    {:ca_cert_path, "FLEZHA_CA_CERT_PATH", :path, "storage/app/certs/ca.pem"},
     # The lowest level of a core notice this runner logs.
     {:log_level, "FLEZHA_LOG_LEVEL", {:enum, [:debug, :info, :warn, :error]}, :warn},
     {:mailbox_capacity, "FLEZHA_MAILBOX_CAPACITY", :positive_int, 1_024},
     {:namespace_secret, "FLEZHA_NAMESPACE_SECRET", :string, nil},
     {:quic_addresses, "FLEZHA_QUIC_ADDRESSES", :string, "127.0.0.1:4433"},
-    {:quic_client_cert, "FLEZHA_QUIC_CLIENT_CERT", :path, "app_data/certs/client.pem"},
-    {:quic_client_key, "FLEZHA_QUIC_CLIENT_KEY", :path, "app_data/certs/client.key"},
+    {:quic_client_cert, "FLEZHA_QUIC_CLIENT_CERT", :path, "storage/app/certs/client.pem"},
+    {:quic_client_key, "FLEZHA_QUIC_CLIENT_KEY", :path, "storage/app/certs/client.key"},
     # How long a start waits for the controller's answer; `0` waits for ever.
     {:runner_start_wait_ms, "FLEZHA_RUNNER_START_WAIT_MS", :ms, 10_000},
     # A call into one of the runner's own processes: the runner or a local run.

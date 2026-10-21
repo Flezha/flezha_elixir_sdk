@@ -12,7 +12,7 @@ flezha_sdk-*.tar
 !/contract/**/
 # The member the package compiles from is tracked, so a clone and the Hex
 # package compile without a release; the core's conformance gate holds it equal.
-!/contract/flz_transport/errors.json
+!/contract/crates/flz_transport/errors.json
 # Copied from a core release by `scripts/fetch-core.sh`; a Hex release carries it.
 /checksum-Elixir.Flezha.SDK.Native.exs
 /native/flz_core_beam/Cargo.lock

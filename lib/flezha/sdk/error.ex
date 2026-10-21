@@ -7,7 +7,7 @@ defmodule Flezha.SDK.Error do
   A refusal the controller sent carries its own rendering, read by
   `from_wire/1`. A refusal this SDK makes itself, a declaration or a runtime
   misuse, is built by `new/2` from the catalogue of the contract set
-  (`flz_transport/errors.json`), the one the controller and the Rust core render
+  (`crates/flz_transport/errors.json`), the one the controller and the Rust core render
   from, so a code reads the same in every language.
 
   This module is also the Elixir renderer the controller's `Flezha.Error`
@@ -17,7 +17,7 @@ defmodule Flezha.SDK.Error do
 
   alias Flezha.SDK.Contract
 
-  @catalogue_path Contract.path!("flz_transport/errors.json")
+  @catalogue_path Contract.path!("crates/flz_transport/errors.json")
   @external_resource @catalogue_path
   @catalogue @catalogue_path |> File.read!() |> Jason.decode!()
 

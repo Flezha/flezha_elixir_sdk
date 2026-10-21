@@ -2265,7 +2265,7 @@
     },
     "reset.path_refused": {
       "class": "invalid",
-      "message": "refusing to clear {path}: it is, or overlaps, {collides_with}; --app-data-root or a symlink may alias the two",
+      "message": "refusing to clear {path}: it is, or overlaps, {collides_with}; --storage-root or a symlink may alias the two",
       "details": ["path", "collides_with"]
     },
     "reset.path_unreadable": {

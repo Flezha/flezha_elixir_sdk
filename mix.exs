@@ -48,7 +48,7 @@ defmodule Flezha.SDK.MixProject do
         lib
         native/flz_core_beam/src
         native/flz_core_beam/Cargo.toml
-        contract/flz_transport/errors.json
+        contract/crates/flz_transport/errors.json
         checksum-Elixir.Flezha.SDK.Native.exs
         mix.exs
         README.md
