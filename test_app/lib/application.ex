@@ -82,9 +82,12 @@ defmodule ElixirRunner.Application do
   # The local-send drill: a JSON array of `{relay, channel, message, when}`
   # sends this app's own code makes with `local: true`, each once the file
   # `when` names exists, printing `local_send <relay> ok` or
-  # `local_send <relay> err <code>`. An entry with `call: true` carries
-  # `value` instead and calls the channel with `Flezha.SDK.call/4`, printing
-  # `call <relay> ok <answer JSON>` or `call <relay> err <code>`.
+  # `local_send <relay> err <code>`. An entry with `local: false` sends
+  # through the controller, printing `send <relay> ...`, and may carry `bytes`,
+  # the base64 of a message that need not be text, in place of `message`. An
+  # entry with `call: true` carries `value` instead and calls the channel with
+  # `Flezha.SDK.call/4`, printing `call <relay> ok <answer JSON>` or
+  # `call <relay> err <code>`.
   defp local_sends(nil), do: :ok
 
   defp local_sends(script) do
@@ -104,12 +107,18 @@ defmodule ElixirRunner.Application do
     end
   end
 
-  defp drill(%{"message" => message}, relay, channel) do
-    case Flezha.SDK.send(Flezha.SDK.Runner, relay, message, channel, local: true) do
-      {:ok, _} -> "local_send #{relay} ok"
-      {:error, %{code: code}} -> "local_send #{relay} err #{code}"
+  defp drill(entry, relay, channel) do
+    local = Map.get(entry, "local", true)
+    verb = if local, do: "local_send", else: "send"
+
+    case Flezha.SDK.send(Flezha.SDK.Runner, relay, message(entry), channel, local: local) do
+      {:ok, _} -> "#{verb} #{relay} ok"
+      {:error, %{code: code}} -> "#{verb} #{relay} err #{code}"
     end
   end
+
+  defp message(%{"bytes" => bytes}), do: Base.decode64!(bytes)
+  defp message(%{"message" => message}), do: message
 
   defp await_file(path) do
     unless File.exists?(path) do
