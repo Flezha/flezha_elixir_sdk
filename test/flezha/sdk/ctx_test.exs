@@ -92,8 +92,10 @@ defmodule Flezha.SDK.CtxTest do
 
   test "a cancel of a kind no timer has is a FunctionClauseError" do
     ctx = Ctx.new(nil, nil, 1_000)
+    # Built at run time: the type checker refuses the literal already.
+    wall = String.to_atom("wall")
 
-    assert_raise FunctionClauseError, fn -> Ctx.cancel_timer(ctx, :wall, 5) end
+    assert_raise FunctionClauseError, fn -> Ctx.cancel_timer(ctx, wall, 5) end
     assert Ctx.take_timers(ctx) == []
   end
 
