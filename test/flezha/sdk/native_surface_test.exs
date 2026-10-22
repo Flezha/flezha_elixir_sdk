@@ -27,11 +27,12 @@ defmodule Flezha.SDK.NativeSurfaceTest do
   # entry: the NIF sends the notices to the sink itself. Knobs are read by
   # `Flezha.SDK.Knob`, which the controller parses with too. The pool's
   # supervisor and its pollers drive the governor on the NIF's own threads.
+  # The BEAM leaves the termination signals to the core's own handler.
   @unreached ~w(flz_core_abandon flz_core_buf_free flz_core_error_document
-                flz_core_init_error flz_core_knob flz_core_last_error
-                flz_core_monotonic_nanos flz_core_pool_left flz_core_pool_supervise
-                flz_core_set_log_callback flz_core_start flz_core_take_notices
-                flz_core_watch_stdin_eof)
+                flz_core_host_owns_signals flz_core_init_error flz_core_knob
+                flz_core_last_error flz_core_monotonic_nanos flz_core_pool_left
+                flz_core_pool_supervise flz_core_set_log_callback flz_core_start
+                flz_core_take_notices flz_core_terminate flz_core_watch_stdin_eof)
 
   test "the stubs reach exactly the entry points the fixture lists" do
     listed =

@@ -2420,6 +2420,11 @@
       "message": "{argument} is not valid UTF-8",
       "details": ["argument"]
     },
+    "runtime.change_not_registered": {
+      "class": "invalid",
+      "message": "tasklet '{tasklet}' recorded a change of type {type}, which its Changes() does not list; list it under a name so its records can be restored",
+      "details": ["tasklet", "type"]
+    },
     "runtime.change_without_apply_change": {
       "class": "invalid",
       "message": "tasklet '{tasklet}' recorded a change but declares no applyChange, so the change cannot rebuild the state it describes",
