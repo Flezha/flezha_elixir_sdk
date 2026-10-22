@@ -10,6 +10,7 @@ defmodule Flezha.SDK.PoolTest do
   @moduletag :capture_log
 
   alias Flezha.SDK.{ChannelBuilder, Dispatch, Native, Pool}
+  alias Flezha.SDK.Test.Notices
 
   defmodule Gate do
     @moduledoc false
@@ -77,7 +78,9 @@ defmodule Flezha.SDK.PoolTest do
   end
 
   test "a drain gives a held worker no longer than it is told" do
+    Notices.forward()
     {core, pool} = serve(0)
+    Notices.banner()
     feed(core, "hold")
     assert_receive {:held, holder}, 5_000
 
@@ -85,6 +88,10 @@ defmodule Flezha.SDK.PoolTest do
     assert Pool.drain(pool, 300, :stop) == 1
     assert System.monotonic_time(:millisecond) - started < 300 + 3_000
     send(holder, :go)
+
+    # The killed worker's activation is failed back onto the core's retry ladder.
+    assert {:warning, "tasklet gate attempt 1/3 failed (retrying in " <> retry} = Notices.next()
+    assert retry =~ "the worker that held it exited"
   end
 
   # A local run of `GateOp` served by a pool of one base worker, `retire_ms`
@@ -94,6 +101,7 @@ defmodule Flezha.SDK.PoolTest do
     core = Native.context_new(Native.schema_version())
     :ok = Dispatch.declare(core, GateOp)
     :ok = Native.answered(Native.local_start(core, GateOp.factory_id(), "pool-test"))
+    :ok = Native.local_on_sink(core, "out")
     opts = [core: core, cells: Dispatch.cells(), retire_ms: retire_ms, default_base: 1]
     {:ok, pool} = Pool.start_link(opts)
     Process.unlink(pool)
