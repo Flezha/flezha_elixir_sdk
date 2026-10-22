@@ -439,6 +439,15 @@
         {"tag": "routed_call_failed", "args": ["_", "_", "_"]}
       ]
     },
+    "controller.no_quorum": {
+      "class": "unavailable",
+      "message": "this controller is on the minority side of a network split, so it starts and stops nothing until the split heals",
+      "hint": "send the request to a controller on the other side, which keeps running",
+      "details": [],
+      "reasons": [
+        {"tag": "no_quorum"}
+      ]
+    },
     "controller.process_gone": {
       "class": "unavailable",
       "message": "the process serving this request is gone; try again",
