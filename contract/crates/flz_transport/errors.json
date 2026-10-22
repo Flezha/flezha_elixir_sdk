@@ -63,7 +63,7 @@
     "authz.bootstrap_pending": {
       "class": "denied",
       "message": "authorization is enforced and no admin has claimed the bootstrap yet; its token is in {path} on the controller",
-      "hint": "flz auth bootstrap <token>",
+      "hint": "flz auth bootstrap < {path}",
       "details": ["path"],
       "reasons": [
         {"tag": ["forbidden", "bootstrap_pending"], "args": ["path"]}
