@@ -2927,8 +2927,8 @@
     },
     "state.cell_busy": {
       "class": "unavailable",
-      "message": "Cell '{cell}' is inside an activation older than {seconds}s",
-      "details": ["cell", "seconds"]
+      "message": "Cell '{cell}' is busy: {why}; try again shortly",
+      "details": ["cell", "why"]
     },
     "state.cell_evicted": {
       "class": "not_found",
