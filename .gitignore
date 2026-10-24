@@ -20,3 +20,6 @@ flezha_sdk-*.tar
 
 # The starter is a project of its own and commits its lock; this repository does not.
 /examples/starter/mix.lock
+
+# A crashed BEAM writes this wherever it ran.
+erl_crash.dump
