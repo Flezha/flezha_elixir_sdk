@@ -56,6 +56,18 @@ defmodule Flezha.SDK.NativeTest do
     %{core: core, class: class}
   end
 
+  # Whether `pid` reaches the native `local_next_output/2` within two seconds.
+  defp inside_call?(pid, deadline \\ System.monotonic_time(:millisecond) + 2_000) do
+    case Process.info(pid, :current_function) do
+      {:current_function, {Native, :local_next_output, 2}} ->
+        true
+
+      _elsewhere ->
+        System.monotonic_time(:millisecond) < deadline and
+          receive(after: (5 -> inside_call?(pid, deadline)))
+    end
+  end
+
   defp next_activation do
     assert_receive {:flz_activation, thread, act}, 5_000
     {thread, act}
@@ -122,7 +134,9 @@ defmodule Flezha.SDK.NativeTest do
   test "a call still inside the context holds its free back, and one after it is refused",
        %{core: core} do
     waiting = Task.async(fn -> Native.local_next_output(core, 500) end)
-    Process.sleep(50)
+
+    # The free is held back only once the call is inside the context.
+    assert inside_call?(waiting.pid)
     started = System.monotonic_time(:millisecond)
 
     assert :ok = Native.context_free(core)
