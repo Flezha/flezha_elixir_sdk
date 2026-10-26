@@ -855,7 +855,7 @@
       "hint": "flz namespace list",
       "details": ["namespace"],
       "reasons": [
-        {"tag": "not_found", "at": ["authz.namespace_delete", "authz.namespace_show", "authz.namespace_set_quota"], "args": ["namespace"]},
+        {"tag": "not_found", "at": ["authz.namespace_delete", "authz.namespace_show", "authz.namespace_set_quota", "authz.namespace_set_migration"], "args": ["namespace"]},
         {"tag": "namespace_unknown", "at": ["runner.connect"], "args": ["namespace"]}
       ]
     },
@@ -989,6 +989,14 @@
       "details": ["namespace", "factory", "language"],
       "reasons": [
         {"tag": "factory_language_unserved", "args": ["namespace", "factory", "language"]}
+      ]
+    },
+    "relay.factory_unserved": {
+      "class": "unavailable",
+      "message": "relay '{relay}' was not started: no controller serves factory {factories} yet; try again once a runner of it is connected",
+      "details": ["relay", "factories"],
+      "reasons": [
+        {"tag": "no_group_members", "args": ["relay", "factories"]}
       ]
     },
     "relay.factory_mismatch": {
@@ -3638,7 +3646,7 @@
     "no_pending_swap", "no_producer", "no_runner_id", "no_stream", "no_subscription_source", "no_such_factory", "no_target_nodes",
     "no_topic_in_response", "not_a_regular_file", "not_a_target", "not_adopted", "not_an_ed25519_private_key",
     "not_an_object", "not_grouped_hashing",
-    "not_in_manifest", "not_pem", "not_reusable", "not_running", "not_seq_addressed", "not_snapshotted",
+    "not_in_manifest", "not_pem", "not_reusable", "not_running", "not_seq_addressed", "not_serving", "not_snapshotted",
     "not_whole_payload", "nothing_to_correct", "overwatch_down", "part_ahead_of_progress", "partial", "pem_decode_failed",
     "permanent", "ping_failed", "precondition_failed", "process_not_found", "progress_ahead",
     "progress_corrupt", "progress_unreadable", "queue_full", "raised", "record_append_failed",
