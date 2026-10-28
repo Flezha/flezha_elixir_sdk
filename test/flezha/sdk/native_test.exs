@@ -133,15 +133,21 @@ defmodule Flezha.SDK.NativeTest do
 
   test "a call still inside the context holds its free back, and one after it is refused",
        %{core: core} do
-    waiting = Task.async(fn -> Native.local_next_output(core, 500) end)
+    waiting =
+      Task.async(fn ->
+        started = System.monotonic_time(:millisecond)
+        {started, Native.local_next_output(core, 500)}
+      end)
 
-    # The free is held back only once the call is inside the context.
+    # The free is held back only once the call is inside the context, and the
+    # call holds the context for its whole 500 ms wait, counted from its start.
     assert inside_call?(waiting.pid)
-    started = System.monotonic_time(:millisecond)
-
     assert :ok = Native.context_free(core)
-    assert System.monotonic_time(:millisecond) - started >= 300, "freed under a live call"
-    assert Task.await(waiting) == nil
+    freed = System.monotonic_time(:millisecond)
+
+    {started, output} = Task.await(waiting)
+    assert output == nil
+    assert freed - started >= 450, "freed under a live call"
 
     assert {:error, document} = Native.local_feed(core, "in", "late")
     assert document =~ "freed"
