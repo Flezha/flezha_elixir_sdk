@@ -636,6 +636,15 @@
         {"tag": "payload_not_replayable", "args": ["entry"]}
       ]
     },
+    "dlq.unreachable": {
+      "class": "not_found",
+      "message": "no controller that answered holds parked entry '{entry}'; these did not answer: {unreachable}",
+      "hint": "flz controller list",
+      "details": ["entry", "unreachable"],
+      "reasons": [
+        {"tag": "entry_unreachable", "args": ["entry", "unreachable"]}
+      ]
+    },
     "durability.sync_ship_failed": {
       "class": "unavailable",
       "message": "relay '{relay}' declares durable: remote, and shipping its state to the durability backend failed: {reason}",
@@ -2791,11 +2800,11 @@
     },
     "schedule.already_exists": {
       "class": "conflict",
-      "message": "a schedule named '{schedule}' already exists",
+      "message": "a schedule named '{schedule}' already exists on {node}",
       "hint": "flz schedule list",
-      "details": ["schedule"],
+      "details": ["schedule", "node"],
       "reasons": [
-        {"tag": "schedule_exists", "args": ["schedule"]}
+        {"tag": "schedule_exists", "args": ["schedule", "node"]}
       ]
     },
     "schedule.cron_field_count": {
@@ -2885,6 +2894,15 @@
       "details": [],
       "reasons": [
         {"tag": "timezone_required"}
+      ]
+    },
+    "schedule.unreachable": {
+      "class": "unavailable",
+      "message": "schedule '{schedule}' could not be looked up on these controllers, which did not answer: {unreachable}",
+      "hint": "flz controller list",
+      "details": ["schedule", "unreachable"],
+      "reasons": [
+        {"tag": "schedule_unreachable", "args": ["schedule", "unreachable"]}
       ]
     },
     "shutdown.coordinator_exited": {
