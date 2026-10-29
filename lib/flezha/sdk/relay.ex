@@ -33,7 +33,10 @@ defmodule Flezha.SDK.Relay do
   last two optionally written `{:local, sleep_after: ms}`: an instance idle
   that long sleeps and wakes on its next message with its Cells restored.
   `sleep_after` defaults by the run: a flow instance never sleeps, a steps
-  instance sleeps after six hours; `false` never sleeps.
+  instance sleeps after six hours; `false` never sleeps. A finished instance
+  keeps nothing unless the level says `keep_finished:` hours, or `true` for
+  the controller's window (72 hours by default), so
+  `flz relay info` can still show its Cells and result.
 
   The core judges the tree when the class is registered: a setting written
   under a parent that does not carry it is refused as `topology.unknown_field`

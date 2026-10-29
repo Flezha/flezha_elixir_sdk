@@ -560,6 +560,19 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
     end
   end
 
+  defmodule KeptShort do
+    @moduledoc false
+    use Flezha.SDK.Relay,
+      factory_id: "kept_short",
+      run: :steps,
+      durable: {:local, sleep_after: false, keep_finished: 24}
+
+    def run(input, state, ctx) do
+      emit(ctx, input)
+      {:ok, state}
+    end
+  end
+
   defmodule Counter do
     @moduledoc false
     use Flezha.SDK.Relay, factory_id: "counter", input: "ticks", max_cells: 10
@@ -740,6 +753,9 @@ defmodule Flezha.SDK.AuthoringMacrosTest do
              "durable" => false
            } =
              Jason.decode!(class_json(CappedShort))
+
+    assert %{"durable" => %{"local" => %{"sleep_after" => false, "keep_finished" => 24}}} =
+             Jason.decode!(class_json(KeptShort))
 
     for option <- [~s|output: "out"|, "max_cells: 10"] do
       stray =

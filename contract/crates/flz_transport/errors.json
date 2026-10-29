@@ -1136,6 +1136,13 @@
         {"tag": "group_stop_partial", "args": ["group", "failed"]}
       ]
     },
+    "relay.history_unreachable": {
+      "class": "unavailable",
+      "message": "whether this spawn already ran could not be checked, because these controllers did not answer the relay history lookup: {unreachable}; nothing was started",
+      "hint": "retry the request once they answer: flz controller list",
+      "details": ["unreachable"],
+      "reasons": [{"tag": "history_unreachable", "args": ["unreachable"]}]
+    },
     "relay.id_too_long": {
       "class": "invalid",
       "message": "relay id '{relay}' is longer than {limit} bytes",

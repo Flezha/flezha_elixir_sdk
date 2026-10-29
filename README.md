@@ -60,8 +60,11 @@ end
 `run` is `:flow` (the default, with `exactly: :effectively_once` for the
 effectively-once tier) or `:steps`; `durable` is `false`, `:local` (the
 default; a flow instance never sleeps, a steps instance after six hours idle)
-or `:remote`. A setting written under
-the wrong parent is refused when the class is registered, as
+or `:remote`. A finished instance keeps nothing unless the level says
+`keep_finished:` hours, or `true` for the controller's window
+(`FLEZHA_STEPS_RETENTION_HOURS`, 72 by default), so `flz relay info` can still
+show its Cells and result; it is refused under `durable: false`. A setting
+written under the wrong parent is refused when the class is registered, as
 `topology.unknown_field`. `Flezha.SDK.Relay` documents the tree.
 
 ## The native library
