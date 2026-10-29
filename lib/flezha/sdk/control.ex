@@ -82,7 +82,10 @@ defmodule Flezha.SDK.Control do
   @spec disable_plugin(runner(), String.t()) :: {:ok, term()} | {:error, term()}
   def disable_plugin(runner, name), do: call(runner, "PluginManager.disable", [name, %{}])
 
-  @doc "The relays in this namespace, one row each."
+  @doc """
+  The relays in this namespace across the cluster: `rows`, one row each, and
+  `unreachable`, the controllers that did not answer.
+  """
   @spec list_relays(runner()) :: {:ok, term()} | {:error, term()}
   def list_relays(runner), do: call(runner, "Relay.list", [])
 

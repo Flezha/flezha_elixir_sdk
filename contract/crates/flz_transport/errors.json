@@ -3066,6 +3066,15 @@
       "message": "relay '{relay}' has no tasklet named '{tasklet}'",
       "details": ["relay", "tasklet"]
     },
+    "state.unreachable": {
+      "class": "not_found",
+      "message": "no controller that answered holds the state of '{instance}'; these did not answer: {unreachable}",
+      "hint": "flz controller list",
+      "details": ["instance", "unreachable"],
+      "reasons": [
+        {"tag": "state_unreachable", "args": ["instance", "unreachable"]}
+      ]
+    },
     "template.unknown": {
       "class": "not_found",
       "message": "the release carries no {example} template for {language}",
