@@ -51,6 +51,50 @@
         {"tag": "writer_unavailable"}
       ]
     },
+    "logs.unknown_kind": {
+      "class": "invalid",
+      "message": "there is no log kind {kind}; the kinds are {known}",
+      "hint": "flz logs kinds",
+      "details": ["kind", "known"],
+      "reasons": [
+        {"tag": "logs_unknown_kind", "args": ["kind", "known"]}
+      ]
+    },
+    "logs.unknown_filter": {
+      "class": "invalid",
+      "message": "this log kind cannot be filtered by '{field}'; it takes {known}",
+      "hint": "flz logs kinds",
+      "details": ["field", "known"],
+      "reasons": [
+        {"tag": "logs_unknown_filter", "args": ["field", "known"]}
+      ]
+    },
+    "logs.kind_disabled": {
+      "class": "unavailable",
+      "message": "the {kind} log is disabled; enable it with {key} in the configuration",
+      "details": ["kind", "key"],
+      "reasons": [
+        {"tag": "logs_kind_disabled", "args": ["kind", "key"]}
+      ]
+    },
+    "logs.overloaded": {
+      "class": "unavailable",
+      "message": "the log has more records queued than it takes; this one was refused and counted",
+      "hint": "flz logs stats relay_history",
+      "details": [],
+      "reasons": [
+        {"tag": "overloaded"}
+      ]
+    },
+    "logs.unknown_node": {
+      "class": "invalid",
+      "message": "{node} is not a controller of this cluster",
+      "hint": "flz controller list",
+      "details": ["node"],
+      "reasons": [
+        {"tag": "unknown_node", "args": ["node"]}
+      ]
+    },
     "authz.bootstrap_claimed": {
       "class": "conflict",
       "message": "this controller's admin is already claimed, so there is no bootstrap token to claim",
