@@ -29,11 +29,11 @@ defmodule Flezha.SDK.MixProject do
     [
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"},
-      {:rustler_precompiled, "~> 0.8"},
+      {:rustler_precompiled, "~> 0.10"},
       # A source build of the native library: a host the checksum file names no
       # precompiled artefact for, or `FLEZHA_SDK_BUILD_NIF=1`. Not optional, so
       # a project depending on this package can take that path too.
-      {:rustler, "~> 0.37", runtime: false},
+      {:rustler, "~> 0.38", runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
