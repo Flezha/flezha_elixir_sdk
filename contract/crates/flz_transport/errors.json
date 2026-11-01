@@ -803,8 +803,8 @@
     },
     "http.streams_full": {
       "class": "unavailable",
-      "message": "relay '{relay}' already has {max_streams} streams open; try again",
-      "details": ["relay", "max_streams"]
+      "message": "plugin '{plugin}' already has {max_streams} streams open; try again",
+      "details": ["plugin", "max_streams"]
     },
     "http.port_reserved": {
       "class": "conflict",
@@ -812,6 +812,15 @@
       "details": ["port", "owner"],
       "reasons": [
         {"tag": "http_port_reserved", "args": ["port", "owner"]}
+      ]
+    },
+    "http.client_cert_required": {
+      "class": "invalid",
+      "message": "address '{address}' is not loopback, so the HTTP API needs tls_client_cacertfile to ask every client for a certificate, or require_client_cert set to false",
+      "hint": "flz plugin help http_api",
+      "details": ["address"],
+      "reasons": [
+        {"tag": "http_client_cert_required", "args": ["address"]}
       ]
     },
     "http.tls_required": {
