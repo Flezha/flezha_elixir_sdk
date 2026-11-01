@@ -56,10 +56,12 @@ defmodule Flezha.SDK.NativeTest do
     %{core: core, class: class}
   end
 
-  # Whether `pid` reaches the native `local_next_output/2` within two seconds.
+  # Whether `pid` runs the native `local_next_output/2` within two seconds.
+  # Running, not runnable: a call still queued for a dirty scheduler shows the
+  # same function but is not yet counted inside the context.
   defp inside_call?(pid, deadline \\ System.monotonic_time(:millisecond) + 2_000) do
-    case Process.info(pid, :current_function) do
-      {:current_function, {Native, :local_next_output, 2}} ->
+    case Process.info(pid, [:current_function, :status]) do
+      [current_function: {Native, :local_next_output, 2}, status: :running] ->
         true
 
       _elsewhere ->
