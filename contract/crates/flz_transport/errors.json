@@ -145,6 +145,14 @@
         {"tag": "bootstrap_token_write_failed", "args": ["path", "reason"]}
       ]
     },
+    "authz.runner_principal_foreign": {
+      "class": "denied",
+      "message": "'runner@{runner_namespace}' is the runner identity of namespace '{runner_namespace}' and is bound only there, not in '{namespace}'",
+      "details": ["runner_namespace", "namespace"],
+      "reasons": [
+        {"tag": "runner_principal_foreign", "args": ["runner_namespace", "namespace"]}
+      ]
+    },
     "authz.bound_elsewhere": {
       "class": "conflict",
       "message": "'{principal}' holds roles in namespace '{namespace}'; unbind it there before binding it elsewhere",
@@ -797,6 +805,14 @@
       "class": "unavailable",
       "message": "relay '{relay}' already has {max_streams} streams open; try again",
       "details": ["relay", "max_streams"]
+    },
+    "http.port_reserved": {
+      "class": "conflict",
+      "message": "port {port} belongs to this controller's {owner}; the HTTP server needs another port",
+      "details": ["port", "owner"],
+      "reasons": [
+        {"tag": "http_port_reserved", "args": ["port", "owner"]}
+      ]
     },
     "http.tls_required": {
       "class": "invalid",
@@ -1569,6 +1585,15 @@
       "details": ["path", "root"],
       "reasons": [
         {"tag": "file_path_outside_root", "args": ["path", "root"]}
+      ]
+    },
+    "plugin.file_path_outside_namespace": {
+      "class": "invalid",
+      "message": "file plugin path '{path}' is outside this namespace's folder '{folder}'; each namespace's files now live in its own folder, where this one is '{moved}'",
+      "hint": "move the file there and enable the plugin again with a path relative to the namespace's folder",
+      "details": ["path", "folder", "moved"],
+      "reasons": [
+        {"tag": "file_path_outside_namespace", "args": ["path", "folder", "moved"]}
       ]
     },
     "plugin.file_path_too_many_links": {
