@@ -13,8 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 crossbeam = "0.8"
-flz_core = { git = "https://github.com/flezha/flezha", tag = "v0.1.0" }
-flz_core_ffi = { git = "https://github.com/flezha/flezha", tag = "v0.1.0", default-features = false }
+flz_core = { version = "0.1.0", git = "https://github.com/flezha/flezha", tag = "v0.1.0" }
+flz_core_ffi = { version = "0.1.0", git = "https://github.com/flezha/flezha", tag = "v0.1.0", default-features = false }
 rustler = "0.38"
 
 [lints.rust]
