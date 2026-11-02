@@ -469,6 +469,11 @@
       "message": "there is no control plane to administer over: the runner is closed or has no controller",
       "details": []
     },
+    "control.surface_retired": {
+      "class": "denied",
+      "message": "the console no longer reaches the controller over Erlang distribution; it calls the controller's HTTP API (POST /v1/call) with a client certificate and a token",
+      "details": []
+    },
     "control.timeout": {
       "class": "unavailable",
       "message": "the controller did not answer the administration call within {seconds}s",
