@@ -20,7 +20,6 @@ defmodule Echo.MixProject do
   end
 
   defp deps do
-    # TODO: change later to {:flezha_sdk, "~> 0.1.0"} when flezha_sdk is released
-    [{:flezha_sdk, path: "../.."}]
+    [{:flezha_sdk, "~> 0.1.0"}]
   end
 end

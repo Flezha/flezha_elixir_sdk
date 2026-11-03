@@ -2,8 +2,8 @@
 
 The chat sessions the [agentdesk tutorial](https://github.com/flezha/flezha/blob/main/docs/public/tutorials/agentdesk/agentdesk.md)
 builds, as a standalone project. It depends on `flezha_sdk` and Jason alone, the way your
-own project would; until `flezha_sdk` is released, `mix.exs` names it by a path into this
-checkout ([Building from a checkout](#building-from-a-checkout)).
+own project would: `mix.exs` names its released version
+([Building from a checkout](#building-from-a-checkout) runs it against this checkout instead).
 
 Every conversation is a session of its own: an instance of the steps relay `agent`,
 which runs one turn per message and keeps the conversation as its state. A turn is
@@ -99,9 +99,9 @@ builds the images and deploys `k8s/agentdesk.yaml` on k3s.
 
 ## Building from a checkout
 
-The package is not on Hex yet, and the controller's image `flezha/flezha:0.1.0` has to be
-built. Until the package is released, the dependency in `mix.exs` points at the package
-in your checkout:
+The controller's image `flezha/flezha:0.1.0` has to be built. To run the project against
+the package in your checkout instead of the released one, point the dependency in
+`mix.exs` at it:
 
 ```elixir
 defp deps do
@@ -110,8 +110,8 @@ end
 ```
 
 A copy of this folder outside the checkout names the package's absolute path instead.
-With no release to download it from, the first compile builds the package's socket
-client with a Rust toolchain, so it takes a few minutes. From the repository root, build
+A checkout has no checksum file to download the package's socket client against, so the
+first compile builds it with a Rust toolchain and takes a few minutes. From the repository root, build
 the controller's image:
 
 ```sh

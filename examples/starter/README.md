@@ -46,14 +46,14 @@ Nothing inside the files is renamed for you. Change the `app` and the module
 prefix `Starter`. `starter` is the name `flz relay start` takes. `count` is the
 name the tasklet's state is saved under, so choose it before the first run.
 
-## Before the SDK is published
+## Building from a checkout
 
-The package is not on Hex yet. Until it is, point the dependency in `mix.exs`
-at a Flezha checkout, with its absolute path:
+To run the project against a Flezha checkout instead of the released package,
+point the dependency in `mix.exs` at it, with its absolute path:
 
 ```elixir
 deps: [{:flezha_sdk, path: "/path/to/flezha/sdk/elixir"}],
 ```
 
-With no release to download it from, the first compile builds the SDK's socket
-client with a Rust toolchain, so it takes a few minutes.
+A checkout has no checksum file to download the SDK's socket client against, so
+the first compile builds it with a Rust toolchain and takes a few minutes.

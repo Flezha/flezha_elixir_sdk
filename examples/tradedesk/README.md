@@ -2,8 +2,8 @@
 
 The toy trader the [tradedesk tutorial](https://github.com/flezha/flezha/blob/main/docs/public/tutorials/tradedesk/tradedesk.md) builds, as a
 standalone project. It depends on `flezha_sdk` and Jason alone, the way your own
-project would; until `flezha_sdk` is released, `mix.exs` names it by a path into
-this checkout ([Building from a checkout](#building-from-a-checkout)).
+project would: `mix.exs` names its released version
+([Building from a checkout](#building-from-a-checkout) runs it against this checkout instead).
 
 It holds the desk's two relays and the runner that serves them, a separate
 BEAM node that connects to a controller over its socket. The tutorial writes them
@@ -120,8 +120,8 @@ Relay: order_too_big
 
 ## Building from a checkout
 
-The package is not on Hex yet. Until it is, the dependency in `mix.exs` points
-at the package in your checkout:
+To run the project against the package in your checkout instead of the released
+one, point the dependency in `mix.exs` at it:
 
 ```elixir
 defp deps do
@@ -130,8 +130,8 @@ end
 ```
 
 A copy of this folder outside the checkout names the package's absolute path
-instead. With no release to download it from, the first compile builds the
-package's native library with a Rust toolchain, so it takes a few minutes.
+instead. A checkout has no checksum file to download the package's native library
+against, so the first compile builds it with a Rust toolchain and takes a few minutes.
 
 ## Where to go next
 

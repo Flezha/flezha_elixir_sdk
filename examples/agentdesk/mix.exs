@@ -2,9 +2,8 @@ defmodule Agentdesk.MixProject do
   use Mix.Project
 
   # Standalone on purpose: it depends on the SDK and on Jason alone, the way
-  # your own project would. Until the SDK is released, its dependency is a path
-  # into this checkout. The runner's image copies the release `mix release`
-  # builds.
+  # your own project would. The runner's image copies the release
+  # `mix release` builds.
   def project do
     [
       app: :agentdesk,
@@ -22,7 +21,6 @@ defmodule Agentdesk.MixProject do
   end
 
   defp deps do
-    # TODO: change later to {:flezha_sdk, "~> 0.1.0"} when flezha_sdk is released
-    [{:flezha_sdk, path: "../.."}, {:jason, "~> 1.4"}]
+    [{:flezha_sdk, "~> 0.1.0"}, {:jason, "~> 1.4"}]
   end
 end

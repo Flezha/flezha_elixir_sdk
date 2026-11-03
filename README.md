@@ -18,9 +18,8 @@ def deps do
 end
 ```
 
-`flezha_sdk` 0.1.0 is not on Hex yet. Until it is, depend on it by path from a
-checkout as [`examples/echo`](examples/echo/README.md#building-from-a-checkout)
-shows.
+To work on the SDK itself, depend on it by path from a checkout as
+[`examples/echo`](examples/echo/README.md#building-from-a-checkout) shows.
 
 ## Supported Elixir versions
 

@@ -50,8 +50,8 @@ identity across restarts.
 
 ## Building from a checkout
 
-The package is not on Hex yet. Until it is, point the dependency in `mix.exs` at
-the package in your checkout:
+To run the example against the package in your checkout instead of the released
+one, point the dependency in `mix.exs` at it:
 
 ```elixir
 defp deps do
@@ -60,8 +60,8 @@ end
 ```
 
 A copy of this folder outside the checkout names the package's absolute path
-instead. With no release to download it from, the first compile builds the
-package's native library with a Rust toolchain, so it takes a few minutes.
+instead. A checkout has no checksum file to download the package's native library
+against, so the first compile builds it with a Rust toolchain and takes a few minutes.
 
 ## Where to go next
 
