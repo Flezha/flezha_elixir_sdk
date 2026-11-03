@@ -99,7 +99,9 @@ builds the images and deploys `k8s/agentdesk.yaml` on k3s.
 
 ## Building from a checkout
 
-The controller's image `flezha/flezha:0.1.0` has to be built. To run the project against
+Docker pulls the controller's image `flezha/flezha:0.1.0` from Docker Hub; the
+commands below build it from the checkout instead.
+To run the project against
 the package in your checkout instead of the released one, point the dependency in
 `mix.exs` at it:
 
