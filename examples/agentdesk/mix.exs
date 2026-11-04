@@ -21,6 +21,6 @@ defmodule Agentdesk.MixProject do
   end
 
   defp deps do
-    [{:flezha_sdk, "~> 0.1.0"}, {:jason, "~> 1.4"}]
+    [{:flezha_sdk, "~> 0.1.1"}, {:jason, "~> 1.4"}]
   end
 end

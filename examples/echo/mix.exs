@@ -20,6 +20,6 @@ defmodule Echo.MixProject do
   end
 
   defp deps do
-    [{:flezha_sdk, "~> 0.1.0"}]
+    [{:flezha_sdk, "~> 0.1.1"}]
   end
 end

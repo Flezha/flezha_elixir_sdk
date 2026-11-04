@@ -14,7 +14,7 @@ permanently supported.
 
 ```elixir
 def deps do
-  [{:flezha_sdk, "~> 0.1.0"}]
+  [{:flezha_sdk, "~> 0.1.1"}]
 end
 ```
 

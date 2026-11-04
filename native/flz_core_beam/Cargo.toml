@@ -1,6 +1,6 @@
 [package]
 name = "flz_core_beam"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "The Elixir SDK's native library: a Rustler NIF over flz_core_ffi's veneer"
 license = "Apache-2.0"
@@ -13,8 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 crossbeam = "0.8"
-flz_core = "0.1.0"
-flz_core_ffi = { version = "0.1.0", default-features = false }
+flz_core = "0.1.1"
+flz_core_ffi = { version = "0.1.1", default-features = false }
 rustler = "0.38"
 
 [lints.rust]

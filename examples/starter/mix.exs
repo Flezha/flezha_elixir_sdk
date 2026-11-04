@@ -9,7 +9,7 @@ defmodule Starter.MixProject do
       version: "0.1.0",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
-      deps: [{:flezha_sdk, "~> 0.1.0"}],
+      deps: [{:flezha_sdk, "~> 0.1.1"}],
       # The test runs the relay in this process, so the runner is not started.
       aliases: [test: "test --no-start"]
     ]
