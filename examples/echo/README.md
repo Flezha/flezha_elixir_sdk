@@ -43,9 +43,8 @@ out	echo: hello world
 It runs until the node stops: Ctrl-C twice, or a SIGTERM. The namespace is the
 first argument and defaults to `default`: `mix run --no-halt -- my_app`.
 
-On start it warns that it cannot persist a runner id at
-`/var/lib/flezha-runner/id` unless that path is writable, and uses a fresh
-identity for the boot. Set `FLEZHA_RUNNER_ID_PATH` to a writable file to keep one
+Unless `/var/lib/flezha-runner/id` is writable, it uses a fresh runner identity
+for each boot. Set `FLEZHA_RUNNER_ID_PATH` to a writable file to keep one
 identity across restarts.
 
 ## Building from a checkout
